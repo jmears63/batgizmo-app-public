@@ -24,6 +24,10 @@ package org.batgizmo.app.ui
 
 import android.content.Context
 import android.net.Uri
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +37,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.LifecycleCoroutineScope
@@ -141,25 +147,33 @@ class TopLevelUI(private val model: UIModel) {
          */
         if (settingsAvailable.value) {
             BatgizmoAppTheme(useDarkTheme = useDarkTheme.value) {
-                CompositionLocalProvider(spectrogramUI.localShowGrid provides showGrid.value) {
-                    val configuration = LocalConfiguration.current
-                    val orientation = remember { mutableIntStateOf(configuration.orientation) }
+                Box(    // To apply any system bars padding, though that is zero if system bars are hidden.
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .systemBarsPadding()
+                ) {
+                    CompositionLocalProvider(spectrogramUI.localShowGrid provides showGrid.value) {
+                        val configuration = LocalConfiguration.current
+                        val orientation = remember { mutableIntStateOf(configuration.orientation) }
 
-                    // Always display the main UI, so that state is preserved behind the
-                    // settings UI:
-                    spectrogramUI.Compose(model,
-                        amplitudePaneVisibility.intValue,
-                        leftHandedMode.value,
-                        settingsVisible,
-                        orientation,
-                        appMode
-                    )
-                    if (settingsVisible.value) {
-                        previousSettings = model.settings.copy()
-                        settingsUI.Compose {
-                            settingsVisible.value = false
-                            // Log.d(this::class.simpleName, "onBack callback called")
-                            onSettingsUpdate()
+                        // Always display the main UI, so that state is preserved behind the
+                        // settings UI:
+                        spectrogramUI.Compose(
+                            model,
+                            amplitudePaneVisibility.intValue,
+                            leftHandedMode.value,
+                            settingsVisible,
+                            orientation,
+                            appMode
+                        )
+                        if (settingsVisible.value) {
+                            previousSettings = model.settings.copy()
+                            settingsUI.Compose {
+                                settingsVisible.value = false
+                                // Log.d(this::class.simpleName, "onBack callback called")
+                                onSettingsUpdate()
+                            }
                         }
                     }
                 }

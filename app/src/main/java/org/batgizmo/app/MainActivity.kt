@@ -84,6 +84,10 @@ class MainActivity : ComponentActivity() {
         // Request permission to access location (which might or might not succeed):
         requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
 
+        // Tell Android we'll manage insets:
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+
+
         uiTopLevel = TopLevelUI(model)
 
         setContent {
@@ -99,17 +103,12 @@ class MainActivity : ComponentActivity() {
         }
 
         /*
-         * Hide the navigation bar which wastes space at the bottom of the screen.
-         *
          * Important: this code must come *after* setContent to avoid a null pointer
-         * exception.
+         * exception. Me neither.
          */
-
-        // Setting this to true avoids the annoying animation when initially
-        // displaying the app, and when returning from the system document picker.
-        WindowCompat.setDecorFitsSystemWindows(window, true)
-
         window.insetsController?.let { controller ->
+            // Avoid annoying bounce of the app display on first display, and return
+            // from the document selector:
             controller.hide(WindowInsets.Type.systemBars())  // Hides navigation & status bars
             controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
