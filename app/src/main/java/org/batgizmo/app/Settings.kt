@@ -119,10 +119,10 @@ data class Settings(
     // The value is the shift required to achieve the factor:
     enum class AudioBoostOptions(val value: Int, val label: String) : EnumHelper {
         AUDIOBOOST_NONE(0, "none"),
-        AUDIOBOOST_2(1, "2x"),
-        AUDIOBOOST_4(2, "4x"),
-        AUDIOBOOST_8(3, "8x"),
-        AUDIOBOOST_16(4, "16x");
+        AUDIOBOOST_2(1, "6 dB"),
+        AUDIOBOOST_4(2, "12 dB"),
+        AUDIOBOOST_8(3, "18 dB"),
+        AUDIOBOOST_16(4, "24 dB");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
