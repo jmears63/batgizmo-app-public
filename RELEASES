@@ -1,3 +1,11 @@
 Version     Date            Description
 
+1.0.1       2025-08-26      Audio boost is now in dB.
+                            Target API is now 35 (Android 15).
+                            Edge to edge mode is now used so the app can use the
+                                entire screen, including around the camera.
+                            The microphone sampling rate is now only set/read if more than one is
+                                supported by the microphone. Previously, this was done unnecessarily
+                                when only one sampling rate was available.
+
 1.0.0       2025-08-16      Initial technical preview release.
