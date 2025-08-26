@@ -333,13 +333,22 @@ class UsbService(private val context: Context,
                 String.format("USB descriptor data:\n%s", Base64.encodeToString(rawDescriptors, Base64.DEFAULT))
             }
 
+            /*
+            // Hack for debugging parsing of Pettersson 384 kHz microphone:
+            val descB64 = "EgEAAgAAAEB9KAQEAAIBAgMBCQJtAAIBAIAyCQQAAAABAQAACSQBAAEmAAEBDCQCAQECAAEAAAAA\n" +
+                    "\tCSQGAgEBAgAACSQDAwEBAAIACQQBAAABAgAACQQBAQEBAgAAByQBAwEBAAskAgEBAhABANwFCQWB\n" +
+                    "\tBQwDAQAAByUBAAAAAA=="
+            rawDescriptors = Base64.decode(descB64, Base64.DEFAULT)
+             */
+
             // Get a list of suitable endpoints from the descriptor. Usually there will be zero or one, but it is possible
             // for there to be multiple.
             var endpointToUse: EndpointData? = null
             val endpoints: List<EndpointData> = parseEndpointsFromDescriptor(device, rawDescriptors)
             endpointToUse = endpoints.firstOrNull()
             if (endpointToUse == null) {
-                throw RuntimeException("Unable find a suitable audio endpoint in USB device ${device.productName}.")
+                throw RuntimeException("Unable find a suitable audio endpoint in USB device ${device.productName}. "
+                        + "The maximum sampling rate currently supported by this app is 384 kHz.")
                 }
 
             val actualSampleRate = connectToEndpoint(endpointToUse, endpoints)
@@ -935,8 +944,6 @@ class UsbService(private val context: Context,
             for (v in it)
                 rate = maxOf(v, rate)
         }
-        // return Pair(44100, shouldSet)   // TODO unhack this
-        // return Pair(48000, shouldSet)   // TODO unhack this
         return Pair(rate, shouldSet)
     }
 
@@ -966,7 +973,13 @@ class UsbService(private val context: Context,
 
                 var actualSampleRate = 0
                 endpointData.uac1SampleRate?.let { rate ->
-                    actualSampleRate = setEndpointSamplingRate(endpointData.uac1SampleRate.first, conn, endpointData.endpointAddress)
+                    if (rate.second)
+                        actualSampleRate = setEndpointSamplingRate(rate.first, conn, endpointData.endpointAddress)
+                    else {
+                        // Only one sampling rate is available, so don't tempt fate by trying to set it unnecessarily.
+                        // This is important for microphones that don't support setting/reading the sampling rate.
+                        actualSampleRate = rate.first
+                    }
                 }
                 endpointData.uac2ClockId?.let { id ->
                     actualSampleRate = getUac2SampleRate(conn, endpointData.uac2ClockId)
