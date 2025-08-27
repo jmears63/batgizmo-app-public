@@ -1,6 +1,10 @@
 Version     Date            Description
 
-1.0.2                       Rationalized exiting from the app.
+1.0.2       2025-08-27      Rationalized exiting from the app.
+                            The user can navigate to another app and back again with no interruption
+                            to recording or audio. Tapping the back button button from the top level
+                            activity will however close down the app, after a yes/no prompt.
+                            Updated Android gradle plugin version.
 
 1.0.1       2025-08-26      Audio boost is now in dB.
                             Target API is now 35 (Android 15).
