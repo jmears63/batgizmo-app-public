@@ -22,13 +22,19 @@
 
         <!-- profileable android:enabled="true" /-->        <!-- included in debug builds -->
 
-        <!-- singleTask guarantees that only once instance is running at once: -->
+        <!-- singleTask guarantees that only once instance is running at once.
+            The following settings allow the user to navigate away from the main activity,
+                and back again, finding it in the same state. So, recording or audio is
+                interrupted to reply to an email, for example. rememberSaveable retains
+                UI state.
+         -->
         <activity
             android:name="org.batgizmo.app.MainActivity"
             android:hardwareAccelerated="true"
             android:exported="true"
             android:theme="@style/Theme.BatgizmoApp"
             android:launchMode="singleTask">
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

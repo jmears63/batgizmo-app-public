@@ -380,6 +380,7 @@ class SpectrogramUI(
         settingsVisible: MutableState<Boolean>,
         orientation: MutableIntState,
         appMode: MutableIntState,
+        onExitApp: () -> Unit
     ) {
         if (BuildConfig.DEBUG)
             Log.d(logTag, "SpectrogramUI.Compose called")
@@ -543,7 +544,8 @@ class SpectrogramUI(
                     ComposeTopBar(
                         appMode,
                         documentPickerLauncher,
-                        settingsVisible
+                        settingsVisible,
+                        onExitApp
                     )
                 }
             },
@@ -571,7 +573,8 @@ class SpectrogramUI(
                 settingsVisible,
                 uiState.liveMode,
                 ::onShowMetadata,
-                documentPickerLauncher
+                documentPickerLauncher,
+                onExitApp
             )
         }
     }
@@ -588,7 +591,8 @@ class SpectrogramUI(
         settingsVisible: MutableState<Boolean>,
         liveMode: MutableIntState,
         onShowMetadata: () -> Unit,
-        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>
+        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
+        onExitApp: () -> Unit
     ) {
         // Log.d(logTag, "ComposeMiddle called")
         Row {
@@ -600,7 +604,8 @@ class SpectrogramUI(
                         appMode,
                         onShowMetadata,
                         documentPickerLauncher,
-                        settingsVisible
+                        settingsVisible,
+                        onExitApp
                     )
                 }
             }
@@ -642,7 +647,8 @@ class SpectrogramUI(
                         appMode,
                         onShowMetadata,
                         documentPickerLauncher,
-                        settingsVisible
+                        settingsVisible,
+                        onExitApp
                     )
                 }
             }
@@ -1024,7 +1030,8 @@ class SpectrogramUI(
     private fun ComposeTopBar(
         appMode: MutableIntState,
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
-        settingsVisible: MutableState<Boolean>
+        settingsVisible: MutableState<Boolean>,
+        onExitApp: () -> Unit
     ) {
         TopAppBar(
             // Colours will be obtained from the enclosing theme, no need
@@ -1033,7 +1040,7 @@ class SpectrogramUI(
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Bat Gizmo ${AppMode.getText(appMode.intValue)}",
+                        "BatGizmo ${AppMode.getText(appMode.intValue)}",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1041,7 +1048,7 @@ class SpectrogramUI(
             },
 
             navigationIcon = {
-                ComposeNavigationIcon(documentPickerLauncher, settingsVisible)
+                ComposeNavigationIcon(documentPickerLauncher, settingsVisible, onExitApp)
             },
 
             actions = {
@@ -1058,8 +1065,9 @@ class SpectrogramUI(
     @Composable
     private fun ComposeNavigationIcon(
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
-        settingsVisible: MutableState<Boolean>) {
-
+        settingsVisible: MutableState<Boolean>,
+        onExitApp: () -> Unit)
+    {
         // Make sure the menu appears next to the button it relates to:
         var iconButtonCoordinates by remember { mutableStateOf(Offset.Zero) }
         var iconButtonSize by remember { mutableStateOf(IntSize.Zero) }
@@ -1117,6 +1125,17 @@ class SpectrogramUI(
                 },
                 leadingIcon = { Icon(
                     imageVector = Icons.Filled.Build,
+                    contentDescription = "Settings")
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("Exit") },
+                onClick = {
+                    uiState.menuExpanded.value = false
+                    onExitApp()
+                },
+                leadingIcon = { Icon(
+                    painter = painterResource(id = R.drawable.outline_power_settings_new_24),
                     contentDescription = "Settings")
                 }
             )
@@ -1217,7 +1236,8 @@ class SpectrogramUI(
         appMode: MutableIntState,
         onShowMetadata: () -> Unit,
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
-        settingsVisible: MutableState<Boolean>
+        settingsVisible: MutableState<Boolean>,
+        onExitApp: () -> Unit
         ) {
         Column(
             modifier = Modifier
@@ -1227,7 +1247,7 @@ class SpectrogramUI(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box {   // Box so that the menu is correctly located relative to its button
-                ComposeNavigationIcon(documentPickerLauncher, settingsVisible)
+                ComposeNavigationIcon(documentPickerLauncher, settingsVisible, onExitApp)
             }
             Spacer(Modifier.weight(1f))
             ComposeLiveButtons(liveMode, appMode)

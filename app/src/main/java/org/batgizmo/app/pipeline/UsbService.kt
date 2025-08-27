@@ -426,17 +426,7 @@ class UsbService(private val context: Context,
         connection?.let { conn ->
             var usbInterface = getUsbInterfaceObject(device, endpoints, endpointData.endpointAddress)
 
-            // Claim all the interfaces we will need to use:
-            /*
-            endpointData.interfacesToClaim.forEach { it ->
-                // Claim the interface, forcing it away from the kernel if needed:
-                val toClaim = device.getInterface(it)
-                var isClaimed = conn.claimInterface(toClaim, true)
-                require (isClaimed) { "Unable to claim interface $it" }
-            }
-             */
-
-            // For simplicity, claim all the device's interfaces. That's easier than figuring
+            // For simplicity, claim *all* the device's interfaces. That's easier than figuring
             // out exactly which ones we need:
             for (i in 0 until device.interfaceCount) {
                 val iface = device.getInterface(i)

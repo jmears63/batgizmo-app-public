@@ -39,8 +39,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -204,6 +206,32 @@ class UIModel(application: Application,
 
     }
 
+    /**
+     * This method is called by the system when the last activity calls finish().
+     */
+    override fun onCleared() {
+        Log.d(logTag, "onCleared() called")
+        super.onCleared()
+
+        /*
+            We will explicitly stop recording so the wav file can be cleanly closed.
+            Everything else I leave up the Android system to clean up as the process
+            ends. Yes, lazy of me, but fine actually.
+         */
+
+        // Dedicated cleanup scope for critical cleanup tasks:
+        val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        cleanupScope.launch {
+            // Close any recording files in progress cleanly. Does no harm if we are not recording:
+            usbService.stopRecording()
+
+            // Signal to the main streaming loop to exit. Otherwise, the kotlin thread
+            // never finishes and it continues zombie like after the app has appeared
+            // to close. Does no harm if we are not connected.
+            usbService.disconnect()
+        }
+    }
+
     private val logTag = this::class.simpleName
 
     // The single source of truth for the BnC slider value is normalize to the range 0f..1f.
@@ -215,7 +243,6 @@ class UIModel(application: Application,
     fun setAutoBnCRequired(required: Boolean) {
         mutableAutoBnCRequiredFlow.value = required
     }
-
 
     /*
         The single sources of truth for the logical and axis ranges used by the renderer.
@@ -419,13 +446,6 @@ class UIModel(application: Application,
                 settingsReadyChannel.send(Unit)
             }
         }
-    }
-
-    /**
-     * Called when the model is destroyed.
-     */
-    override fun onCleared() {
-        super.onCleared()
     }
 
     /**
