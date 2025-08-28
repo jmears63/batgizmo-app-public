@@ -93,13 +93,17 @@ class WavFileParser {
         while (raFile.filePointer < fileLength) {
             val subChunkId = readTextBytes(raFile, filename, 4, "SubchunkID")
             if (subChunkId == "fmt ") {        // Note: the space is important.
-                if (fmtChunk != null)
+                if (fmtChunk != null) {
                     Log.i(this::class.simpleName, "Ignoring extra fmt chunk")
+                    skipChunk(raFile, filename)
+                }
                 else
                     fmtChunk = readFormatChunk(raFile, filename)
             } else if (subChunkId == "data") {
-                if (dataChunk != null)
+                if (dataChunk != null) {
                     Log.i(this::class.simpleName, "Ignoring extra data chunk")
+                    skipChunk(raFile, filename)
+                }
                 else {
                     if (fmtChunk != null)
                         dataChunk = skimDataChunk(raFile, filename, fmtChunk)
@@ -108,8 +112,10 @@ class WavFileParser {
                     }
                 }
             } else if (subChunkId == "guan") {
-                if (guanoChunk != null)
+                if (guanoChunk != null) {
                     Log.i(this::class.simpleName, "Ignoring extra guano chunk.")
+                    skipChunk(raFile, filename)
+                }
                 else {
                     guanoChunk = readGuanoChunk(raFile, filename)
                 }
