@@ -1091,7 +1091,7 @@ class UIModel(application: Application,
                 currentFftParameters = fftp
             }
 
-            if (fftParametersChanged) {
+            if (fftParametersChanged || resetVisibleRange) {
                 p.fullExecute(
                     fftParameters = currentFftParameters,
                     rawPageRange = rawPageRange,
