@@ -1,5 +1,9 @@
 Version     Date            Description
 
+1.0.3       2025-08-28      Reading wav files now correctly skips over duplicate wav file sections,
+                            avoiding errors with some files created by Titley products.
+                            Fixed a regression that prevented paging of large files working properly.
+
 1.0.2       2025-08-27      Rationalized exiting from the app.
                             The user can navigate to another app and back again with no interruption
                             to recording or audio. Tapping the back button button from the top level
