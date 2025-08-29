@@ -2,6 +2,7 @@ Version     Date            Description
 
 1.0.4                       The heterodyne markers can now be dragged right to the top or bottom of
                             spectrogram.
+                            Updated apg library.
 
 1.0.3       2025-08-28      Reading wav files now correctly skips over duplicate wav file sections,
                             avoiding errors with some files created by Titley products.
