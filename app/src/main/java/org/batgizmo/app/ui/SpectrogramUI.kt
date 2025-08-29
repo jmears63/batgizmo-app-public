@@ -872,10 +872,11 @@ class SpectrogramUI(
 
         if (uiState.heterodyneRef1kHz.value != null) {
             val shape = RoundedCornerShape(12.dp)
-            val iconSizeDp = 42.dp
-            val iconSizePx = with(LocalDensity.current) { iconSizeDp.toPx() }
-            var offsetY1 = rememberSaveable { mutableFloatStateOf(0f) }
-            var offsetY2 = rememberSaveable { mutableFloatStateOf(0f) }
+            val iconBoxSizeDp = 42.dp
+            val iconBoxSizePx = with(LocalDensity.current) { iconBoxSizeDp.toPx() }
+            val iconSizeDp = 24.dp
+            val offsetY1 = rememberSaveable { mutableFloatStateOf(0f) }
+            val offsetY2 = rememberSaveable { mutableFloatStateOf(0f) }
 
             val scope = rememberCoroutineScope()
 
@@ -932,13 +933,13 @@ class SpectrogramUI(
                     updateSetting: (kHz: Int) -> Settings
                 ) {
                     // The draggable icon
-                    if (offsetY.floatValue in -iconSizePx..maxHeightPx - iconSizePx) {
+                    if (offsetY.floatValue in -iconBoxSizePx..maxHeightPx) {
                         // Log.d(logTag, "offsetY = $offsetY")
                         Box(
                             modifier = Modifier
-                                .size(iconSizeDp)
+                                .size(iconBoxSizeDp)
                                 .align(Alignment.TopStart)
-                                .offset { IntOffset(0, offsetY.floatValue.roundToInt()) }
+                                .offset { IntOffset(0, (offsetY.floatValue - iconBoxSizePx / 2).roundToInt()) }
                                 .border(BorderStroke(2.dp, Color.DarkGray), shape)
                                 .clip(shape)
                                 .pointerInput(Unit) {
@@ -950,7 +951,7 @@ class SpectrogramUI(
                                             // no rounding:
                                             val newOffset = offsetY.floatValue + dragAmount.y
                                             offsetY.floatValue =
-                                                newOffset.coerceIn(0f, maxHeightPx - iconSizePx)
+                                                newOffset.coerceIn(0f, maxHeightPx)
 
                                             // Calculate the corresponding rounded reference kHz:
                                             val hz = yAxisState.value.endInclusive -
@@ -973,7 +974,7 @@ class SpectrogramUI(
                             Icon(
                                 imageVector = ImageVector.vectorResource(R.drawable.outline_pan_tool_alt_24),
                                 contentDescription = "Heterodyne reference adjustor",
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(iconSizeDp)
                             )
                         }
                     }
