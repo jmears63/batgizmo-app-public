@@ -24,6 +24,7 @@ package org.batgizmo.app.ui
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -138,8 +139,10 @@ class TopLevelUI(private val model: UIModel) {
             settingsAvailable.value = true
 
             spectrogramUI.onSettingsUpdate(model.settings, previousSettings)
-            if (model.settings.enableLogging)
+            if (model.settings.enableLogging) {
                 diagnosticLogger.startLogging(context)
+                diagnosticLogger.log { "Build.VERSION.SDK_INT = ${Build.VERSION.SDK_INT}" }
+            }
             else
                 diagnosticLogger.stopLogging()
         }
