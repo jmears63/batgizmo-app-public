@@ -287,6 +287,11 @@ abstract class RendererBase(
                 .then(gestureModifier),
             factory = { ctx ->
                 SurfaceView(ctx).apply {
+                    // The following line is essential for API version 30 to so that the frame
+                    // etc is visible. It seems as if this SurfaceView doesn't respect the padding
+                    // from its Compose container.
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT) // set background to green
+
                     holder.addCallback(callback)
                 }
             }
