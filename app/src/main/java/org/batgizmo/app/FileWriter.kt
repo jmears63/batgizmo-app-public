@@ -618,14 +618,15 @@ class FileWriter(
 
                     val guanoData = makeGuanoData(additionalGuanoFields)
 
-                    val wavHeader = createWavHeaderWithGuano(
+                    val wavHeader = createWavHeader(
                         dataEntries = entriesActuallyWrittenToFile,
                         sampleRate = sampleRate,
                         bitsPerSample = 16,     // Ugly hard coding for now.
-                        guanoData
+                        guanoData.size
                     )
+                    val wavFooter = createWavFooterWithGuano(guanoData)
 
-                    moveTempFileToMediaStore(rf, wfi, wavHeader)
+                    moveTempFileToMediaStore(rf, wfi, wavHeader, wavFooter)
                 }
                 // Finish with the temp file:
                 rf.delete()
@@ -799,7 +800,8 @@ class FileWriter(
     private fun moveTempFileToMediaStore(
         rawFile: File,
         wfi: WavFileInfo,
-        wavHeader: ByteArray
+        wavHeader: ByteArray,
+        wavFooter: ByteArray
     ): Boolean {
         val resolver = context.contentResolver
 
@@ -828,6 +830,7 @@ class FileWriter(
                 FileInputStream(rawFile).use { inputStream ->
                     outputStream.write(wavHeader)
                     inputStream.copyTo(outputStream)
+                    outputStream.write(wavFooter)
                 }
             }
             contentValues.clear()
@@ -944,25 +947,21 @@ class FileWriter(
         output.write(byteBuffer, 0, byteBuffer.size)
     }
 
-    private fun createWavHeaderWithGuano(
+    private fun createWavHeader(
         dataEntries: Int,
         sampleRate: Int,
         bitsPerSample: Int,
-        guanoData: ByteArray,
+        guanoDataLength: Int,
         channels: Int = 1,
     ): ByteArray {
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
         val totalAudioLen = dataEntries * 2
 
-        val guanoChunkSize = guanoData.size
-        val guanoChunkTotalSize = 8 + guanoChunkSize
+        // Total = PCM data + standard header (36) + Guano chunk + data header (8) + guano header (8)
+        val totalDataLen = 36 + 8 + totalAudioLen + 8 + guanoDataLength
 
-        // Total = PCM data + standard header (36) + Guano chunk + data header (8)
-        val totalDataLen = totalAudioLen + 36 + guanoChunkTotalSize
-
-        44 + guanoChunkTotalSize  // 44 includes standard + fmt + data headers
-        val header = ByteArray(44 + guanoChunkTotalSize)
+        val header = ByteArray(44)
 
         // --- RIFF Header ---
         header[0] = 'R'.code.toByte()
@@ -990,14 +989,6 @@ class FileWriter(
 
         var offset = 36
 
-        header[offset] = 'g'.code.toByte()
-        header[offset + 1] = 'u'.code.toByte()
-        header[offset + 2] = 'a'.code.toByte()
-        header[offset + 3] = 'n'.code.toByte()
-        writeIntLE(header, offset + 4, guanoChunkSize)
-        System.arraycopy(guanoData, 0, header, offset + 8, guanoChunkSize)
-        offset += 8 + guanoChunkSize
-
         // --- data chunk (must come after Guano) ---
         header[offset] = 'd'.code.toByte()
         header[offset + 1] = 'a'.code.toByte()
@@ -1006,6 +997,23 @@ class FileWriter(
         writeIntLE(header, offset + 4, totalAudioLen)
 
         return header
+    }
+
+    private fun createWavFooterWithGuano(guanoData: ByteArray): ByteArray
+    {
+        val guanoChunkSize = guanoData.size
+        val guanoChunkTotalSize = 8 + guanoChunkSize
+
+        val footer = ByteArray(guanoChunkTotalSize)
+
+        footer[0] = 'g'.code.toByte()
+        footer[1] = 'u'.code.toByte()
+        footer[2] = 'a'.code.toByte()
+        footer[3] = 'n'.code.toByte()
+        writeIntLE(footer, 4, guanoChunkSize)
+        System.arraycopy(guanoData, 0, footer, 8, guanoChunkSize)
+
+        return footer
     }
 
     private fun writeIntLE(buffer: ByteArray, offset: Int, value: Int) {

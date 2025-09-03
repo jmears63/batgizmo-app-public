@@ -1,7 +1,12 @@
 Version     Date            Description
 
-1.0.4                       The heterodyne markers can now be dragged right to the top or bottom of
+1.0.5       2025-09-03      Moved the GUANO wav file section to be after the data section, for
+                            compatibility with Anabat Insight labelling.
+
+1.0.4       2025-09-02      The heterodyne markers can now be dragged right to the top or bottom of
                             spectrogram.
+                            Fixed issue with rendering the display on API version 30.
+                            Included Android API number in the diagnostic log.
                             Updated apg library.
 
 1.0.3       2025-08-28      Reading wav files now correctly skips over duplicate wav file sections,
