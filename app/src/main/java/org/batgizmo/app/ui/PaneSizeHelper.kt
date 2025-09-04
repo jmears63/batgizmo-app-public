@@ -22,7 +22,6 @@
 
 package org.batgizmo.app.ui
 
-import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,11 +38,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.batgizmo.app.HORange
 import org.batgizmo.app.UIModel
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 
 class PaneSizeHelper {
-
-    private val logTag = this::class.simpleName
 
     private data class SizeGeneration(val sizePx: IntSize = IntSize(0, 0), val generation: Int = -1)
 
@@ -84,7 +82,7 @@ class PaneSizeHelper {
 
         LaunchedEffect(configurationGeneration, spectrogramSizeGen, amplitudeSizeGen) {
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "LaunchedEffect for pane sizes: $configurationGeneration, $spectrogramSizeGen, $amplitudeSizeGen")
+                Timber.d("LaunchedEffect for pane sizes: $configurationGeneration, $spectrogramSizeGen, $amplitudeSizeGen")
 
             // If we have a consistent set of values we can send to the model asynchronously:
             var consistentSet = spectrogramSizeGen.generation == configurationGeneration
@@ -93,7 +91,7 @@ class PaneSizeHelper {
             }
             if (consistentSet) {
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "Consistent values detected, notifying the model")
+                    Timber.d("Consistent values detected, notifying the model")
                 scope.launch {
                     with(density) {
                         model.onUISizeChange(

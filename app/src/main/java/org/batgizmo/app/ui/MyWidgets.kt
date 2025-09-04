@@ -136,6 +136,45 @@ fun <T> MyListSelector(
     }
 }
 
+@Composable
+fun <T> MySliderSelector(
+    enumEntries: EnumEntries<T>,
+    description: String,
+    selectedValue: Int,
+    onChange: (Int) -> Unit
+) where T : Enum<T>, T : Settings.EnumHelper {
+
+    // Find min and max values
+    val minValue = enumEntries.minOf { it.theValue() }
+    val maxValue = enumEntries.maxOf { it.theValue() }
+
+    // Map value → label for display
+    fun labelForValue(value: Int) = enumEntries.first { it.theValue() == value }.theLabel()
+
+    // State for slider
+    var sliderValue by rememberSaveable { mutableStateOf(selectedValue.toFloat()) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text("$description: ${labelForValue(sliderValue.toInt())}")
+
+        Slider(
+            value = sliderValue,
+            onValueChange = {
+                sliderValue = it
+            },
+            onValueChangeFinished = {
+                onChange(sliderValue.toInt())
+            },
+            valueRange = minValue.toFloat()..maxValue.toFloat(),
+            steps = enumEntries.size - 2, // exclude min/max
+            modifier = Modifier.fillMaxWidth()
+                /* .semantics {
+                    contentDescription = "$description: ${labelForValue(sliderValue.toInt())}"
+                } */
+        )
+    }
+}
+
 private val borderStroke = BorderStroke(Dp.Hairline, Color.Gray)
 
 @Composable

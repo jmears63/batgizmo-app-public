@@ -25,7 +25,6 @@ package org.batgizmo.app.pipeline
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.util.Log
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
@@ -39,6 +38,7 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.pipeline.ColourMapStep.Companion.dbRangeMax
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import kotlin.math.log2
 import kotlin.math.pow
@@ -253,8 +253,6 @@ abstract class AbstractPipeline(
     // Synchronize access to data members:
     protected val mutex = Mutex()
 
-    private val logTag = this::class.simpleName
-
     private fun startPipeline(pld: PipelineData) {
         pld.dataSourceStep.start()
         pld.transformStep.start()
@@ -388,7 +386,7 @@ abstract class AbstractPipeline(
         doRender: Boolean,
     ) {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "internalExecute called")
+            Timber.d("internalExecute called")
 
         // Slight hack if no amplitude pane:
         val dummyAmplitudeSize = DpSize(100.dp, 100.dp)
@@ -398,7 +396,7 @@ abstract class AbstractPipeline(
         internalShutdown(updateUI = false)
 
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "internalExecute calling setupPipeline")
+            Timber.d("internalExecute calling setupPipeline")
         pipelineData = setupPipeline(
             fftParameters,
             rawPageRange,
@@ -436,7 +434,7 @@ abstract class AbstractPipeline(
                 val params = it.params
                 if (params != null) {
                     if (BuildConfig.DEBUG)
-                        Log.d(logTag, "applyBnC: $range is being set")
+                        Timber.d("applyBnC: $range is being set")
                     val newParams =
                         ColourMapStep.Params(params.calcs, bnCRangeLogical = range)
                     it.params = newParams
@@ -487,13 +485,13 @@ abstract class AbstractPipeline(
             // We need the intersection of the visible range and the assigned data range,
             // to avoid calculating BnC on uninitialized data:
             val assignedTimeRange = pipelineData?.transformStep?.dataAssignedRange
-            // Log.d(logTag, "JM: transformed assignedTimeRange = $assignedTimeRange")
+            // Timber.d("JM: transformed assignedTimeRange = $assignedTimeRange")
             if (assignedTimeRange != null) {
                 val clippedXIndexRange = Pair(
                     maxOf(xIndexRange.first, assignedTimeRange.first),
                     minOf(xIndexRange.second, assignedTimeRange.second)
                 )
-                // Log.d(logTag, "JM: clippedXIndexRange = $clippedXIndexRange")
+                // Timber.d("JM: clippedXIndexRange = $clippedXIndexRange")
                 if (clippedXIndexRange.second > clippedXIndexRange.first) {
                     val rangeFromData = findBnCRange(
                         clippedXIndexRange.first, clippedXIndexRange.second,
@@ -522,7 +520,7 @@ abstract class AbstractPipeline(
                 floatRange = FloatRange(lower + blackRange, range[1])
             }
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "auto BnC range in visible region is $floatRange")
+                Timber.d("auto BnC range in visible region is $floatRange")
 
             return floatRange
         }
@@ -559,7 +557,7 @@ abstract class AbstractPipeline(
             )
 
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "Calculations: fftWindowSize = ${calcs.fftWindowSize}, " +
+                Timber.d("Calculations: fftWindowSize = ${calcs.fftWindowSize}, " +
                     "fftWindowSize = ${calcs.fftOverlap}, " +
                     "rawSliceEntries = ${calcs.rawSliceEntries}, " +
                     "slice time = ${calcs.rawSliceEntries * 1000 / calcs.rawSampleRate} ms"
@@ -582,7 +580,7 @@ abstract class AbstractPipeline(
             val crwb = cachedRawDataBuffer
             if (preserveRawDataBuffer && crwb != null && crwb.buffer.size == sizeRequired) {
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "reusing the raw data buffer: assignedRange = ${cachedRawDataBuffer?.assignedRange}")
+                    Timber.d("reusing the raw data buffer: assignedRange = ${cachedRawDataBuffer?.assignedRange}")
                 rangedRawDataBuffer = cachedRawDataBuffer
             }
             else {
@@ -651,8 +649,7 @@ abstract class AbstractPipeline(
             )
             val p = TransformStep.Params(calcs = calcs)
             if (BuildConfig.DEBUG)
-                Log.d(
-                    logTag,
+                Timber.d(
                     "assigning transformStep.params with ${p.calcs.fftWindowSize}"
                 )
             transformStep.params = p
@@ -816,7 +813,7 @@ abstract class AbstractPipeline(
                 val yAxisMin =
                     yDataRange.start + yDataRange.difference() * (1f - yVisibleRange.endInclusive)
 
-                // Log.d(logTag, "updateAxisRanges setting x axis range to $xAxisMin, $xAxisMax, xDataRange.start = ${xDataRange.start}")
+                // Timber.d("updateAxisRanges setting x axis range to $xAxisMin, $xAxisMax, xDataRange.start = ${xDataRange.start}")
                 mutableXAxisRangeFlow.value = FloatRange(xAxisMin, xAxisMax)
                 mutableYAxisRangeFlow.value = FloatRange(yAxisMin, yAxisMax)
             }

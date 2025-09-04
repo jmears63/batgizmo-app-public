@@ -25,7 +25,6 @@ package org.batgizmo.app.ui
 import android.content.Context
 import android.net.Uri
 import android.os.Build
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -58,10 +57,9 @@ import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.ui.theme.BatgizmoAppTheme
+import timber.log.Timber
 
 class TopLevelUI(private val model: UIModel) {
-
-    private val logTag = this::class.simpleName
 
     private var previousSettings: Settings? = null
 
@@ -164,7 +162,7 @@ class TopLevelUI(private val model: UIModel) {
         BackHandler {
             // Handle backing out of the top level activity.
 
-            Log.d(logTag, "Back pressed")
+            Timber.d("Back pressed")
             onExitApp()
         }
 

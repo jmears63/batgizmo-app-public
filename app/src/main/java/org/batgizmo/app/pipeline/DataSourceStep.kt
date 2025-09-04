@@ -46,8 +46,6 @@ abstract class DataSourceStep(
 
     var params: Params? = null
 
-    private val logTag = this::class.simpleName
-
     /**
      * Get a safe copy of params or throw an exception.
      */
@@ -104,7 +102,7 @@ abstract class DataSourceStep(
         // We will tell the transform step the starting location to write its result:
         var transformedEntryIndex = 0
         val assignedDataRange = rangedRawDataBuffer.assignedRange
-        // Log.d(logTag, "JM: assignedDataRange = $assignedDataRange")
+        // Timber.d("JM: assignedDataRange = $assignedDataRange")
 
         var relativeStart = 0
         for (i in 0 until numSlices) {
@@ -126,7 +124,7 @@ abstract class DataSourceStep(
 
             // If there is anything left to render, do so:
             if (clippedDataRange.second > clippedDataRange.first) {
-                // Log.d(logTag, "JM: rendering raw data slice $clippedDataRange")
+                // Timber.d("JM: rendering raw data slice $clippedDataRange")
                 sliceRender(clippedDataRange, transformedEntryIndex)
             }
 

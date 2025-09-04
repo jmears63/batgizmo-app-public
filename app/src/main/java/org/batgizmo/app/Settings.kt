@@ -45,7 +45,7 @@ data class Settings(
     var heterodyneRef1kHz: Int = 50,
     var heterodyneRef2kHz: Int = 83,
     var locationInFile: Boolean = true,
-    var audioBoostShift: Int = AudioBoostOptions.AUDIOBOOST_NONE.value,
+    var audioBoostShift: Int = AudioBoostOptions.AUDIOBOOST_8.value,
     var preTriggerTimeMs: Int = PreTriggerTimeOptions.PRETRIGGER_TIME_500MS.value,
     var postTriggerTimeMs: Int = PostTriggerTimeOptions.POSTTRIGGER_TIME_1000MS.value,
     var maxFileTimeMs: Int = MaxFileTimeOptions.MAX_FILE_TIME_5000MS.value,
@@ -119,10 +119,10 @@ data class Settings(
     // The value is the shift required to achieve the factor:
     enum class AudioBoostOptions(val value: Int, val label: String) : EnumHelper {
         AUDIOBOOST_NONE(0, "none"),
-        AUDIOBOOST_2(1, "6 dB"),
-        AUDIOBOOST_4(2, "12 dB"),
-        AUDIOBOOST_8(3, "18 dB"),
-        AUDIOBOOST_16(4, "24 dB");
+        AUDIOBOOST_2(1, "+6 dB"),
+        AUDIOBOOST_4(2, "+12 dB"),
+        AUDIOBOOST_8(3, "+18 dB"),
+        AUDIOBOOST_16(4, "+24 dB");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label

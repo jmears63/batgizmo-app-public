@@ -24,6 +24,9 @@ package org.batgizmo.app
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
+import timber.log.Timber
+import uk.org.gimell.batgimzoapp.BuildConfig
 import java.io.PrintWriter
 import java.io.StringWriter
 
@@ -54,10 +57,31 @@ class LoggingExceptionHandler(
     }
 }
 
+class ReleaseTree : Timber.Tree() {
+    override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+        // Ignore debug and verbose logs
+        if (priority == Log.VERBOSE || priority == Log.DEBUG)
+            return
+
+        /*
+        // Optionally send warnings and errors to Firebase Crashlytics
+        FirebaseCrashlytics.getInstance().log("$tag: $message")
+        t?.let { FirebaseCrashlytics.getInstance().recordException(it) }
+         */
+    }
+}
+
 class BatGizmoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        if (BuildConfig.DEBUG) {
+            Timber.plant(Timber.DebugTree()) // Full logging in debug
+        } else {
+            Timber.plant(ReleaseTree())      // Restricted logging in release
+        }
+
+        // TODO: migration the following to timber:
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         val handler = LoggingExceptionHandler(defaultHandler, this)
 

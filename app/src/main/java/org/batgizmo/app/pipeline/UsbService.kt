@@ -61,6 +61,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
+import timber.log.Timber
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -130,8 +131,6 @@ class UsbService(private val context: Context,
     )
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-
-    private val logTag = this::class.simpleName
 
     /*
      * Unfortunately the USB permission callback doesn't seem to include information
@@ -996,7 +995,7 @@ class UsbService(private val context: Context,
                         usbErrorChannel.trySend(UsbErrorResult(errno))
                     }
 
-                    Log.i(logTag, "USB streaming thread existing with errno = $errno")
+                    Timber.i("USB streaming thread existing with errno = $errno")
                 }, "data streaming")
                 streamingThread?.start()
                 return actualSampleRate

@@ -28,7 +28,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Looper
-import android.util.Log
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -36,13 +35,13 @@ import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 
 class LocationTracker(
     private val context: Context,
     private val onLocationUpdate: (Location) -> Unit
 ) {
-    private val logTag = this::class.simpleName
     private val fusedClient = LocationServices.getFusedLocationProviderClient(context)
     private var callback: LocationCallback? = null
 
@@ -52,7 +51,7 @@ class LocationTracker(
             return
 
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "Requesting one off location")
+            Timber.d("Requesting one off location")
 
         fusedClient.getCurrentLocation(
             Priority.PRIORITY_HIGH_ACCURACY,
@@ -68,7 +67,7 @@ class LocationTracker(
             return
 
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "Starting periodic location updates")
+            Timber.d("Starting periodic location updates")
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMillis)
             .setMinUpdateDistanceMeters(5f)
             .build()
@@ -84,7 +83,7 @@ class LocationTracker(
 
     fun stopPeriodicUpdates() {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "Stopping periodic location updates")
+            Timber.d("Stopping periodic location updates")
         callback?.let { fusedClient.removeLocationUpdates(it) }
         callback = null
     }

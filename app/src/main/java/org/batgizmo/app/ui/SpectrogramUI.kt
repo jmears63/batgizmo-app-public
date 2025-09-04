@@ -30,7 +30,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.Os
-import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
@@ -125,6 +124,7 @@ import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.UsbService
 import org.batgizmo.app.ui.TopLevelUI.AppMode
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import uk.org.gimell.batgimzoapp.R
 import java.util.Locale
@@ -150,8 +150,6 @@ class SpectrogramUI(
             return fileName
         }
     }
-
-    private val logTag = this::class.simpleName
 
     val localShowGrid = compositionLocalOf<Boolean> { true }
 
@@ -263,8 +261,6 @@ class SpectrogramUI(
             var currentPage: Int
         )
 
-        private val logTag = this::class.simpleName
-
         private var internals = calcInternals(settings)
 
         init {
@@ -324,7 +320,7 @@ class SpectrogramUI(
             }
 
             if (result != null) {
-                Log.i(logTag, "Moving to page $newPage starting at ${result.first} length ${result.second - result.first}")
+                Timber.i("Moving to page $newPage starting at ${result.first} length ${result.second - result.first}")
                 internals.currentPage = newPage
 
                 require(result.second - result.first <= internals.rawPageLength)
@@ -383,7 +379,7 @@ class SpectrogramUI(
         onExitApp: () -> Unit
     ) {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "SpectrogramUI.Compose called")
+            Timber.d("SpectrogramUI.Compose called")
 
         val context = LocalContext.current
         val menuExpanded = rememberSaveable { uiState.menuExpanded }
@@ -397,7 +393,7 @@ class SpectrogramUI(
             menuExpanded.value = false
             uri?.let {
                 val filename = getFileName(context, uri)
-                Log.i(logTag, "Selected file: $filename")
+                Timber.i("Selected file: $filename")
                 if (filename?.lowercase()?.endsWith(".wav") == true) {
                     model.resetUIMode(AppMode.VIEWER, uri = uri)
                 } else {
@@ -474,7 +470,7 @@ class SpectrogramUI(
         val activity: Activity = LocalActivity.current as Activity
         LaunchedEffect(uiState.liveMode.intValue, appMode.intValue) {
             val keepScreenOn = appMode.intValue == AppMode.LIVE.value && uiState.liveMode.intValue != LiveMode.OFF.value
-            // Log.d(logTag, "keepScreenOn = $keepScreenOn")
+            // Timber.d("keepScreenOn = $keepScreenOn")
             if (keepScreenOn)
                 activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             else
@@ -594,7 +590,7 @@ class SpectrogramUI(
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
         onExitApp: () -> Unit
     ) {
-        // Log.d(logTag, "ComposeMiddle called")
+        // Timber.d("ComposeMiddle called")
         Row {
             if (orientation.intValue == Configuration.ORIENTATION_LANDSCAPE && leftHandedMode) {
                 Column {
@@ -674,12 +670,15 @@ class SpectrogramUI(
                     heterodyneRangekHz = IntRange(lower, upper)
             }
 
+            val isStarting = uiState.audioMode.intValue != AudioMode.ON.value
             audioConfig.Compose(
                 model.settings,
+                isStarting,
                 onDismiss =  {
                     // They changed their mind:
                     uiState.showAudioConfig.value = false
-                    uiState.audioMode.intValue = AudioMode.OFF.value
+                    if (isStarting)
+                        buttonState.audioChecked.value = false
                 },
                 onConfirm = { audioDualHeterodyne: Boolean, audioRef1kHz: Int,
                               audioRef2kHz: Int, audioBoostFactor: Int ->
@@ -934,7 +933,7 @@ class SpectrogramUI(
                 ) {
                     // The draggable icon
                     if (offsetY.floatValue in -iconBoxSizePx..maxHeightPx) {
-                        // Log.d(logTag, "offsetY = $offsetY")
+                        // Timber.d("offsetY = $offsetY")
                         Box(
                             modifier = Modifier
                                 .size(iconBoxSizeDp)
@@ -1160,7 +1159,7 @@ class SpectrogramUI(
         windowSizeClass: WindowSizeClass = currentWindowAdaptiveInfo().windowSizeClass,
     ) {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "SpectrogramPaneSet called")
+            Timber.d("SpectrogramPaneSet called")
 
         var showAmplitudePane = true
         if (amplitudePaneVisibility == Settings.VisibilityOptions.NEVER.value)
@@ -1188,7 +1187,7 @@ class SpectrogramUI(
                         .fillMaxWidth()
                         .weight(0.15f)
                         .onSizeChanged { sizePx ->
-                            // Log.d(logTag, "Amplitude size is $sizePx")
+                            // Timber.d("Amplitude size is $sizePx")
                             onAmplitudeSizeChange(sizePx)
                         },
                     model,
@@ -1202,7 +1201,7 @@ class SpectrogramUI(
                     .fillMaxWidth()
                     .weight(0.85f)
                     .onSizeChanged { sizePx ->
-                        // Log.d(logTag, "Spectrogram size is $sizePx")
+                        // Timber.d("Spectrogram size is $sizePx")
                         onSpectrogramSizeChange(sizePx)
                     },
                 model,
@@ -1264,13 +1263,13 @@ class SpectrogramUI(
         // in viewer mode, to avoid the need to asynchronously switch UI mode
         // and connect to USB in parallel, with the risk of a race.
         if (appMode.intValue != AppMode.LIVE.value) {
-            Log.w(logTag, "Internal error: not in live mode")
+            Timber.w("Internal error: not in live mode")
         }
 
         when (uiState.liveMode.intValue) {
             LiveMode.OFF.value -> {
                 if (checked) {
-                    Log.i(logTag, "Live mode: connecting.")
+                    Timber.i("Live mode: connecting.")
 
                     // Start data streaming from the USB device, asynchronously:
                     liveMode.intValue = LiveMode.CONNECTING.value
@@ -1283,7 +1282,7 @@ class SpectrogramUI(
             LiveMode.CONNECTING.value -> {
                 // Already connecting, nothing to do at present.
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "Live mode: currently connecting, no action taken.")
+                    Timber.d("Live mode: currently connecting, no action taken.")
                 if (!checked) {
                     // TODO should we try to disconnect if checked is false while we are connecting?
                     // Debouncing?
@@ -1292,7 +1291,7 @@ class SpectrogramUI(
             LiveMode.STREAMING.value -> {
                 if (!checked) {
                     // Currently streaming data, so we need to pause:
-                    Log.i(logTag, "Live mode: pausing.")
+                    Timber.i("Live mode: pausing.")
                     uiState.liveMode.intValue = LiveMode.PAUSED.value
                     model.pauseLiveStream()
                 }
@@ -1303,7 +1302,7 @@ class SpectrogramUI(
             LiveMode.PAUSED.value -> {
                 if (checked) {
                     // Currently paused, so we need to resume:
-                    Log.i(logTag, "Live mode: resuming from pause.")
+                    Timber.i("Live mode: resuming from pause.")
                     uiState.liveMode.intValue = LiveMode.STREAMING.value
                     model.resumeLiveStream()
                 }
@@ -1377,7 +1376,7 @@ class SpectrogramUI(
         MyLatchingButton(
             buttonState.audioChecked, buttonState.audioEnabled,
             ImageVector.vectorResource(R.drawable.baseline_volume_up_24_filled),
-            "Toggle listening",
+            "Toggle audio",
             onSelectionChanged = { checked: Boolean ->
                 if (checked) {
                     // Provide instant UI feedback:
@@ -1400,7 +1399,7 @@ class SpectrogramUI(
             },
             onLongPress = { checked: Boolean ->
                 // Route them via the audio config dialog:
-                uiState.audioMode.intValue = AudioMode.CONNECTING.value
+                // uiState.audioMode.intValue = AudioMode.CONNECTING.value
                 uiState.showAudioConfig.value = true
 
                 // TODO: Two cases to handle:
@@ -1427,7 +1426,7 @@ class SpectrogramUI(
         uiState.rawPageRange.value = null
         uiState.pagingState.value = null
 
-        // Log.d(logTag, "processingFlag set true")
+        // Timber.d("processingFlag set true")
         viewModel.openFile(uri, filename ?: "(unknown)", model.settings)
     }
 
@@ -1437,7 +1436,7 @@ class SpectrogramUI(
     ) {
         uiState.processingFlag.value = false
 
-        Log.i(logTag, "onViewingFileOpened called: ${owfr.wfi?.fileName}")
+        Timber.i("onViewingFileOpened called: ${owfr.wfi?.fileName}")
 
         if (owfr.wfi != null) {
             val wfi = owfr.wfi
@@ -1480,7 +1479,7 @@ class SpectrogramUI(
         appMode: MutableIntState
     ) {
 
-        Log.i(logTag, "onLiveConnected called: ${lcr}")
+        Timber.i("onLiveConnected called: ${lcr}")
 
         if (lcr.connectedOK) {
             uiState.liveMode.intValue = LiveMode.STREAMING.value
@@ -1525,7 +1524,7 @@ class SpectrogramUI(
         asr: UsbService.AudioStartResult,
         appMode: MutableIntState
     ) {
-        Log.i(logTag, "onAudioStarted called: $asr")
+        Timber.i("onAudioStarted called: $asr")
 
         if (asr.startedOK) {
             uiState.audioMode.intValue = AudioMode.ON.value
@@ -1663,7 +1662,7 @@ class SpectrogramUI(
 
     fun shouldEnableSlidersButton(): Boolean {
         val enabled = uiState.dataPresent.value && !model.autoBnCRequiredFlow.value
-        // Log.d(logTag, "JM: uiState.dataPresent.value = ${uiState.dataPresent.value}, model.autoBnCRequiredFlow.value = ${model.autoBnCRequiredFlow.value}, Setting slidersButtonEnabled = $enabled")
+        // Timber.d("JM: uiState.dataPresent.value = ${uiState.dataPresent.value}, model.autoBnCRequiredFlow.value = ${model.autoBnCRequiredFlow.value}, Setting slidersButtonEnabled = $enabled")
         return enabled
     }
 

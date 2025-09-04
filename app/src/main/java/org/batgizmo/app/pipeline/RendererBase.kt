@@ -44,6 +44,7 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.ui.GraphBase
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.ceil
@@ -57,8 +58,6 @@ abstract class DrawThread(
 ) : Thread() {
     var running: AtomicBoolean = AtomicBoolean(true)
 
-    private var logTag = this::class.simpleName
-
     fun terminateThread() {
         running.set(false)
         // Wake up the thread so it can terminate itself:
@@ -66,7 +65,7 @@ abstract class DrawThread(
     }
 
     override fun run() {
-        Log.i(this::class.simpleName, "starting DrawThread")
+        Timber.i("starting DrawThread")
 
         /**
          * Important - don't cache the screen height or width, as this can change as the screen is

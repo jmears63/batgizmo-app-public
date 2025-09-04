@@ -24,8 +24,8 @@ package org.batgizmo.app
 
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import androidx.core.content.FileProvider
+import timber.log.Timber
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -40,8 +40,6 @@ class DiagnosticLogger {
     companion object {
         private const val LARGE_FILE_SIZE = 50000
     }
-
-    private val logTag = this::class.simpleName
 
     private val logFileName = "batgizmo_log.txt"
     private var logWriter: BufferedWriter? = null
@@ -69,7 +67,7 @@ class DiagnosticLogger {
                 it.flush()
                 it.close()
             } catch (e: IOException) {
-                Log.w(logTag, "Unable to shutdown diagnostic logging cleanly: $e")
+                Timber.w("Unable to shutdown diagnostic logging cleanly: $e")
             }
         }
         logWriter = null
@@ -103,7 +101,7 @@ class DiagnosticLogger {
                     it.flush()
                 }
             } catch (e: IOException) {
-                Log.w(logTag, "Unable to log diagnosticLogger: $e")
+                Timber.w("Unable to log diagnosticLogger: $e")
             }
         }
     }

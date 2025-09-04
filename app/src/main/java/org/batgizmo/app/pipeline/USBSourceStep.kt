@@ -22,7 +22,6 @@
 
 package org.batgizmo.app.pipeline
 
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,6 +31,7 @@ import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.HORange
 import org.batgizmo.app.LiveDataBridge
 import org.batgizmo.app.UIModel
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 
 class USBSourceStep(
@@ -44,11 +44,9 @@ class USBSourceStep(
     private val amplitudeBitmapHolder: BitmapHolder
 ) : DataSourceStep(nextStep, rangedRawDataBuffer) {
 
-    private val logTag = this::class.simpleName
-
     init {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "init called for USBSourceStep")
+            Timber.d("init called for USBSourceStep")
     }
 
     private val nativeUSB = NativeUSB()
@@ -153,7 +151,7 @@ class USBSourceStep(
                                     maxOf(dar.second, sliceDataRange.second)
                                 )
                             }
-                            // Log.d(logTag, "JM: new raw data _dataAssignedRange = ${rangedRawDataBuffer.assignedRange}")
+                            // Timber.d("JM: new raw data _dataAssignedRange = ${rangedRawDataBuffer.assignedRange}")
 
                             pipeline.sliceRender(sliceDataRange, transformedDataBufferOffset)
 
@@ -233,7 +231,7 @@ class USBSourceStep(
 
     override fun sliceRender(sliceRange: HORange, transformedEntryIndex: Int) {
 
-        // Log.d(logTag, "push sliceRange = $sliceRange")
+        // Timber.d("push sliceRange = $sliceRange")
         getSafeParams()
 
         // Pass on the slice range that was actually read:

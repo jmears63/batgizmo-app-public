@@ -1,6 +1,6 @@
 [versions]
 accompanistPermissions = "0.34.0"
-agp = "8.12.2"
+agp = "8.13.0"
 kotlin = "2.0.0"
 coreKtx = "1.15.0"
 junit = "4.13.2"
@@ -15,6 +15,7 @@ datastore = "1.1.4"
 datastorePreferences = "1.1.4"
 playServicesLocation = "21.0.1"
 fragment = "1.8.2"
+timber = "5.0.1"
 
 [libraries]
 accompanist-permissions = { module = "com.google.accompanist:accompanist-permissions", version.ref = "accompanistPermissions" }
@@ -39,6 +40,7 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 play-services-location = { module = "com.google.android.gms:play-services-location", version.ref = "playServicesLocation" }
 androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 androidx-fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
+timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -64,6 +64,7 @@ import org.batgizmo.app.ui.GraphBase
 import org.batgizmo.app.ui.SpectrogramUI
 import org.batgizmo.app.ui.TopLevelUI
 import org.batgizmo.app.ui.TopLevelUI.AppMode
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
@@ -210,7 +211,7 @@ class UIModel(application: Application,
      * This method is called by the system when the last activity calls finish().
      */
     override fun onCleared() {
-        Log.d(logTag, "onCleared() called")
+        Timber.d("onCleared() called")
         super.onCleared()
 
         /*
@@ -231,8 +232,6 @@ class UIModel(application: Application,
             usbService.disconnect()
         }
     }
-
-    private val logTag = this::class.simpleName
 
     // The single source of truth for the BnC slider value is normalize to the range 0f..1f.
     private val mutableBnCRangeFlow = MutableStateFlow(FloatRange(0f, 1f)) // Initial value
@@ -374,13 +373,13 @@ class UIModel(application: Application,
     val locationFlow : StateFlow<Location?> = locationMutableFlow
     val locationTracker = LocationTracker(getApplication()) { it ->
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "Location update received: ${it.latitude} ${it.longitude}")
+            Timber.d("Location update received: ${it.latitude} ${it.longitude}")
         locationMutableFlow.value = it
     }
 
     init {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "Creating instance of UIModel")
+            Timber.d("Creating instance of UIModel")
 
         resetRanges()
         spectrogramButtonState.reset()
@@ -414,8 +413,7 @@ class UIModel(application: Application,
         // if this is one of the colours used by the spectrogram:
 
         if (BuildConfig.DEBUG)
-            Log.d(
-                logTag,
+            Timber.d(
                 "Setting colourMapSize to $colourMapSize on model instance ${
                     System.identityHashCode(this)
                 }."
@@ -455,8 +453,7 @@ class UIModel(application: Application,
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 if (BuildConfig.DEBUG)
-                    Log.d(
-                        logTag,
+                    Timber.d(
                         "updateStoredSettings called: useDarkTheme = ${updatedSettings.useDarkTheme}"
                     )
                 settings = updatedSettings
@@ -506,7 +503,7 @@ class UIModel(application: Application,
             mutex.withLock {
                 try {
                     if (BuildConfig.DEBUG)
-                        Log.d(logTag, "openFile called for $filename")
+                        Timber.d("openFile called for $filename")
 
                     // Synchronously clean up in case the pipeline was already open:
                     internalClosePipeline()
@@ -661,7 +658,7 @@ class UIModel(application: Application,
 
                         // Initial values for the FFT parameters (window, overlap):
                         val defaultSize = DpSize(100.dp, 100.dp) // Square by default.
-                        Log.d(logTag, "spectrogramSizeDp = $spectrogramSizeDp in openLive()")
+                        Timber.d("spectrogramSizeDp = $spectrogramSizeDp in openLive()")
                         val fftParameters = p.getDefaultFftParameters(
                             result.sampleRate,
                             spectrogramSizeDp ?: defaultSize
@@ -726,7 +723,7 @@ class UIModel(application: Application,
             // blocking with the lock:
             require(usbConnectResult != null)
             usbConnectResult.let {
-                Log.d(logTag, "Sending result of live connection: $it")
+                Timber.d("Sending result of live connection: $it")
                 liveConnectChannel.send(it)
             }
         }
@@ -737,7 +734,7 @@ class UIModel(application: Application,
 
             var audioStartResult: UsbService.AudioStartResult? = null
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "startAudio callled")
+                Timber.d("startAudio callled")
 
             mutex.withLock {
 
@@ -752,7 +749,7 @@ class UIModel(application: Application,
 
             audioStartResult?.let {
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "Sending result of start audios: $it")
+                    Timber.d("Sending result of start audios: $it")
                 audioStartChannel.send(it)
             }
         }
@@ -764,7 +761,7 @@ class UIModel(application: Application,
             mutex.withLock {
                 usbService.stopAudio()
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "stopAudio called")
+                    Timber.d("stopAudio called")
             }
         }
     }
@@ -791,7 +788,7 @@ class UIModel(application: Application,
      *  something like "signalClosePipeline".
      */
     fun closePipeline() {
-        Log.i(logTag, "closePipeline called")
+        Timber.i("closePipeline called")
         pipelineCloseJob =
             viewModelScope.launch(Dispatchers.Default + CoroutineName("closePipeline coroutine")) {
                 mutex.withLock {
@@ -830,8 +827,7 @@ class UIModel(application: Application,
                 )
 
                 if (BuildConfig.DEBUG)
-                    Log.d(
-                        logTag,
+                    Timber.d(
                         "resumeLiveStream: adjusting time logical range from ${mutableTimeVisibleRangeFlow.value} to $timeVisibleRange"
                     )
                 internalSetSpectrogramVisibleRange(
@@ -971,7 +967,7 @@ class UIModel(application: Application,
         viewModelScope.launch(CoroutineName("onSettingsUpdate coroutine")) {
             mutex.withLock {
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "onSettingsUpdate called")
+                    Timber.d("onSettingsUpdate called")
 
                 var resetVisibleRange = false
                 previousSettings?.let {
@@ -1007,7 +1003,7 @@ class UIModel(application: Application,
     ) {
         mutex.withLock {
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "onUISizeChange called: $spectrogramSizeDp; $amplitudeSizeDp")
+                Timber.d("onUISizeChange called: $spectrogramSizeDp; $amplitudeSizeDp")
 
             // If we are on to a new UI generation, reset the cached sizes to avoid using stale data
             // or mixing sizes between generations:
@@ -1032,8 +1028,7 @@ class UIModel(application: Application,
 
             if (changed && this.spectrogramSizeDp != null) {
                 if (BuildConfig.DEBUG)
-                    Log.d(
-                        logTag,
+                    Timber.d(
                         "onUISizeChange applying UI size: $generation ${this.spectrogramSizeDp}, ${this.amplitudeSizeDp}"
                     )
                 viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
@@ -1053,7 +1048,7 @@ class UIModel(application: Application,
      */
     fun onPageChange(settings: Settings, rawPageRange: HORange) {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "onPageChange called: $rawPageRange")
+            Timber.d("onPageChange called: $rawPageRange")
         pipeline?.let {
             viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
                 mutex.withLock {
@@ -1080,14 +1075,14 @@ class UIModel(application: Application,
     ) {
         pipeline?.let { p ->
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "reload called for rawPageRange = ${rawPageRange}")
+                Timber.d("reload called for rawPageRange = ${rawPageRange}")
 
             val newFftParameters = getFftParameters(settings)
             var fftParametersChanged = false
             newFftParameters?.let { fftp ->
                 fftParametersChanged = shouldRenderForFft(fftp)
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "reload transformed required: $fftParametersChanged")
+                    Timber.d("reload transformed required: $fftParametersChanged")
                 currentFftParameters = fftp
             }
 
@@ -1139,7 +1134,7 @@ class UIModel(application: Application,
             val logicalBnCRange = ColourMapStep.bnCRangeDbToLogical(newBnCRange)
 
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "doAutoBnC called: $newBnCRange")
+                Timber.d("doAutoBnC called: $newBnCRange")
             // Update our single source of truth, notifying the UI as a side effect:
             mutableBnCRangeFlow.value = logicalBnCRange
 
@@ -1166,7 +1161,7 @@ class UIModel(application: Application,
     private fun shouldRenderForFft(newFftParameters: AbstractPipeline.FftParameters?): Boolean {
         var rerenderRequired = false
         newFftParameters?.let {
-            // Log.d(logTag, "new FFT parameters = $it")
+            // Timber.d("new FFT parameters = $it")
             rerenderRequired = (newFftParameters != currentFftParameters)
         }
         return rerenderRequired
@@ -1301,7 +1296,7 @@ class UIModel(application: Application,
             else
                 scaleFactorY = dyNow / maxOf(dyStart, minimumStartDelta)
 
-            // Log.d(logTag, "Scale factors: $scaleFactorX, $scaleFactorY")
+            // Timber.d("Scale factors: $scaleFactorX, $scaleFactorY")
 
             /**
              * Some extracted calculation code common to X and Y.

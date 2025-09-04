@@ -43,6 +43,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.batgizmo.app.pipeline.NativeUSB
 import org.batgizmo.app.pipeline.UsbService
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import java.io.File
 import java.io.FileInputStream
@@ -94,8 +95,6 @@ class FileWriter(
         val fileNameBase: String,       // Excludes .wav, we will add that later.
         val folderName: String
     )
-
-    private val logTag = this::class.simpleName
 
     private val rawDataFileName = "filewriter.raw"      // Temporary data storage.
     private val publicFolderName = "BatGizmo"           // Don't include a /
@@ -151,7 +150,7 @@ class FileWriter(
                 require(bufferLengthEntries > 0)
 
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "createChannelJob coroutine started")
+                    Timber.d("createChannelJob coroutine started")
                 // The for statement will check if a cancel is pending, and if so pass control
                 // to the finally block for cleanup and prevent this job becoming a zombie:
                 for (bufferDescriptor in LiveDataBridge.fileWriterChannel) {
@@ -162,7 +161,7 @@ class FileWriter(
                     // buffer? Shouldn't happen, but...
                     if (sourceSamples > bufferLengthEntries) {
                         sourceSamples = bufferLengthEntries
-                        Log.e(logTag, "buffer is not big enough for the data available: ${bufferDescriptor.samples} > $bufferLengthEntries")
+                        Timber.e("buffer is not big enough for the data available: ${bufferDescriptor.samples} > $bufferLengthEntries")
                     }
 
                     // Note: the mutex is not held, concurrent access to the buffer itself is not
@@ -174,7 +173,7 @@ class FileWriter(
                         nextWriteIndex,
                         bufferLengthEntries
                     )
-                    // Log.d(logTag, "New data arrived: $copiedCount entries")
+                    // Timber.d("New data arrived: $copiedCount entries")
 
                     mutex.withLock {
                         nextWriteIndex = addAndWrap(nextWriteIndex, copiedCount, bufferLengthEntries)
@@ -195,12 +194,12 @@ class FileWriter(
                 // We get here when the loop is cancelled on shutdown.
             }
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "createChannelJob coroutine finished")
+                Timber.d("createChannelJob coroutine finished")
         }
     }
 
     suspend fun run() {
-        Log.i(logTag, "run() called")
+        Timber.i("run() called")
 
         // Start streaming data into the circular buffer:
         mutex.withLock {
@@ -210,22 +209,22 @@ class FileWriter(
 
         // Start the trigger handler:
         stateJob = scope.launch(context = Dispatchers.Default) {
-            Log.i(logTag, "run coroutine started")
+            Timber.i("run coroutine started")
             try {
                 doStateMachine()
             }
             catch (e: Exception) {
                 handleException(e)
             }
-            Log.i(logTag, "run coroutine finished")
+            Timber.i("run coroutine finished")
         }
 
         // Generate some test triggers:
         if (false) {
             scope.launch(context = Dispatchers.Default) {
-                Log.i(logTag, "test coroutine started")
+                Timber.i("test coroutine started")
                 test()
-                Log.i(logTag, "test coroutine finished")
+                Timber.i("test coroutine finished")
             }
         }
     }
@@ -267,13 +266,13 @@ class FileWriter(
      */
     fun trigger() {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "trigger() called")
+            Timber.d("trigger() called")
         triggerEventChannel.trySend(Unit)
     }
 
     private suspend fun test() {
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "test() called")
+            Timber.d("test() called")
 
         if (false) {
             // Manual trigger test.
@@ -320,7 +319,7 @@ class FileWriter(
             stopAndResetState()
             for (config in triggerConfigChannel) {
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "Processing trigger config: $config")
+                    Timber.d("Processing trigger config: $config")
 
                 val initialState = state
 
@@ -373,7 +372,7 @@ class FileWriter(
                 val finalState = state
                 if (finalState != initialState) {
                     if (BuildConfig.DEBUG)
-                        Log.d(logTag, "State change from $initialState to $finalState")
+                        Timber.d("State change from $initialState to $finalState")
                 }
             }
         } catch (e: CancellationException) {
@@ -402,7 +401,7 @@ class FileWriter(
             // Asynchronous manual file writer:
             triggerHandlerJob = scope.launch(context = Dispatchers.IO) {
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "transitionStartManualTriggered coroutine started")
+                    Timber.d("transitionStartManualTriggered coroutine started")
                 try {
                     writeFileSequence(this, false, TriggerType.MANUAL)
                 }
@@ -410,7 +409,7 @@ class FileWriter(
                     handleException(e)
                 }
                 if (BuildConfig.DEBUG)
-                    Log.d(logTag, "transitionStartManualTriggered coroutine finished")
+                    Timber.d("transitionStartManualTriggered coroutine finished")
             }
         }
     }
@@ -438,7 +437,7 @@ class FileWriter(
         // Asynchronous triggered file writer:
         triggerHandlerJob = scope.launch(context = Dispatchers.IO) {
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "transitionStartAutoTriggered coroutine started")
+                Timber.d("transitionStartAutoTriggered coroutine started")
             try {
                 for (dummy in triggerEventChannel) {
                     mutex.withLock {
@@ -466,7 +465,7 @@ class FileWriter(
             }
 
             if (BuildConfig.DEBUG)
-                Log.d(logTag, "transitionStartAutoTriggered coroutine finished")
+                Timber.d("transitionStartAutoTriggered coroutine finished")
         }
     }
 
@@ -482,7 +481,7 @@ class FileWriter(
                                           isTriggered: Boolean,
                                           triggerType: TriggerType
                                           ) {
-        Log.i(logTag, "writeFileSequence called")
+        Timber.i("writeFileSequence called")
 
         val s = model.settings      // For brevity. Note that model.settings is a var not a val.
 
@@ -536,7 +535,7 @@ class FileWriter(
                 }
                 firstFile = false
 
-                Log.i(logTag, "continuationFileNeeded = $continuationFileNeeded")
+                Timber.i("continuationFileNeeded = $continuationFileNeeded")
             } while (continuationFileNeeded)
         }
         finally {
@@ -549,7 +548,7 @@ class FileWriter(
         // Do it now so that it is based on the start time.
         val wfi = generateFileNameAndFolder()
         wavFileInfo = wfi
-        Log.i(logTag, "Preparing to write data to WAV file $wfi")
+        Timber.i("Preparing to write data to WAV file $wfi")
 
         // We write raw live data to a cache file, and move it to a public
         // location and name once it is complete. We have no choice about this as
@@ -646,7 +645,7 @@ class FileWriter(
     ): Boolean {
 
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "writeStreamToFile called")
+            Timber.d("writeStreamToFile called")
 
         var continuationFileNeeded = true
 
@@ -672,10 +671,7 @@ class FileWriter(
                             it - currentlyRemainingEntries + postTriggerEntries
 
                         if (BuildConfig.DEBUG)
-                            Log.d(
-                                logTag,
-                                "Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToBeWrittenToFile"
-                            )
+                            Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToBeWrittenToFile")
                     }
                 }
 
@@ -722,21 +718,21 @@ class FileWriter(
                 mutex.withLock {
                     entriesActuallyWrittenToFile += count
                     nextReadIndex = addAndWrap(nextReadIndex, count, bufferLengthEntries)
-                    // Log.d(logTag, "Entries written count = $count, nextReadIndex = $nextReadIndex")
+                    // Timber.d("Entries written count = $count, nextReadIndex = $nextReadIndex")
                 }
                 if (finished) {
                     if (BuildConfig.DEBUG)
-                        Log.d(logTag, "File is full or all data has been written.")
+                        Timber.d("File is full or all data has been written.")
                     break   // The file is full.
                 }
             } else {
                 try {
                     // Yield until we get a signal that more data is available.
-                    // Log.d(logTag, "Yielding until more data arrives.")
+                    // Timber.d("Yielding until more data arrives.")
                     bufferDataAvailable.receive()
                 } catch (e: CancellationException) {
                     if (BuildConfig.DEBUG)
-                        Log.d(logTag, "File writing job is cancelled.")
+                        Timber.d("File writing job is cancelled.")
                     continuationFileNeeded = false
                     break   // The job has been cancelled.
                 }
@@ -813,7 +809,7 @@ class FileWriter(
             generateUniqueFileName(wfi.fileNameBase, baseRelativePath, resolver) ?: return false
 
         if (BuildConfig.DEBUG)
-            Log.d(logTag, "Finally writing data to MediaStore file $finalFileName")
+            Timber.d("Finally writing data to MediaStore file $finalFileName")
 
         val contentValues = ContentValues().apply {
             put(MediaStore.Files.FileColumns.DISPLAY_NAME, finalFileName)
@@ -856,7 +852,7 @@ class FileWriter(
                 return candidateName
             }
         }
-        Log.w(logTag, "All name variants taken for $baseNameBase in $relativePath")
+        Timber.w("All name variants taken for $baseNameBase in $relativePath")
         return null
     }
 

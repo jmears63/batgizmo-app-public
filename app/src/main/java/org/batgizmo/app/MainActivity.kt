@@ -27,7 +27,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.util.Log
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
@@ -45,6 +44,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import org.batgizmo.app.ui.TopLevelUI
+import timber.log.Timber
 
 /**
  * A data store for persistent storage of settings.
@@ -52,7 +52,6 @@ import org.batgizmo.app.ui.TopLevelUI
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "preferences")
 
 class MainActivity : ComponentActivity() {
-    val logTag = this::class.simpleName
 
     /**
      * Get the ViewModel that we use to contain non-UI logic and persistent data
@@ -65,7 +64,7 @@ class MainActivity : ComponentActivity() {
     // Request permission to access locationL
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            Log.i(logTag, "Location permission granted: $granted")
+            Timber.i("Location permission granted: $granted")
             if (granted) {
                 // Kick off a one off location request
                 viewModel.locationTracker.requestOneTimeLocation()
@@ -122,7 +121,7 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) {
-            Log.i(logTag, "handleIncomingIntent called.")   // This gets called repeatedly.
+            Timber.i("handleIncomingIntent called.")   // This gets called repeatedly.
             val fileUri: Uri? = intent.data
             fileUri?.let { uri ->
                 uiTopLevel.processViewIntent(this, lifecycleScope, viewModel, uri)

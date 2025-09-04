@@ -23,10 +23,10 @@
 package org.batgizmo.app.pipeline
 
 import android.graphics.Bitmap
-import android.util.Log
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.HORange
 import org.batgizmo.app.UIModel
+import timber.log.Timber
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.round
@@ -113,8 +113,6 @@ class TransformStep(
         // Used to synchronize native layer access:
         private val dummySyncObject = String.toString()
     }
-
-    private val logTag = this::class.simpleName
 
     // This data class is immutable so no special thread safety is needed.
     data class Params(
@@ -239,7 +237,7 @@ class TransformStep(
         if (windowCount > 0) {
 
             if (calcs.fftWindowSize != initFftWindow) {
-                Log.e(logTag, "FFT window size mismatch. Race condition? $windowCount != $initFftWindow")
+                Timber.e("FFT window size mismatch. Race condition? $windowCount != $initFftWindow")
             }
 
             /**
@@ -299,7 +297,7 @@ class TransformStep(
             }
 
             if (triggerResultBuffer[0] != 0) {
-                // Log.d(logTag, "minTriggerBucket = $minTriggerBucket, maxTriggerBucket = $maxTriggerBucket, autoTriggerThresholdDb = $autoTriggerThresholdDb")
+                // Timber.d("minTriggerBucket = $minTriggerBucket, maxTriggerBucket = $maxTriggerBucket, autoTriggerThresholdDb = $autoTriggerThresholdDb")
 
                 // Signal that there has been a trigger within this slice.
                 onTrigger()
@@ -321,7 +319,7 @@ class TransformStep(
                     maxOf(dar.second, nextSliceRange.second)
                 )
             }
-            // Log.d(logTag, "JM: transformed _dataAssignedRange = $_dataAssignedRange")
+            // Timber.d("JM: transformed _dataAssignedRange = $_dataAssignedRange")
             if (nextSliceRange.second - nextSliceRange.first > 0)
                 nextStep.sliceRender(nextSliceRange)
         }
