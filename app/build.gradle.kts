@@ -18,7 +18,7 @@ android {
     defaultConfig {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 30
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 7
         versionName = "1.0.6"
 

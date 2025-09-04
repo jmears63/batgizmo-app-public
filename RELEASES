@@ -1,5 +1,7 @@
 Version     Date            Description
 
+1.0.7                       Bumped target API version to 36.
+
 1.0.6       2025-09-03      Repeated release process for 1.0.5.
 1.0.5       2025-09-03      Moved the GUANO wav file section to be after the data section, for
                             compatibility with Anabat Insight labelling.
