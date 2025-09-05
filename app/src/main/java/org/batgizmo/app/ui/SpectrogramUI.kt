@@ -241,6 +241,8 @@ class SpectrogramUI(
 
     private val audioConfig = AudioConfig()
 
+    private val minimumHeterodynekHz: Int = 10
+
 
     /**
      * This class maintains state relating to paging, and handles visibility
@@ -659,15 +661,14 @@ class SpectrogramUI(
             val scope = rememberCoroutineScope()
 
             // Calculate the heterodyne range we can support:
-            val lower = 10
-            var heterodyneRangekHz = IntRange(lower, 150)
+            var heterodyneRangekHz = IntRange(minimumHeterodynekHz, 150)
             uiState.liveSamplingRateHz.value?.let { hz ->
                 var upper = floor(hz / (2f * 1000f)).toInt() - 1
                 // Limit the heterodyne to the useful range so that the UI slider is
                 // more manageable on smaller screens:
                 upper = minOf(upper, 150)
-                if (upper - lower > 2)    // Sanity
-                    heterodyneRangekHz = IntRange(lower, upper)
+                if (upper - minimumHeterodynekHz > 2)    // Sanity
+                    heterodyneRangekHz = IntRange(minimumHeterodynekHz, upper)
             }
 
             val isStarting = uiState.audioMode.intValue != AudioMode.ON.value
@@ -955,7 +956,7 @@ class SpectrogramUI(
                                             // Calculate the corresponding rounded reference kHz:
                                             val hz = yAxisState.value.endInclusive -
                                                     offsetY.floatValue / maxHeightPx * (yAxisState.value.endInclusive - yAxisState.value.start)
-                                            heterodyneRefkHz.value = round(hz / 1000f).toInt()
+                                            heterodyneRefkHz.value = maxOf(round(hz / 1000f).toInt(), minimumHeterodynekHz)
                                         },
                                         onDragEnd = {
                                             // They've finished dragging, to write the updated values

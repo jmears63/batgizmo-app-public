@@ -1,6 +1,8 @@
 Version     Date            Description
 
-1.0.7                       Improvements to the audio settings modal.
+1.0.8                       Minor fixes to handling of the minimum heterodyne frequency.
+
+1.0.7       2025-09-04      Improvements to the audio settings modal.
                             Bumped target API version to 36.
                             Adopted Timber logging system.
 
