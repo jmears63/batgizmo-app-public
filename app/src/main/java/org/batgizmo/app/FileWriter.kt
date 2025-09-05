@@ -29,7 +29,6 @@ import android.location.Location
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -149,8 +148,7 @@ class FileWriter(
                 // Worker thread.
                 require(bufferLengthEntries > 0)
 
-                if (BuildConfig.DEBUG)
-                    Timber.d("createChannelJob coroutine started")
+                Timber.d("createChannelJob coroutine started")
                 // The for statement will check if a cancel is pending, and if so pass control
                 // to the finally block for cleanup and prevent this job becoming a zombie:
                 for (bufferDescriptor in LiveDataBridge.fileWriterChannel) {
@@ -193,8 +191,7 @@ class FileWriter(
             finally {
                 // We get here when the loop is cancelled on shutdown.
             }
-            if (BuildConfig.DEBUG)
-                Timber.d("createChannelJob coroutine finished")
+            Timber.d("createChannelJob coroutine finished")
         }
     }
 
@@ -265,14 +262,12 @@ class FileWriter(
      * Call this method to trigger or retrigger in auto mode.
      */
     fun trigger() {
-        if (BuildConfig.DEBUG)
-            Timber.d("trigger() called")
+        Timber.d("trigger() called")
         triggerEventChannel.trySend(Unit)
     }
 
     private suspend fun test() {
-        if (BuildConfig.DEBUG)
-            Timber.d("test() called")
+        Timber.d("test() called")
 
         if (false) {
             // Manual trigger test.
@@ -318,8 +313,7 @@ class FileWriter(
             // Paranoia on startup:
             stopAndResetState()
             for (config in triggerConfigChannel) {
-                if (BuildConfig.DEBUG)
-                    Timber.d("Processing trigger config: $config")
+                Timber.d("Processing trigger config: $config")
 
                 val initialState = state
 
@@ -371,8 +365,7 @@ class FileWriter(
 
                 val finalState = state
                 if (finalState != initialState) {
-                    if (BuildConfig.DEBUG)
-                        Timber.d("State change from $initialState to $finalState")
+                    Timber.d("State change from $initialState to $finalState")
                 }
             }
         } catch (e: CancellationException) {
@@ -400,16 +393,14 @@ class FileWriter(
 
             // Asynchronous manual file writer:
             triggerHandlerJob = scope.launch(context = Dispatchers.IO) {
-                if (BuildConfig.DEBUG)
-                    Timber.d("transitionStartManualTriggered coroutine started")
+                Timber.d("transitionStartManualTriggered coroutine started")
                 try {
                     writeFileSequence(this, false, TriggerType.MANUAL)
                 }
                 catch (e: Exception) {
                     handleException(e)
                 }
-                if (BuildConfig.DEBUG)
-                    Timber.d("transitionStartManualTriggered coroutine finished")
+                Timber.d("transitionStartManualTriggered coroutine finished")
             }
         }
     }
@@ -436,8 +427,7 @@ class FileWriter(
 
         // Asynchronous triggered file writer:
         triggerHandlerJob = scope.launch(context = Dispatchers.IO) {
-            if (BuildConfig.DEBUG)
-                Timber.d("transitionStartAutoTriggered coroutine started")
+            Timber.d("transitionStartAutoTriggered coroutine started")
             try {
                 for (dummy in triggerEventChannel) {
                     mutex.withLock {
@@ -464,8 +454,7 @@ class FileWriter(
                 handleException(e)
             }
 
-            if (BuildConfig.DEBUG)
-                Timber.d("transitionStartAutoTriggered coroutine finished")
+            Timber.d("transitionStartAutoTriggered coroutine finished")
         }
     }
 
@@ -644,8 +633,7 @@ class FileWriter(
         s: FileOutputStream
     ): Boolean {
 
-        if (BuildConfig.DEBUG)
-            Timber.d("writeStreamToFile called")
+        Timber.d("writeStreamToFile called")
 
         var continuationFileNeeded = true
 
@@ -670,8 +658,7 @@ class FileWriter(
                         entriesToBeWrittenToFile =
                             it - currentlyRemainingEntries + postTriggerEntries
 
-                        if (BuildConfig.DEBUG)
-                            Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToBeWrittenToFile")
+                        Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToBeWrittenToFile")
                     }
                 }
 
@@ -721,8 +708,7 @@ class FileWriter(
                     // Timber.d("Entries written count = $count, nextReadIndex = $nextReadIndex")
                 }
                 if (finished) {
-                    if (BuildConfig.DEBUG)
-                        Timber.d("File is full or all data has been written.")
+                    Timber.d("File is full or all data has been written.")
                     break   // The file is full.
                 }
             } else {
@@ -731,8 +717,7 @@ class FileWriter(
                     // Timber.d("Yielding until more data arrives.")
                     bufferDataAvailable.receive()
                 } catch (e: CancellationException) {
-                    if (BuildConfig.DEBUG)
-                        Timber.d("File writing job is cancelled.")
+                    Timber.d("File writing job is cancelled.")
                     continuationFileNeeded = false
                     break   // The job has been cancelled.
                 }
@@ -803,13 +788,12 @@ class FileWriter(
 
         // DIRECTORY_DOCUMENTS as these are not normal audio files:
         val baseRelativePath = Environment.DIRECTORY_DOCUMENTS +
-                "/$publicFolderName/${wfi.folderName.trimStart('/').trimEnd('/')}"
+                "/$publicFolderName/${wfi.folderName.trimStart('/').trimEnd('/')}/"
 
         val finalFileName =
             generateUniqueFileName(wfi.fileNameBase, baseRelativePath, resolver) ?: return false
 
-        if (BuildConfig.DEBUG)
-            Timber.d("Finally writing data to MediaStore file $finalFileName")
+        Timber.d("Finally writing data to MediaStore file $finalFileName")
 
         val contentValues = ContentValues().apply {
             put(MediaStore.Files.FileColumns.DISPLAY_NAME, finalFileName)
@@ -829,15 +813,17 @@ class FileWriter(
                     outputStream.write(wavFooter)
                 }
             }
-            contentValues.clear()
-            contentValues.put(MediaStore.Files.FileColumns.IS_PENDING, 0)
-            resolver.update(uri, contentValues, null, null)
-            rawFile.delete()
             true
         } catch (e: Exception) {
             e.printStackTrace()
             resolver.delete(uri, null, null)
             false
+        }
+        finally {
+            contentValues.clear()
+            contentValues.put(MediaStore.Files.FileColumns.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+            rawFile.delete()
         }
     }
 
@@ -867,9 +853,12 @@ class FileWriter(
             "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ? AND ${MediaStore.Files.FileColumns.RELATIVE_PATH} = ?"
         val selectionArgs = arrayOf(fileName, relativePath)
 
-        resolver.query(collection, projection, selection, selectionArgs, null).use { cursor ->
-            return cursor != null && cursor.moveToFirst()
-        }
+        val exists = resolver.query(collection, projection, selection,
+            selectionArgs, null)?.use {
+                cursor ->
+            cursor.moveToFirst()
+        } ?: false
+        return exists
     }
 
 
