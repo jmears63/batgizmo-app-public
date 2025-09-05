@@ -384,7 +384,7 @@ class SettingsUI(private val model: UIModel) {
                     MyFloatRangeSlider("Trigger range (kHz)", "%.1f",
                         model.settings.autoTriggerRangeMinkHz,
                         model.settings.autoTriggerRangeMaxkHz,
-                        15f..120f) {
+                        10f..120f) {
                             range: ClosedFloatingPointRange<Float> ->
                         scope.launch {
                             model.updateStoredSettings(model.settings.copy(
