@@ -140,6 +140,7 @@ data class Settings(
 
     enum class PostTriggerTimeOptions(val value: Int, val label: String) : EnumHelper {
         // Don't allow 0 as this would result in zero length data files which is silly.
+        PRETRIGGER_TIME_200MS(200, "0.2s"),
         PRETRIGGER_TIME_500MS(500, "0.5s"),
         POSTTRIGGER_TIME_1000MS(1000, "1s"),
         POSTTRIGGER_TIME_2000MS(2000, "2s"),
