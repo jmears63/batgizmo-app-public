@@ -1,7 +1,10 @@
 Version     Date            Description
 
-1.0.8                       Fixes relating to handling of the minimum heterodyne frequency.
+1.0.9                       GUANO timestamp is now in local with a UTC offset.
+
+1.0.8       2025-09-05      Fixes relating to handling of the minimum heterodyne frequency.
                             Fixes relating to resolving file name collisions.
+                            The trigger range can now extend down to 10 kHz.
 
 1.0.7       2025-09-04      Improvements to the audio settings modal.
                             Bumped target API version to 36.
