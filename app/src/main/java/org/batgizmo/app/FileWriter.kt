@@ -48,11 +48,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
-import java.text.SimpleDateFormat
-import java.time.Instant
-import java.time.format.DateTimeFormatterBuilder
-import java.util.Date
-import java.util.Locale
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -122,7 +119,7 @@ class FileWriter(
     private var entriesToBeWrittenToFile: Int? = null
     private var nextWriteIndex = 0              // Next entry that will be written to buffer.
     private var nextReadIndex = 0               // Next entry that will be read for writing file.
-    private var iso8601DateTime: String? = null
+    private var guanoDataTime: String? = null
     private var triggerHandlerJob: Job? = null
 
     private var triggerConfig: TriggerConfig? = null
@@ -533,9 +530,14 @@ class FileWriter(
     }
 
     private suspend fun startFile(resetIndexes: Boolean, isTriggered: Boolean): FileOutputStream {
+
+        // Get the local time to use as the basis of the file and folder name and the GUANO timestamp
+        // field:
+        val now = OffsetDateTime.now()
+
         // Generate the name of the WAV file and folder for later when we need it.
         // Do it now so that it is based on the start time.
-        val wfi = generateFileNameAndFolder()
+        val wfi = generateFileNameAndFolder(now)
         wavFileInfo = wfi
         Timber.i("Preparing to write data to WAV file $wfi")
 
@@ -551,10 +553,8 @@ class FileWriter(
 
         // Note the start time for use in guano metadata. Actually this is the trigger time,
         // ignoring the pretrigger interval.
-        val dateTimeFormatter = DateTimeFormatterBuilder()
-            .appendInstant(1) // Fractional digits for seconds
-            .toFormatter()
-        iso8601DateTime = dateTimeFormatter.format(Instant.now())
+        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ssXXX")
+        guanoDataTime = now.format(formatter)
 
         if (resetIndexes) {
             // Pretrigger and length of trigger need a definition of now to be consistent
@@ -583,13 +583,6 @@ class FileWriter(
 
         // Track how many entries to write to each file:
         entriesActuallyWrittenToFile = 0
-
-        /*
-        Log.d(
-            logTag,
-            "in start(): entriesAvailable = $entriesAvailable, preTriggerEntries=$preTriggerEntries, nextReadIndex = $nextReadIndex"
-        )
-         */
 
         return s
     }
@@ -739,20 +732,13 @@ class FileWriter(
         usbConnectResult.sampleRate?.let { fields["Samplerate"] = it.toString() }
         usbConnectResult.manufacturerName?.let { fields["Make"] = it }
         usbConnectResult.productName?.let { fields["Model"] = it }
-        iso8601DateTime?.let { fields["Timestamp"] = it }
+        guanoDataTime?.let { fields["Timestamp"] = it }
 
         if (model.settings.locationInFile) {
             locationFlow.value?.let {
                 fields["Loc Position"] = "${it.latitude} ${it.longitude}"
             }
         }
-
-        /* Redundant.
-        usbConnectResult.sampleRate?.takeIf { it > 0 }?.let { rate ->
-            val lengthSeconds = entriesActuallyWrittenToFile.toFloat() / rate
-            fields["Length"] = prettyFloat3Dps(lengthSeconds)
-        }
-        */
 
         // Custom Guano fields:
         fields["$batgizmoNamespace|DeviceModel"] = "${Build.MANUFACTURER} ${Build.MODEL}"
@@ -867,16 +853,15 @@ class FileWriter(
      * YYYMMDD_HHMMSS.wav, in local time subject to DST. Also, the name
      * of a folder to put it in, based on the date.
      */
-    private fun generateFileNameAndFolder(): WavFileInfo {
-        val now = Date()
+    private fun generateFileNameAndFolder(now: OffsetDateTime): WavFileInfo {
 
-        // Formatter for filename: YYYYMMDD_HHMMSS.wav
-        val fileFormatter = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-        val fileNameBase = fileFormatter.format(now)
+        // --- Folder name: "YYYY-MM-DD" ---
+        val folderFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+        val folderName = now.format(folderFormatter)
 
-        // Formatter for folder name: YYYY-MM-DD
-        val folderFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val folderName = folderFormatter.format(now)
+        // --- File name: "YYYYMMDD_HHMMSS.wav" ---
+        val fileFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
+        val fileNameBase = now.format(fileFormatter)
 
         return WavFileInfo(fileNameBase = fileNameBase, folderName = folderName)
     }
