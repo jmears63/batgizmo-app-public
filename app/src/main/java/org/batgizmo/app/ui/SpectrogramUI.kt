@@ -109,6 +109,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowSizeClass
@@ -594,8 +595,14 @@ class SpectrogramUI(
     ) {
         // Timber.d("ComposeMiddle called")
         Row {
+            /*
+                zIndex is set for the following two sibling elements. This is so that
+                the left hand button element is draw above the spectrogram, to avoid it
+                being hidden by the SurfaceView. That is a quirk of API 30.
+             */
+
             if (orientation.intValue == Configuration.ORIENTATION_LANDSCAPE && leftHandedMode) {
-                Column {
+                Column(Modifier.zIndex(1f)) {
                     ComposeButtonsVertical(
                         innerPadding,
                         liveMode,
@@ -611,6 +618,7 @@ class SpectrogramUI(
             Column(
                 Modifier
                     .weight(1f)     // Needs to be present so that any column to the right can get its natural width.
+                    .zIndex((0f))
             ) {
                 // Box so that we can overlay things on the spectrogram:
                 Box {

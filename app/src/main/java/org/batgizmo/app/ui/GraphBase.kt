@@ -36,6 +36,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -105,7 +106,7 @@ abstract class GraphBase(
          * Possibly the values calculated as a side effect of drawing (such as the tick values)
          * should be stored in a saveable remember - but it seems to work OK without.
          *
-         * The x and y axis ranges are declared at a position the compose tree so that the borders
+         * The x and y axis ranges are declared at a position in the compose tree so that the borders
          * (and hence axes) get redrawn, but nothing else it.
          */
 
@@ -117,41 +118,12 @@ abstract class GraphBase(
             val borderPadding: MutableState<GraphPadding?> =
                 rememberSaveable { mutableStateOf(null) }
 
-            Box(Modifier.fillMaxSize()) {
-                // Axis ranges:
-                // Note: I had to specify the value parameters to rememberSaveable explicitly
-                // to avoid an issue whereby changes were sometimes ignored. Perhaps there
-                // is a quirk in relation to its change detection optimisation?
-                // Also tried using the key parameter so that this state followed the graph
-                // around the UI as the layout changes on configuration, but that didn't work for some reason.
-                val xAxisRange = xAxisRangeFlow.collectAsStateWithLifecycle()
-                val yAxisRange = yAxisRangeFlow.collectAsStateWithLifecycle()
-
-                // Background and borders:
-                Canvas(modifier
-                        .fillMaxSize()
-                        .background(color = MaterialTheme.colorScheme.primaryContainer)
-                ) {
-                    /**
-                     * We can't lay out the borders until we have the canvas size, which is finally
-                     * available to us in this lambda.
-                     */
-                    layoutBorders(size, density)
-
-                    drawBorders(colorScheme, this, size, density, xAxisRange.value, yAxisRange.value)
-
-                    /**
-                     * Now we know the border padding, we can trigger a recompose of the UI which
-                     * includes elements that depend on the padding.
-                     */
-                    borderPadding.value = GraphPadding(
-                        leftBorder.getDimensions()?.breadthDp?.value ?: 0f,
-                        topBorder.getDimensions()?.breadthDp?.value ?: 0f,
-                        rightBorder.getDimensions()?.breadthDp?.value ?: 0f,
-                        bottomBorder.getDimensions()?.breadthDp?.value ?: 0f
-                    )
-                }
-            }
+            /*
+                Ordering is important below. On API 30, a SurfaceView hides Compose tree elements
+                drawn beneath it with opaque black, even outside the size of the SurfaceView.
+                To avoid this issue, we need to draw borders on top of the renderer.
+                There is no such issue for API > 30.
+             */
 
             // Don't compose the following things until we know how big the graph borders are.
             val p = borderPadding.value
@@ -168,18 +140,65 @@ abstract class GraphBase(
                 // The actual graph:
                 renderer.Compose(Modifier.padding(padding), model.settings)
 
-                // The graticule:
-                Canvas(
-                    modifier
-                        .padding(padding)
-                        .fillMaxSize()
-                        .background(color = Color.Transparent)
-                ) {
-                    drawGraticule(colorScheme, this, size, density, showGrid)
-                }
-
                 if (overlayComposer != null) {
                     overlayComposer(Modifier.padding(padding))
+                }
+            }
+
+            /*
+                Box to limit the scope of Compose updates when axis range changes happen, so that
+                only the borders are redrawn. That redrawing in turn triggers a redrawing of the
+                graticule by chaining.
+             */
+            Box(Modifier.fillMaxSize()) {
+
+                // Axis ranges:
+                // Note: I had to specify the value parameters to rememberSaveable explicitly
+                // to avoid an issue whereby changes were sometimes ignored. Perhaps there
+                // is a quirk in relation to its change detection optimisation?
+                // Also tried using the key parameter so that this state followed the graph
+                // around the UI as the layout changes on configuration, but that didn't work for some reason.
+                val xAxisRange = xAxisRangeFlow.collectAsStateWithLifecycle()
+                val yAxisRange = yAxisRangeFlow.collectAsStateWithLifecycle()
+
+                // Background and borders:
+                Canvas(
+                    modifier
+                        .fillMaxSize()
+                        .background(color = Color.Transparent)  // So the SurfaceView can show through.
+                ) {
+                    /**
+                     * We can't lay out the borders until we have the canvas size, which is finally
+                     * available to us in this lambda.
+                     */
+                    val dataRect = layoutBorders(size, density)
+
+                    drawBorders(
+                        colorScheme,
+                        this,
+                        size,
+                        density,
+                        xAxisRange.value,
+                        yAxisRange.value
+                    )
+
+                    // TODO: this needs to use the dimensions of the data area. We need to adjust size
+                    // and pass in an offset.
+                    val dataRectPx = dataRect.toRect()
+                    drawGraticule(colorScheme, this, dataRectPx, density, showGrid)
+
+                    /**
+                     * Now we know the border padding, we can trigger a recompose of the UI which
+                     * includes elements that depend on the padding.
+                     */
+                    val gp = GraphPadding(
+                        leftBorder.getDimensions()?.breadthDp?.value ?: 0f,
+                        topBorder.getDimensions()?.breadthDp?.value ?: 0f,
+                        rightBorder.getDimensions()?.breadthDp?.value ?: 0f,
+                        bottomBorder.getDimensions()?.breadthDp?.value ?: 0f
+                    )
+
+                    borderPadding.value = gp
                 }
             }
         }
@@ -214,7 +233,7 @@ abstract class GraphBase(
         // right and bottom:
 
         dataRectDp = DpRect(
-            DpOffset(leftBreadth, sizeDp.width - rightBreadth),
+            DpOffset(leftBreadth, topBreadth),
             DpSize(topAxisLengthDp, leftAxisLengthDp)
         )
 
@@ -232,18 +251,18 @@ abstract class GraphBase(
         density: Density,
         xAxisRange: FloatRange,
         yAxisRange: FloatRange
-    ): DpRect {
+    ) {
 
         val sizeDp = with(density) {
             DpSize(frameSize.width.toDp(), frameSize.height.toDp())
         }
 
-        leftBorder.draw(colorScheme, drawScope, density, DpOffset(0.dp, 0.dp), yAxisRange)
-        topBorder.draw(colorScheme, drawScope, density, DpOffset(0.dp, 0.dp))
+        val leftPhase2 = leftBorder.draw(colorScheme, drawScope, density, DpOffset(0.dp, 0.dp), yAxisRange)
+        val topPhase2 = topBorder.draw(colorScheme, drawScope, density, DpOffset(0.dp, 0.dp))
 
         val rightBreadth = rightBorder.getDimensions()?.breadthDp
         require(rightBreadth != null) { "layout calculations must be done before drawing (1)" }
-        rightBorder.draw(
+        val rightPhase2 = rightBorder.draw(
             colorScheme,
             drawScope,
             density,
@@ -257,12 +276,19 @@ abstract class GraphBase(
 
         val bottomBreadth = bottomBorder.getDimensions()?.breadthDp
         require(bottomBreadth != null) { "layout calculations must be done before drawing (2)" }
-        bottomBorder.draw(
+        val bottomPhase2 = bottomBorder.draw(
             colorScheme, drawScope, density, DpOffset(0.dp, sizeDp.height - bottomBreadth),
             xAxisRange
         )
 
-        return requireNotNull(dataRectDp)
+        // Do drawing phase 2 if required by any border. This allows a border for example to
+        // draw text that spills over another border.
+        leftPhase2?.invoke()
+        rightPhase2?.invoke()
+        topPhase2?.invoke()
+        bottomPhase2?.invoke()
+
+        // return requireNotNull(dataRectDp)
     }
 
     /**
@@ -272,17 +298,17 @@ abstract class GraphBase(
     private fun drawGraticule(
         colorScheme: ColorScheme,
         drawScope: DrawScope,
-        dataSizePx: Size,
+        dataRectPx: Rect,
         density: Density,
         showGrid: Boolean
     ) {
-        leftBorder.drawGraticule(colorScheme, drawScope, density, dataSizePx, showGrid)
-        topBorder.drawGraticule(colorScheme, drawScope, density, dataSizePx, showGrid)
-        rightBorder.drawGraticule(colorScheme, drawScope, density, dataSizePx, showGrid)
-        bottomBorder.drawGraticule(colorScheme, drawScope, density, dataSizePx, showGrid)
+        leftBorder.drawGraticule(colorScheme, drawScope, density, dataRectPx, showGrid)
+        topBorder.drawGraticule(colorScheme, drawScope, density, dataRectPx, showGrid)
+        rightBorder.drawGraticule(colorScheme, drawScope, density, dataRectPx, showGrid)
+        bottomBorder.drawGraticule(colorScheme, drawScope, density, dataRectPx, showGrid)
     }
 
-    /**
+    /**with this
      * Called by renderers to signal that a change of visible range
      * has occurred. This allows the graph to adjust its axis ranges etc
      * accordingly, and potentially rebuild the pipeline if auto settings

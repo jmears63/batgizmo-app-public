@@ -29,7 +29,6 @@ import android.graphics.Rect
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Modifier
@@ -268,7 +267,7 @@ abstract class RendererBase(
 
         AndroidView(
             modifier = modifier
-                .fillMaxSize()
+                //.fillMaxSize()
                 .onSizeChanged { size ->
                     // Check if the size truly changed. This lambda gets called multiple times
                     // with the same size:ge
@@ -284,13 +283,9 @@ abstract class RendererBase(
                     }
                 }
                 .then(gestureModifier),
+
             factory = { ctx ->
                 SurfaceView(ctx).apply {
-                    // The following line is essential for API version 30 to so that the frame
-                    // etc is visible. It seems as if this SurfaceView doesn't respect the padding
-                    // from its Compose container.
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT) // set background to green
-
                     holder.addCallback(callback)
                 }
             }

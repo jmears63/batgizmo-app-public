@@ -23,8 +23,9 @@
 package org.batgizmo.app.ui
 
 import android.graphics.Paint
+import android.graphics.RectF
 import androidx.compose.material3.ColorScheme
-import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -50,13 +51,15 @@ abstract class BorderBase {
         val marginsDp: Pair<Dp, Dp>,
     )
 
-    val textHeightDp: Dp = 12.dp
-    val paddingDp: Dp = textHeightDp / 3
-    val titleTextHeightDp: Dp = 14.dp
-    val titlePaddingDp: Dp = titleTextHeightDp / 2
-    val tickLengthDp: Dp = textHeightDp / 3
-    val lineWidthDp: Dp = 1.dp
-    val blankBreadthDp: Dp = 16.dp
+    protected val textHeightDp: Dp = 12.dp
+    protected val paddingDp: Dp = textHeightDp / 3
+    protected val titleTextHeightDp: Dp = 14.dp
+    protected val titlePaddingDp: Dp = titleTextHeightDp / 2
+    protected val tickLengthDp: Dp = textHeightDp / 3
+    protected val lineWidthDp: Dp = 1.dp
+    protected val blankBreadthDp: Dp = 16.dp
+
+    private val graticuleColour = Color.DarkGray
 
     protected var calc: CalculatedDimensions? = null
 
@@ -101,8 +104,10 @@ abstract class BorderBase {
         colorScheme: ColorScheme,
         drawScope: DrawScope, density: Density, origin: DpOffset,
         axisRange: FloatRange? = null,
-    ) {
+    ) : (() -> kotlin.Unit)? {
+        return null
     }
+
 
     /**
      * Draw any graticule elements required for this axis border.
@@ -110,9 +115,55 @@ abstract class BorderBase {
      */
     open fun drawGraticule(
         colorScheme: ColorScheme, drawScope: DrawScope,
-        density: Density, sizePx: Size,
+        density: Density, dataRectPx: Rect,
         showGrid: Boolean
     ) {
+    }
+
+    protected fun getTextPaint(
+        colorScheme: ColorScheme,
+        density: Density
+    ): Paint = Paint().apply {
+        color = colorScheme.onPrimaryContainer.toArgb()
+        textSize = with(density) { textHeightDp.toPx() }
+        textAlign = Paint.Align.CENTER
+        strokeWidth = with(density) { lineWidthDp.toPx() }
+    }
+
+    protected fun getGridPaint(density: Density): Paint = Paint().apply {
+        // Use a hard coded colour as the data area doesn't use theme colours:
+        color = graticuleColour.toArgb()
+        textSize = with(density) { textHeightDp.toPx() }
+        textAlign = Paint.Align.CENTER
+        strokeWidth = with(density) { lineWidthDp.toPx() }
+    }
+
+    private fun getBackgroundPaint(density: Density, colour: Color): Paint = Paint().apply {
+        // Use a hard coded colour as the data area doesn't use theme colours:
+        color = colour.toArgb()
+        textSize = with(density) { textHeightDp.toPx() }
+        textAlign = Paint.Align.CENTER
+        strokeWidth = with(density) { lineWidthDp.toPx() }
+    }
+
+    protected fun drawBackground(
+        colorScheme: ColorScheme,
+        canvas: Canvas,
+        density: Density,
+        origin: DpOffset,
+        widthDp: Dp,
+        heightDp: Dp
+    ) {
+        val backgroundPaint = getBackgroundPaint(density, colorScheme.primaryContainer)
+        val r = with(density) {
+            RectF(
+                origin.x.toPx(),
+                origin.y.toPx(),
+                origin.x.toPx() + widthDp.toPx(),
+                origin.y.toPx() + heightDp.toPx()
+            )
+        }
+        canvas.nativeCanvas.drawRect(r, backgroundPaint)
     }
 }
 
@@ -136,7 +187,7 @@ class TitleBorder(private var title: String?) : BorderBase() {
         density: Density,
         origin: DpOffset,
         axisRange: FloatRange?
-    ) {
+    ) : (() -> kotlin.Unit)? {
         calc?.let {
             drawScope.drawIntoCanvas { canvas ->
 
@@ -146,21 +197,23 @@ class TitleBorder(private var title: String?) : BorderBase() {
                  *  support it.
                  */
 
-                val nativePaint = Paint().apply {
-                    color = colorScheme.onPrimaryContainer.toArgb()
-                    textSize = with(density) { titleTextHeightDp.toPx() }
-                    textAlign = Paint.Align.CENTER
-                    strokeWidth = 1f    // Used for drawing lines.
+                drawBackground(colorScheme, canvas, density, origin, it.lengthDp, it.breadthDp)
+
+                val drawPhase2 = {
+                    val textPaint = getTextPaint(colorScheme, density)
+
+                    val x = with(density) { (origin.x.toPx()) + (it.lengthDp.toPx()) / 2 }
+                    val y = with(density) { (origin.y + titlePaddingDp + titleTextHeightDp).toPx() }
+
+                    // Draw text using Android's Canvas. Note that the text height ends up looking somewhat
+                    // less than we asked for because it allows space for accents above capital letters.
+                    canvas.nativeCanvas.drawText(title ?: "", x, y, textPaint)
                 }
 
-                val x = with(density) { (origin.x.toPx()) + (it.lengthDp.toPx()) / 2 }
-                val y = with(density) { (origin.y + titlePaddingDp + titleTextHeightDp).toPx() }
-
-                // Draw text using Android's Canvas. Note that the text height ends up looking somewhat
-                // less than we asked for because it allows space for accents above capital letters.
-                canvas.nativeCanvas.drawText(title ?: "", x, y, nativePaint)
+                return drawPhase2
             }
         }
+        return null
     }
 
     fun setTitle(title: String?) {
@@ -181,6 +234,21 @@ class BlankBorderVertical : BorderBase() {
         calc = cd
         return cd.breadthDp
     }
+
+    override fun draw(
+        colorScheme: ColorScheme,
+        drawScope: DrawScope,
+        density: Density,
+        origin: DpOffset,
+        axisRange: FloatRange?
+    ) : (() -> Unit)? {
+        calc?.let {
+            drawScope.drawIntoCanvas { canvas ->
+                drawBackground(colorScheme, canvas, density, origin, it.breadthDp, it.lengthDp)
+            }
+        }
+        return null
+    }
 }
 
 class BlankBorderHorizontal : BorderBase() {
@@ -195,6 +263,21 @@ class BlankBorderHorizontal : BorderBase() {
         )
         calc = cd
         return cd.breadthDp
+    }
+
+    override fun draw(
+        colorScheme: ColorScheme,
+        drawScope: DrawScope,
+        density: Density,
+        origin: DpOffset,
+        axisRange: FloatRange?
+    ): (() -> Unit)? {
+        calc?.let {
+            drawScope.drawIntoCanvas { canvas ->
+                drawBackground(colorScheme, canvas, density, origin,  it.lengthDp, it.breadthDp)
+            }
+        }
+        return null
     }
 }
 
@@ -217,11 +300,9 @@ typealias TickData = List<Pair<Float, Dp>>
 
 abstract class AxisBorder(
     units: List<Unit>,
-    private val showAxis: Boolean,    // Actually draw the axis?
-    protected val layoutType: Layout,
-    // private val showGrid: Boolean
-)   // Determines the space it takes.
-    : BorderBase() {
+    protected val showAxis: Boolean,    // Actually draw the axis?
+    protected val layoutType: Layout
+) : BorderBase() {
 
     enum class Layout {
         FULL,           // Axis title and units in all on their own row.
@@ -244,8 +325,6 @@ abstract class AxisBorder(
 
     // Some data cached by draw() for use in drawGraticule():
     private var cachedTickData: TickData? = null
-
-    private val graticuleColour = Color.DarkGray
 
     override fun reset() {
         super.reset()
@@ -310,7 +389,7 @@ abstract class AxisBorder(
         density: Density,
         origin: DpOffset,
         axisRange: FloatRange?
-    ) {
+    ) : (() -> kotlin.Unit)? {
         calc?.let {
             val safeAxisRange = axisRange ?: FloatRange(0f, 1f)
             val safeAxisLengthDp = it.axisLengthDp
@@ -321,12 +400,7 @@ abstract class AxisBorder(
              *  support it.
              */
 
-            val nativePaint = Paint().apply {
-                color = colorScheme.onPrimaryContainer.toArgb()
-                textSize = with(density) { textHeightDp.toPx() }
-                textAlign = Paint.Align.CENTER
-                strokeWidth = with(density) { lineWidthDp.toPx() }
-            }
+            val textPaint = getTextPaint(colorScheme, density)
 
             val unitToUse = getUnits(safeAxisRange)
 
@@ -341,12 +415,12 @@ abstract class AxisBorder(
             // Cache the tick positions for drawing the graticule later:
             cachedTickData = ticks
 
-            if (showAxis) {
-                drawScope.drawIntoCanvas { canvas ->
-                    doDraw(density, origin, canvas, nativePaint, ticks, decimalPlaces, unitToUse)
-                }
+            drawScope.drawIntoCanvas { canvas ->
+                return doDraw(colorScheme, density, origin, canvas, textPaint, ticks, decimalPlaces, unitToUse)
             }
         }
+
+        return null
     }
 
     /**
@@ -445,6 +519,7 @@ abstract class AxisBorder(
     }
 
     protected abstract fun doDraw(
+        colorScheme: ColorScheme,
         density: Density,
         origin: DpOffset,
         canvas: Canvas,
@@ -452,34 +527,28 @@ abstract class AxisBorder(
         ticks: List<Pair<Float, Dp>>,
         decimalPlaces: Int,
         unitToUse: Unit
-    )
+    ) : (() -> kotlin.Unit)?
 
     override fun drawGraticule(
         colorScheme: ColorScheme,
         drawScope: DrawScope,
         density: Density,
-        sizePx: Size,
+        dataRectPx: Rect,
         showGrid: Boolean
     ) {
         calc?.let {
-            val gridPaint = Paint().apply {
-                // Use a hard coded colour as the data area doesn't use theme colours:
-                color = graticuleColour.toArgb()
-                textSize = with(density) { textHeightDp.toPx() }
-                textAlign = Paint.Align.CENTER
-                strokeWidth = with(density) { lineWidthDp.toPx() }
-            }
+            val gridPaint = getGridPaint(density)
 
             drawScope.drawIntoCanvas { canvas ->
                 cachedTickData?.let {
-                    doDrawGraticule(density, sizePx, canvas, gridPaint, it, showGrid)
+                    doDrawGraticule(density, dataRectPx, canvas, gridPaint, it, showGrid)
                 }
             }
         }
     }
 
     protected abstract fun doDrawGraticule(
-        density: Density, sizePx: Size, canvas: Canvas,
+        density: Density, dataRectPx: Rect, canvas: Canvas,
         nativePaint: Paint, ticks: TickData,
         showGrid: Boolean
     )
@@ -492,6 +561,7 @@ class AxisBorderHorizontal(
 ) : AxisBorder(units, showAxis, layoutType) {
 
     override fun doDraw(
+        colorScheme: ColorScheme,
         density: Density,
         origin: DpOffset,
         canvas: Canvas,
@@ -499,62 +569,71 @@ class AxisBorderHorizontal(
         ticks: List<Pair<Float, Dp>>,
         decimalPlaces: Int,
         unitToUse: Unit
-    ) {
+    ) : (() -> kotlin.Unit)? {
         if (layoutType == Layout.NONE)
-            return
+            return null
 
         calc?.let {
-            with(density) {
-                // Draw the axis line:
-                val (x1, x2) = Pair<Float, Float>(
-                    (origin.x + it.marginsDp.first - lineWidthDp).toPx(),   // One lineWidthDp overlap with the other axis.
-                    (origin.x + it.lengthDp - it.marginsDp.second).toPx()
-                )
-                val y = origin.y.toPx()
+            drawBackground(colorScheme, canvas, density, origin,  it.lengthDp,it.breadthDp)
 
-                // Note: drawLine doesn't include the final point:
-                canvas.nativeCanvas.drawLine(x1, y, x2, y, nativePaint)
+            if (!showAxis)
+                return null
 
-                // Draw the ticks and labels:
-                for ((i, t) in ticks.withIndex()) {
-                    val (value, dp) = t
-                    val x: Float = (dp + origin.x + it.marginsDp.first).toPx()
-                    val y1: Dp = origin.y
-                    val y2: Dp = y1 + tickLengthDp
-                    val y3: Dp = y2 + paddingDp + textHeightDp
-                    canvas.nativeCanvas.drawLine(x, y1.toPx(), x, y2.toPx(), nativePaint)
+            val drawPhase2 = {
+                with(density) {
+                    // Draw the axis line:
+                    val (x1, x2) = Pair<Float, Float>(
+                        (origin.x + it.marginsDp.first - lineWidthDp).toPx(),   // One lineWidthDp overlap with the other axis.
+                        (origin.x + it.lengthDp - it.marginsDp.second).toPx()
+                    )
+                    val y = origin.y.toPx()
 
-                    if (layoutType != Layout.MINIMAL) {
-                        var stringValue = ""
-                        if (layoutType == Layout.COMPACT
-                            && i == ticks.size - 1
-                            && unitToUse.units != null
-                        ) {
-                            stringValue = "(%s)".format(unitToUse.units)
-                        } else {
-                            val format = "%.${decimalPlaces}f"
-                            stringValue = String.format(format, value)
+                    // Note: drawLine doesn't include the final point:
+                    canvas.nativeCanvas.drawLine(x1, y, x2, y, nativePaint)
+
+                    // Draw the ticks and labels:
+                    for ((i, t) in ticks.withIndex()) {
+                        val (value, dp) = t
+                        val x: Float = (dp + origin.x + it.marginsDp.first).toPx()
+                        val y1: Dp = origin.y
+                        val y2: Dp = y1 + tickLengthDp
+                        val y3: Dp = y2 + paddingDp + textHeightDp
+                        canvas.nativeCanvas.drawLine(x, y1.toPx(), x, y2.toPx(), nativePaint)
+
+                        if (layoutType != Layout.MINIMAL) {
+                            var stringValue = ""
+                            if (layoutType == Layout.COMPACT
+                                && i == ticks.size - 1
+                                && unitToUse.units != null
+                            ) {
+                                stringValue = "(%s)".format(unitToUse.units)
+                            } else {
+                                val format = "%.${decimalPlaces}f"
+                                stringValue = String.format(format, value)
+                            }
+                            canvas.nativeCanvas.drawText(stringValue, x, y3.toPx(), nativePaint)
                         }
-                        canvas.nativeCanvas.drawText(stringValue, x, y3.toPx(), nativePaint)
                     }
-                }
 
-                if (layoutType == Layout.FULL) {
-                    // Draw the axis label and units:
-                    val x4: Float = (origin.x + it.marginsDp.first + it.axisLengthDp / 2).toPx()
-                    val y4: Dp =
-                        origin.y + tickLengthDp + paddingDp + textHeightDp + paddingDp + textHeightDp
-                    val title = if (unitToUse.units == null) axisTitle else {
-                        "%s (%s)".format(axisTitle, unitToUse.units)
+                    if (layoutType == Layout.FULL) {
+                        // Draw the axis label and units:
+                        val x4: Float = (origin.x + it.marginsDp.first + it.axisLengthDp / 2).toPx()
+                        val y4: Dp =
+                            origin.y + tickLengthDp + paddingDp + textHeightDp + paddingDp + textHeightDp
+                        val title = if (unitToUse.units == null) axisTitle else {
+                            "%s (%s)".format(axisTitle, unitToUse.units)
+                        }
+                        canvas.nativeCanvas.drawText(title, x4, y4.toPx(), nativePaint)
                     }
-                    canvas.nativeCanvas.drawText(title, x4, y4.toPx(), nativePaint)
                 }
             }
+            return drawPhase2
         }
+        return null
     }
 
     override fun doDrawGraticule(
-        density: Density, sizePx: Size, canvas: Canvas,
+        density: Density, dataRectPx: Rect, canvas: Canvas,
         nativePaint: Paint, ticks: TickData,
         showGrid: Boolean
     ) {
@@ -563,10 +642,11 @@ class AxisBorderHorizontal(
             // Note: line drawing is exclusive of the second point, so we intentionally
             // provide a value beyond the size available:
             with(density) {
-                val (y1, y2) = Pair(0.dp.toPx(), sizePx.height)
+                // val (y1, y2) = Pair(0.dp.toPx(), sizePx.height)
+                val (y1, y2) = Pair(dataRectPx.top, dataRectPx.bottom)
 
                 for ((_, dp) in ticks) {
-                    val x = dp.toPx()
+                    val x = dp.toPx() + dataRectPx.left
                     canvas.nativeCanvas.drawLine(x, y1, x, y2, nativePaint)
                 }
             }
@@ -580,6 +660,7 @@ class AxisBorderVertical(
 ) : AxisBorder(units, showAxis, layoutType) {
 
     override fun doDraw(
+        colorScheme: ColorScheme,
         density: Density,
         origin: DpOffset,
         canvas: Canvas,
@@ -587,108 +668,108 @@ class AxisBorderVertical(
         ticks: List<Pair<Float, Dp>>,
         decimalPlaces: Int,
         unitToUse: Unit
-    ) {
+    ) : (() -> kotlin.Unit)? {
+
         if (layoutType == Layout.NONE)
-            return
+            return null
 
         calc?.let {
-            with(density) {
-                // Draw the axis line:
-                val (y11, y12) = Pair<Float, Float>(
-                    (origin.y + it.marginsDp.second + it.axisLengthDp).toPx(),  // Overlaps the other axis by 1.dp.
-                    (origin.y + it.marginsDp.second - 1.dp).toPx()              // + 1.dp because the end of the line is exclusive.
-                )
-                val x1 = (origin.x + it.breadthDp - 1.dp).toPx()
+            drawBackground(colorScheme, canvas, density, origin, it.breadthDp, it.lengthDp)
 
-                // Note: drawLine doesn't include the final point:
-                canvas.nativeCanvas.drawLine(x1, y11, x1, y12, nativePaint)
+            if (!showAxis)
+                return null
 
-                // Draw the ticks and labels:
-                val x21: Dp = origin.x + it.breadthDp - 1.dp
-                val x22: Dp = x21 - tickLengthDp
-                val x23: Dp = x22 - paddingDp
-                for ((i, t) in ticks.withIndex()) {
-                    val (value, dp) = t
-                    // - 1.dp to be above the other border.
-                    val y21: Float =
-                        (origin.y + it.marginsDp.second + it.axisLengthDp - dp - 1.dp).toPx()
-                    canvas.nativeCanvas.drawLine(x21.toPx(), y21, x22.toPx(), y21, nativePaint)
+            val drawPhase2 = {
+                with(density) {
+                    // Draw the axis line:
+                    val (y11, y12) = Pair<Float, Float>(
+                        (origin.y + it.marginsDp.second + it.axisLengthDp).toPx(),  // Overlaps the other axis by 1.dp.
+                        (origin.y + it.marginsDp.second - 1.dp).toPx()              // + 1.dp because the end of the line is exclusive.
+                    )
+                    val x1 = (origin.x + it.breadthDp - 1.dp).toPx()
 
-                    if (layoutType != Layout.MINIMAL) {
-                        var stringValue = ""
-                        if (layoutType == Layout.COMPACT
-                            && i == ticks.size - 1
-                            && unitToUse.units != null
-                        ) {
-                            stringValue = "(%s)".format(unitToUse.units)
-                        } else {
-                            val format = "%.${decimalPlaces}f"
-                            stringValue = String.format(format, value)
+                    // Note: drawLine doesn't include the final point:
+                    canvas.nativeCanvas.drawLine(x1, y11, x1, y12, nativePaint)
+
+                    // Draw the ticks and labels:
+                    val x21: Dp = origin.x + it.breadthDp - 1.dp
+                    val x22: Dp = x21 - tickLengthDp
+                    val x23: Dp = x22 - paddingDp
+                    for ((i, t) in ticks.withIndex()) {
+                        val (value, dp) = t
+                        // - 1.dp to be above the other border.
+                        val y21: Float =
+                            (origin.y + it.marginsDp.second + it.axisLengthDp - dp - 1.dp).toPx()
+                        canvas.nativeCanvas.drawLine(x21.toPx(), y21, x22.toPx(), y21, nativePaint)
+
+                        if (layoutType != Layout.MINIMAL) {
+                            var stringValue = ""
+                            if (layoutType == Layout.COMPACT
+                                && i == ticks.size - 1
+                                && unitToUse.units != null
+                            ) {
+                                stringValue = "(%s)".format(unitToUse.units)
+                            } else {
+                                val format = "%.${decimalPlaces}f"
+                                stringValue = String.format(format, value)
+                            }
+                            canvas.nativeCanvas.withRotation(
+                                degrees = -90f,
+                                pivotX = x23.toPx(),
+                                pivotY = y21
+                            ) {
+                                canvas.nativeCanvas.drawText(
+                                    stringValue,
+                                    x23.toPx(),
+                                    y21,
+                                    nativePaint
+                                )
+                            }
+                        }
+                    }
+
+                    if (layoutType == Layout.FULL) {
+                        // Draw the axis title and units:
+                        val x4: Float = (x23 - paddingDp - textHeightDp).toPx()
+                        val y4: Dp = origin.y + (it.marginsDp.second + it.axisLengthDp / 2)
+                        val title = if (unitToUse.units == null) axisTitle else {
+                            "%s (%s)".format(axisTitle, unitToUse.units)
                         }
                         canvas.nativeCanvas.withRotation(
                             degrees = -90f,
-                            pivotX = x23.toPx(),
-                            pivotY = y21
+                            pivotX = x4,
+                            pivotY = y4.toPx()
                         ) {
-                            canvas.nativeCanvas.drawText(stringValue, x23.toPx(), y21, nativePaint)
+                            canvas.nativeCanvas.drawText(title, x4, y4.toPx(), nativePaint)
                         }
                     }
                 }
-
-                if (layoutType == Layout.FULL) {
-                    // Draw the axis title and units:
-                    val x4: Float = (x23 - paddingDp - textHeightDp).toPx()
-                    val y4: Dp = origin.y + (it.marginsDp.second + it.axisLengthDp / 2)
-                    val title = if (unitToUse.units == null) axisTitle else {
-                        "%s (%s)".format(axisTitle, unitToUse.units)
-                    }
-                    canvas.nativeCanvas.withRotation(
-                        degrees = -90f,
-                        pivotX = x4,
-                        pivotY = y4.toPx()
-                    ) {
-                        canvas.nativeCanvas.drawText(title, x4, y4.toPx(), nativePaint)
-                    }
-                }
             }
+            return drawPhase2
         }
+        return null
     }
 
     override fun doDrawGraticule(
-        density: Density, sizePx: Size, canvas: Canvas,
-        gridPaint: Paint, ticks: TickData,
+        density: Density, dataRectPx: Rect, canvas: Canvas,
+        nativePaint: Paint, ticks: TickData,
         showGrid: Boolean
     ) {
         // Note: line drawing is exclusive of the second point, so we intentionally
         // provide a value beyond the size available:
         if (showGrid) {
             with(density) {
-                val (x1, x2) = Pair(0.dp.toPx(), sizePx.width)
+                //val (x1, x2) = Pair(0.dp.toPx(), sizePx.width)
+                val (x1, x2) = Pair(dataRectPx.left, dataRectPx.right)
 
                 calc?.let {
                     for ((_, dp) in ticks) {
-                        val y: Float = (it.axisLengthDp - dp - 1.dp).toPx()
-                        canvas.nativeCanvas.drawLine(x1, y, x2, y, gridPaint)
+                        val y: Float = (it.axisLengthDp - dp - 1.dp).toPx() + dataRectPx.top
+                        canvas.nativeCanvas.drawLine(x1, y, x2, y, nativePaint)
                     }
                 }
             }
         }
-
-        /*
-        val showHeterodyneCursors = true
-        if (showHeterodyneCursors) {
-            val cursorPaint = Paint().apply {
-                // Use a hard coded colour as the data area doesn't use theme colours:
-                color = cursorColour.toArgb()
-                textSize = with(density) { textHeightDp.toPx() }
-                textAlign = Paint.Align.CENTER
-                strokeWidth = with(density) { lineWidthDp.toPx() }
-            }
-
-            val y = 100f
-            canvas.nativeCanvas.drawLine(0f, y, sizePx.width, y, cursorPaint)
-        }
-         */
     }
 }
 
