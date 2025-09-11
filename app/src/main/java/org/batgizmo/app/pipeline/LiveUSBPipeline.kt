@@ -57,6 +57,7 @@ class LiveUSBPipeline(
     sampleRate,
     sampleCount,
     preserveRawDataBuffer = true,    // So we can rebuild the pipeline without loss of data.,
+    showCursor = true,              // Display a moving cursor.
     onTrigger
 ) {
     companion object {

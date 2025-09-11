@@ -57,6 +57,7 @@ abstract class AbstractPipeline(
     protected val sampleRate: Int,
     protected val sampleCount: Int,
     protected val preserveRawDataBuffer: Boolean,
+    private val showCursor: Boolean,
     protected val onTrigger: () -> Unit = {}
 ) {
     abstract fun createDataSourceStep(
@@ -645,7 +646,8 @@ abstract class AbstractPipeline(
                 colourMapStep, rangedRawDataBuffer.buffer,
                 transformedDataBuffer,
                 amplitudeBitmapHolder,
-                onTrigger
+                onTrigger,
+                showCursor
             )
             val p = TransformStep.Params(calcs = calcs)
             if (BuildConfig.DEBUG)

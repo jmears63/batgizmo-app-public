@@ -2,6 +2,7 @@ Version     Date            Description
 
 1.0.10                      Reorganized the drawing of the UI so that it is OK on
                             devices with API version 30.
+                            The live cursor is hidden in file viewer mode.
 
 1.0.9       2025-09-08      GUANO timestamp is now in local time with a UTC offset.
 

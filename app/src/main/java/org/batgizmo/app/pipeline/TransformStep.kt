@@ -41,7 +41,8 @@ class TransformStep(
     private val rawDataBuffer: ShortArray,
     private val transformedDataBuffer: FloatArray,
     private val amplitudeBitmapHolder: BitmapHolder,
-    private val onTrigger: () -> Unit
+    private val onTrigger: () -> Unit,
+    private val showCursor: Boolean
 ) : AbstractStep() {
 
     companion object {
@@ -291,8 +292,11 @@ class TransformStep(
                         amplitudeBitmapHolder.bitmap!!
                     )
 
-                    amplitudeBitmapHolder.cursorTime =
-                        (transformedEntryIndex + calcs.sliceTransformedTimeBucketCount) * calcs.transformedTimeInterval
+                    if (showCursor)
+                        amplitudeBitmapHolder.cursorTime =
+                            (transformedEntryIndex + calcs.sliceTransformedTimeBucketCount) * calcs.transformedTimeInterval
+                    else
+                        amplitudeBitmapHolder.cursorTime = null
                 }
             }
 

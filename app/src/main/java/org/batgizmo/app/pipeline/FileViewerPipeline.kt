@@ -57,6 +57,7 @@ class FileViewerPipeline(
         mutableDetailsTextFlow,
         sampleRate,
         sampleCount,
+        showCursor = false,
         preserveRawDataBuffer = false
 ) {
     override fun createDataSourceStep(
