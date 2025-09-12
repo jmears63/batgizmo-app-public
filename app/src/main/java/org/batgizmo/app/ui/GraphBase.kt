@@ -182,8 +182,6 @@ abstract class GraphBase(
                         yAxisRange.value
                     )
 
-                    // TODO: this needs to use the dimensions of the data area. We need to adjust size
-                    // and pass in an offset.
                     val dataRectPx = dataRect.toRect()
                     drawGraticule(colorScheme, this, dataRectPx, density, showGrid)
 

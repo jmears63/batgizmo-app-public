@@ -1,6 +1,6 @@
 Version     Date            Description
 
-1.0.10                      Reorganized the drawing of the UI so that it is OK on
+1.0.10      2025-09-12      Reorganized the drawing of the UI so that it is OK on
                             devices with API version 30.
                             The live cursor is hidden in file viewer mode.
 
