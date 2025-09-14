@@ -1,10 +1,13 @@
 Version     Date            Description
 
+1.0.11      2025-09-14      Handles USB timeouts, important for certain models of EMT2.
+                            Set sampling rate to microphones dependent on their support for it in the descriptor.
+
 1.0.10      2025-09-12      Reorganized the drawing of the UI so that it is OK on
                             devices with API version 30.
                             The live cursor is hidden in file viewer mode.
 
-1.0.9       2025-09-08      GUANO timestamp is now in local time with a UTC offset.
+1.0.9       2025-09-08     Add support for reading the bmAttributes field. GUANO timestamp is now in local time with a UTC offset.
 
 1.0.8       2025-09-05      Fixes relating to handling of the minimum heterodyne frequency.
                             Fixes relating to resolving file name collisions.
