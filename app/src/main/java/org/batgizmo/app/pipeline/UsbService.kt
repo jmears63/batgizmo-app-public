@@ -332,6 +332,7 @@ class UsbService(private val context: Context,
                 String.format("USB descriptor data:\n%s", Base64.encodeToString(rawDescriptors, Base64.DEFAULT))
             }
 
+
             /*
             // Hack for debugging parsing of Pettersson 384 kHz microphone:
             val descB64 = "EgEAAgAAAEB9KAQEAAIBAgMBCQJtAAIBAIAyCQQAAAABAQAACSQBAAEmAAEBDCQCAQECAAEAAAAA\n" +
@@ -522,14 +523,15 @@ class UsbService(private val context: Context,
         val interfaceNumber: Int = IFACE_UNDEFINED, // Value to be provided via SET INTERFACE. It is in fact the index within the configuration.
         val alternateSetting: Int = 0,
         val endpointAddress: Int = 0,       // Note: address excluding bit 7, not index
-        val uac1SampleRate: Pair<Int, Boolean>?,
+        val uac1SampleRate: Int?,
         val uac2ClockId: Int?,
         val numChannels: Int = Int.MIN_VALUE,
         val bitResolution: Int = Int.MIN_VALUE,
         // val interfacesToClaim: List<Int>,
-        val packetSize: Int = 0
+        val packetSize: Int = 0,
+        val sampleRateSettable: Boolean
 
-        ) : Comparable<EndpointData>, Parcelable {
+    ) : Comparable<EndpointData>, Parcelable {
 
         override fun compareTo(other: EndpointData): Int = compareValuesBy(this, other,
             { it.usbDevice.deviceId },
@@ -545,7 +547,7 @@ class UsbService(private val context: Context,
                 2 -> "stereo"
                 else -> "$numChannels channels "
             }
-            return "Endpoint $endpointAddress: $type $bitResolution bits"
+            return "Configuration $configIndex Interface number $interfaceNumber, Endpoint address $endpointAddress: $type alt: $alternateSetting: $bitResolution bits"
             // ($deviceId.$configurationId.$ifaceId.$alternateSetting.$endpointAddress)
         }
 
@@ -696,7 +698,7 @@ class UsbService(private val context: Context,
 
         var state: DescriptorParserState = DescriptorParserState.EXPECTING_CONFIG
 
-        var uac1SampleRate: Pair<Int, Boolean>? = null
+        var uac1SampleRate: Int? = null
         var numChannels: Int = 0
         var bitResolution: Int = 0
         var configIndex: Int = 0
@@ -721,6 +723,7 @@ class UsbService(private val context: Context,
 
             do {
                 var consumed = true
+                Timber.d("descriptor: state = $state")
                 when (state) {
                     DescriptorParserState.EXPECTING_CONFIG -> {
                         if (desc is UsbConfigDescriptor) {
@@ -729,6 +732,7 @@ class UsbService(private val context: Context,
                             configCounter += 1
                             configValue = d.configValue
                             state = DescriptorParserState.EXPECTING_SUITABLEINTERFACE
+                            Timber.d("descriptor: found configuration $configValue")
                         }
                         // else stay in this state until we see one.
                     }
@@ -769,6 +773,7 @@ class UsbService(private val context: Context,
                                     uac2ClockId = bClockId.toInt()
                                     // currentlyParsingInterface?.let { interfacesToClaim.add(currentlyParsingInterface) }
                                 }
+                                Timber.d("descriptor:  clock source descriptor id = $uac2ClockId")
                             }
                         }
                         catch (e: ClassCastException) {
@@ -780,6 +785,7 @@ class UsbService(private val context: Context,
                                 interfaceNumber = d.interfaceNumber     // Int, index of the interface in the config.
                                 alternateSetting = d.alternateSetting.toInt()   // Byte
                                 state = DescriptorParserState.EXPECTING_ASGENERALINTERFACE;
+                                Timber.d("descriptor: interface $interfaceNumber alt $alternateSetting")
                             }
                         }
                     }
@@ -794,6 +800,7 @@ class UsbService(private val context: Context,
                             if (d.formatTag == 1) {  // PCM
                                 state = DescriptorParserState.EXPECTING_AS10FORMATI;
                                 consumed = true
+                                Timber.d("descriptor: found Usb10ASGeneral format ${d.formatTag}")
                             }
                         }
                         else if (desc is Usb20ASGeneral) {
@@ -804,6 +811,7 @@ class UsbService(private val context: Context,
                             {
                                 state = DescriptorParserState.EXPECTING_AS20FORMATI;
                                 consumed = true
+                                Timber.d("descriptor: found Usb20ASGeneral ${d.formatType}")
                             }
                         }
                     }
@@ -824,13 +832,14 @@ class UsbService(private val context: Context,
                                 // Note the frequency:
                                 uac1SampleRate = selectSampleRate(d.sampleRates)
 
-                                if (uac1SampleRate.first > 0) {
+                                if (uac1SampleRate > 0) {
                                     numChannels = d.numChannels.toInt()
                                     bitResolution = d.bitResolution.toInt()
                                     //Log.i(TAG, "Usb10ASFormatI: rate = $sampleRate channels = $numChannels")
                                     state = DescriptorParserState.EXPECTING_ENDPOINT
                                     consumed = true
                                 }
+                                Timber.d("descriptor: found Usb10ASFormatI format ${d.formatType}")
                             }
                         }
                     }
@@ -853,6 +862,7 @@ class UsbService(private val context: Context,
                                 //Log.i(TAG, "Usb10ASFormatI: rate = $sampleRate channels = $numChannels")
                                 state = DescriptorParserState.EXPECTING_ENDPOINT
                                 consumed = true
+                                Timber.d("descriptor: found Usb20ASFormatI format")
                             }
                         }
                     }
@@ -872,6 +882,7 @@ class UsbService(private val context: Context,
                                 //Log.i(TAG, "endpoint address is $endpointAddress")
                                 state = DescriptorParserState.EXPECTING_ASENDPOINT
                                 consumed = true
+                                Timber.d("descriptor: found endpoint $endpointAddress")
                             }
                         }
                     }
@@ -884,10 +895,15 @@ class UsbService(private val context: Context,
                         if (desc is UsbACAudioStreamEndpoint) {
                             var d = desc as UsbACAudioStreamEndpoint
 
+                            // Figure out if the endpoint supports setting of the sampling
+                            // frequency.
+                            val bmAttributesSampleFrequencyBit = 1
+                            val sampleRateSettable: Boolean = (d.attributes and bmAttributesSampleFrequencyBit) != 0
+
                             // currentlyParsingInterface?.let { interfacesToClaim.add(it) }
 
                             // Success - we have found a suitable audio streaming endpoint:
-                            var details = EndpointData(
+                            val details = EndpointData(
                                 device,
                                 configIndex,
                                 configValue,
@@ -898,16 +914,14 @@ class UsbService(private val context: Context,
                                 uac2ClockId,
                                 numChannels,
                                 bitResolution,
-                                // interfacesToClaim,
                                 packetSize,
+                                sampleRateSettable
                             )
 
                             candidateEndpoints.add(details)
 
-                            Log.i(
-                                this::class.simpleName,
-                                "Suitable audio streaming endpoint found: $details"
-                            )
+                            Timber.d("descriptor: found UsbACAudioStreamEndpoint $endpointAddress")
+                            Timber.i("descriptor: suitable audio streaming endpoint found: $details")
                             state = DescriptorParserState.EXPECTING_CONFIG    // See if there is another config.
                             consumed = true
                         }
@@ -919,21 +933,18 @@ class UsbService(private val context: Context,
         return candidateEndpoints
     }
 
-    private fun selectSampleRate(sampleRates: IntArray?): Pair<Int, Boolean> {
+    private fun selectSampleRate(sampleRates: IntArray?): Int {
 
         var rate = -1
-        var shouldSet = false
 
         // Select the fastest sample rate that is a multiple of 48 kHz, or -1 if none.
         sampleRates?. let {
             // Only set the sampling rate back to the device it if supports more than one:
-            shouldSet = sampleRates.size > 1
-
             // The list is most likely short, just walk through it in order to find the maximum:
             for (v in it)
                 rate = maxOf(v, rate)
         }
-        return Pair(rate, shouldSet)
+        return rate
     }
 
     private fun startStreaming(
@@ -962,12 +973,17 @@ class UsbService(private val context: Context,
 
                 var actualSampleRate = 0
                 endpointData.uac1SampleRate?.let { rate ->
-                    if (rate.second)
-                        actualSampleRate = setEndpointSamplingRate(rate.first, conn, endpointData.endpointAddress)
-                    else {
-                        // Only one sampling rate is available, so don't tempt fate by trying to set it unnecessarily.
-                        // This is important for microphones that don't support setting/reading the sampling rate.
-                        actualSampleRate = rate.first
+                    actualSampleRate = rate
+                    if (endpointData.sampleRateSettable) {
+                        /*
+                         * Important:
+                         * Don't try to set/get the sample rate for endpoints that don't support that, you will end up with a
+                         * garbage sample rate. On the other hand, if it is suppored, we must set it, even if only one value is
+                         * available. This is to avoid very strange effects with EMT2, which otherwise sends data frames sized
+                         * for 288 kHz, which is not he advertised sampling rate, though interesting.
+                         */
+                        actualSampleRate =
+                            setEndpointSamplingRate(rate, conn, endpointData.endpointAddress)
                     }
                 }
                 endpointData.uac2ClockId?.let { id ->
@@ -985,8 +1001,31 @@ class UsbService(private val context: Context,
                 // Run the audio streaming in a thread so the UI can remain responsive:
                 streamingThread = Thread( {
 
-                    val errno = nativeUsb.stream(fd, endpointData.configValue, usbInterface.id, usbInterface.alternateSetting,
-                        endpointData.endpointAddress, endpointData.numChannels, actualSampleRate, endpointData.packetSize)
+                    var errno = 0
+                    val ETIMEDOUT = 110     // linux errno value.
+
+                    /*
+                     * We retry on timeout up to a limit. This can be needed if the USB device sends
+                     * an audio data packet bigger than the maximum size they advertise in their
+                     * USB descriptor. They should do this, but some do. I am looking at you, Wildlife
+                     * Acoustics EMT2, which sometimes sends 771 bytes despite the 515 declared in its
+                     * USB descriptor.
+                     */
+                    for (tries in 0..3) {
+                        errno = nativeUsb.stream(
+                            fd,
+                            endpointData.configValue,
+                            usbInterface.id,
+                            usbInterface.alternateSetting,
+                            endpointData.endpointAddress,
+                            endpointData.numChannels,
+                            actualSampleRate,
+                            endpointData.packetSize
+                        )
+                        if (errno != ETIMEDOUT)
+                            break;
+                        Timber.i("Restarting USB stream after timeout.")
+                    }
 
                     // We get here if we requested the thread to shut down, or if an error
                     // occurred in the thread. In the latter case, the returned value is errno.
