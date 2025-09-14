@@ -23,17 +23,27 @@ package com.android.server.usb.descriptors;
 public class UsbACAudioStreamEndpoint extends UsbACEndpoint {
     private static final String TAG = "UsbACAudioStreamEndpoint";
 
+    private int mAttributes;
+
+
     //TODO data fields...
     public UsbACAudioStreamEndpoint(int length, byte type, int subclass, byte subtype) {
         super(length, type, subclass, subtype);
+    }
+
+    public int getAttributes() {
+        return mAttributes;
     }
 
     @Override
     public int parseRawDescriptors(ByteStream stream) {
         super.parseRawDescriptors(stream);
 
-        //TODO Read fields
-        stream.advance(mLength - stream.getReadCount());
+        mAttributes = stream.getUnsignedByte();
+
+
+        // JM: -1 because we have just read mAttributes:
+        stream.advance(mLength - stream.getReadCount() - 1);
         return mLength;
     }
 }
