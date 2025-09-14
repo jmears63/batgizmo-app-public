@@ -38,6 +38,7 @@
 #include <aaudio/AAudio.h>
 #include <assert.h>
 #include <memory.h>
+#include <sys/poll.h>
 
 extern "C" {
 }
@@ -153,7 +154,6 @@ struct my_usbdevfs_urb {
  * been closed, due to asynchronous processing
  */
 static int16_t audio_buffer[URBS_TO_JUGGLE][MAX_DATA_POINTS_PER_URB + CANARY_COUNT];
-//static int16_t urb_audio_buffer[MAX_DATA_POINTS_PER_URB + CANARY_COUNT];
 static my_usbdevfs_urb urbRequests[URBS_TO_JUGGLE];
 
 static void initialiseRequests(jint endpointAddress, int requested_bytes_per_frame)
@@ -171,7 +171,7 @@ static void initialiseRequests(jint endpointAddress, int requested_bytes_per_fra
         urb->status = 0;
         urb->flags = USBDEVFS_URB_ISO_ASAP;     // Request isochronous transfer.
         urb->buffer = audio_buffer[i];
-        urb->buffer_length = 0;
+        urb->buffer_length = MAX_DATA_POINTS_PER_URB; // 0;
         urb->actual_length = 0;                 // Not set for isochronous transfers.
         urb->start_frame = 0;
         urb->number_of_packets = PACKETS_PER_URB;
@@ -185,6 +185,48 @@ static void initialiseRequests(jint endpointAddress, int requested_bytes_per_fra
             pIsoPacketDesc->actual_length = 0;
             pIsoPacketDesc->status = 0;
         }
+    }
+}
+
+/**
+ * Launch all the URBs. Return 0 if this was OK, or errno if not.
+ */
+static int launch_URBs(int fd_usb) {
+    int ret;
+    for (auto & urbRequest : urbRequests) {
+        do {
+            ret = ioctl(fd_usb, USBDEVFS_SUBMITURB, &urbRequest);
+        } while((ret < 0) && (errno == EINTR));
+        if (ret != 0) {
+            __android_log_print(ANDROID_LOG_ERROR, __FILE__, "USBDEVFS_SUBMITURB: %d %d", ret, errno);
+
+            // No point going any further, we will block on USBDEVFS_REAPURB indefinitely.
+            pthread_mutex_unlock(&s_mutex);
+            return errno;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Discard all the URBs and clean them up. Return 0 if this was OK, or errno if not.
+ */
+static void discard_URBs(int fd_usb) {
+
+    // Shoot down all the URBs:
+    for (auto & urbRequest : urbRequests) {
+        do {
+            ioctl(fd_usb, USBDEVFS_DISCARDURB, &urbRequests[0]);
+        } while (errno == EINTR);
+    }
+
+    // Clean them all up by waiting for completion with ioctl:
+    usbdevfs_urb *urbReaped = nullptr;
+    for (auto & urbRequest : urbRequests) {
+        do {
+            // Using the non blocking variant of reap:
+            ioctl(fd_usb, USBDEVFS_REAPURBNDELAY, &urbReaped);
+        } while (errno == EINTR);
     }
 }
 
@@ -298,41 +340,63 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
     __android_log_print(ANDROID_LOG_INFO, __FILE__, "starting streaming");
 
     int balls_in_the_air = 0;
-
     int s_counter = 0;  // For debugging.
+    /*
+     * Prepare to use poll on the USB file descriptor to find if data is ready to be read.
+     * For some reason, POLLOUT is set when the USB fd is ready to be read. Me neither.
+     */
+    struct pollfd pfd = { .fd = fd_usb, .events = POLLIN | POLLOUT };
 
     /**
      * Kick things off by throwing all the balls in the air. We will catch them below
-     * and continue juggling them.
+     * and continue juggling them, hopefully without dropping any.
      */
-    for (int i = 0; i < URBS_TO_JUGGLE; i++) {
-        do {
-            ret = ioctl(fd_usb, USBDEVFS_SUBMITURB, &urbRequests[i]);
-            balls_in_the_air++;
-        } while((ret < 0) && (errno == EINTR));
-        if (ret != 0) {
-            __android_log_print(ANDROID_LOG_ERROR, __FILE__, "USBDEVFS_SUBMITURB: %d %d", ret, errno);
-
-            // No point going any further, we will block on USBDEVFS_REAPURB indefinitely.
-            pthread_mutex_unlock(&s_mutex);
-            return errno;
-        }
+    if (launch_URBs(fd_usb) != 0) {
+        // No point going any further, we will block on USBDEVFS_REAPURB indefinitely.
+        pthread_mutex_unlock(&s_mutex);
+        return errno;
     }
+    balls_in_the_air = URBS_TO_JUGGLE;
 
     /**
      * Juggle the balls until we get notice to stop - at which point, continue catching them
      * until none remain in the air.
      */
     while ((!s_cancel_pending) || (balls_in_the_air > 0)) {
-        usbdevfs_urb *urbReaped = NULL;
+        usbdevfs_urb *urbReaped = nullptr;
         do {
             /*
-             * Important: USBDEVFS_REAPURB will hang for ever if the device sends more data then we
+             * Important: USBDEVFS_REAPURB may hang for ever if the device sends more data then we
              * requested. Usually that doesn't happen, but some microphones will occasionally pad the
-             * data if they don't sync their sampling rate to SoF. On the other hand if we request
+             * data if they don't sync their sampling rate to willSoF. On the other hand if we request
              * more data it can also hang. The solution seems to be to use the
              * endpoint buffer size from the USB descriptor.
+             *
+             * EMT2 however plays by its own rules, and can send much larger data packets than
+             * it should. There is some special handling below for that.
              */
+
+            // Use poll to block until data is ready or we time out - ioctl blocks indefinitely
+            // making timeouts hard to handle. The USB stream can hang if a larger frame than the buffer
+            // size declared in the USB descriptor is received. Timeout seems to be the only way to
+            // detect this. EMT2 is one culprit, there may be others.
+            const int pollTimeoutMs = 1000;
+            int r = poll(&pfd, 1, pollTimeoutMs);
+            // __android_log_print(ANDROID_LOG_DEBUG, __FILE__, "poll: %d errno=%d flags=0x%02x", ret, errno, pfd.revents);
+
+            if (r <= 0) {
+                // Timeout occurred or something worse.
+                __android_log_print(ANDROID_LOG_ERROR, __FILE__,
+                                    "poll returned %d, no data ready, errno = %d", ret, errno);
+                __android_log_print(ANDROID_LOG_INFO, __FILE__, "recreating URBs");
+
+                // Discard all the URBs and clean them up:
+                discard_URBs(fd_usb);
+                if (bridgeClass != nullptr)
+                    env->DeleteLocalRef(bridgeClass);   // This also cleans up onDataBufferReadyMethod.
+                pthread_mutex_unlock(&s_mutex);
+                return ETIMEDOUT;
+            }
 
             // Unlock the mutex, so that USB data can be populated into the buffer but
             // other things happen at the same time:
@@ -343,6 +407,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
                 s_counter++;
                 balls_in_the_air--;     // We caught one.
                 auto *req = (usbdevfs_urb *) urbReaped->usercontext;
+
                 auto *pData = (data_t *) req->buffer;
                 // The actual number of samples read might deviate slightly from the number expected,.
                 // if the microphone doesn't sync its sampling rate with the host SoF:
@@ -403,7 +468,6 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
                     wav_writesomedata(s_fd_file, pData, nominal_bytes_per_frame);
                 }
 #endif
-
             }
         } while((ret < 0) && (errno == EINTR) && (!s_cancel_pending));
         if (ret != 0) {
@@ -415,7 +479,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
             continue;
         }
 
-        // Recycle the request:
+        // Recycle the request unless a cancel is pending:
         if (!s_cancel_pending) {
             usbdevfs_urb *req = (usbdevfs_urb *) urbReaped->usercontext;
             do {
