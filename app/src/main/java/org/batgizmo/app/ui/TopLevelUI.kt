@@ -140,6 +140,12 @@ class TopLevelUI(private val model: UIModel) {
             if (model.settings.enableLogging) {
                 diagnosticLogger.startLogging(context)
                 diagnosticLogger.log { "Build.VERSION.SDK_INT = ${Build.VERSION.SDK_INT}" }
+                diagnosticLogger.log { "Build.MANUFACTURER = ${Build.MANUFACTURER}" }
+                diagnosticLogger.log { "Build.MODEL = ${Build.MODEL}" }
+                diagnosticLogger.log { "Build.BRAND = ${Build.BRAND}" }
+                diagnosticLogger.log { "Build.DEVICE = ${Build.DEVICE}" }
+                diagnosticLogger.log { "Build.PRODUCT = ${Build.PRODUCT}" }
+                diagnosticLogger.log { "Build.HARDWARE = ${Build.HARDWARE}" }
             }
             else
                 diagnosticLogger.stopLogging()
