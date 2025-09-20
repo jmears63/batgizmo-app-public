@@ -13,7 +13,6 @@ cmake_minimum_required(VERSION 3.22.1)
 project("batgizmo-native")
 
 set(CMAKE_VERBOSE_MAKEFILE ON)
-# set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--page_size=0x4000")
 
 # Creates and names a library, sets it as either STATIC
 # or SHARED, and provides the relative paths to its source code.

@@ -65,14 +65,14 @@ import org.batgizmo.app.ui.SpectrogramUI
 import org.batgizmo.app.ui.TopLevelUI
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
-import uk.org.gimell.batgimzoapp.BuildConfig
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 data class OpenWavFileResult(
     val wfi: WavFileReader.WavFileInfo? = null,
     val errorMessage: String? = null,
-    val pagingData: AbstractPipeline.PagingData? = null
+    val pagingData: AbstractPipeline.PagingData? = null,
+    val pipelineParametersSnapshot: PipelineParameters? = null
 )
 
 /**
@@ -358,7 +358,6 @@ class UIModel(application: Application,
     // threshold. Multiple triggers are combined into one:
     val triggerMonitorChannel = Channel<Unit>(Channel.CONFLATED)
 
-
     // Protect all the instance data:
     val mutex = Mutex()
 
@@ -372,14 +371,12 @@ class UIModel(application: Application,
     private val locationMutableFlow = MutableStateFlow<Location?>(null)
     val locationFlow : StateFlow<Location?> = locationMutableFlow
     val locationTracker = LocationTracker(getApplication()) { it ->
-        if (BuildConfig.DEBUG)
-            Timber.d("Location update received: ${it.latitude} ${it.longitude}")
+        Timber.d("Location update received: ${it.latitude} ${it.longitude}")
         locationMutableFlow.value = it
     }
 
     init {
-        if (BuildConfig.DEBUG)
-            Timber.d("Creating instance of UIModel")
+        Timber.d("Creating instance of UIModel")
 
         resetRanges()
         spectrogramButtonState.reset()
@@ -412,12 +409,12 @@ class UIModel(application: Application,
         // Select a colour to use for the amplitude graph. It looks nice
         // if this is one of the colours used by the spectrogram:
 
-        if (BuildConfig.DEBUG)
-            Timber.d(
-                "Setting colourMapSize to $colourMapSize on model instance ${
-                    System.identityHashCode(this)
-                }."
-            )
+        Timber.d(
+            "Setting colourMapSize to $colourMapSize on model instance ${
+                System.identityHashCode(this)
+            }."
+        )
+
         val size = colourMapSize
         // val amplitudeGraphColour: Short =
         //    (if (size != null) colourMap[(size * 0.5f).toInt()] else 0xFFFF) as Short
@@ -452,10 +449,9 @@ class UIModel(application: Application,
     suspend fun updateStoredSettings(updatedSettings: Settings) {
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                if (BuildConfig.DEBUG)
-                    Timber.d(
-                        "updateStoredSettings called: useDarkTheme = ${updatedSettings.useDarkTheme}"
-                    )
+                Timber.d(
+                    "updateStoredSettings called: useDarkTheme = ${updatedSettings.useDarkTheme}"
+                )
                 settings = updatedSettings
                 // Invoke edit on the datastore to update and persist the changes:
                 settingsDataStore.edit { prefs -> settings.copyToPreferences(prefs) }
@@ -488,7 +484,7 @@ class UIModel(application: Application,
      * This method leaves the file open if it is successful, so that data can be read from it.
      * It can be closes by calling reset().
      */
-    fun openFile(uri: Uri, filename: String, settings: Settings) {
+    fun openFile(uri: Uri, filename: String) {
         val context: Context = getApplication()
 
         val model = this
@@ -502,8 +498,10 @@ class UIModel(application: Application,
 
             mutex.withLock {
                 try {
-                    if (BuildConfig.DEBUG)
-                        Timber.d("openFile called for $filename")
+                    Timber.d("openFile called for $filename")
+
+                    // Take a snapshot of the parameters used to build this pipeline.
+                    val pps = settings.pipelineParameters.copy()
 
                     // Synchronously clean up in case the pipeline was already open:
                     internalClosePipeline()
@@ -519,7 +517,7 @@ class UIModel(application: Application,
 
                     // Pass ownership of the WavFileReader to the pipeline, which now owns
                     // it and must do cleanup in due course:
-                    val p = FileViewerPipeline(
+                    val p = FileViewerPipeline(pps,
                         viewModelScope, wfr,
                         context, model,
                         spectrogramBitmapHolder, amplitudeBitmapHolder,
@@ -594,7 +592,7 @@ class UIModel(application: Application,
         }
     }
 
-    fun openLive(settings: Settings, onFileWriterError: (String) -> Unit) {
+    fun openLive(onFileWriterError: (String) -> Unit) {
         val model = this
         // Heavy processing in CPU worker thread:
         viewModelScope.launch(Dispatchers.Default) {
@@ -608,6 +606,9 @@ class UIModel(application: Application,
 
             mutex.withLock {
                 try {
+                    // Take a snapshot of the parameters used to build this pipeline.
+                    val pps = settings.pipelineParameters.copy()
+
                     // Synchronously clean up in case the pipeline was already open:
                     internalClosePipeline()
 
@@ -615,6 +616,7 @@ class UIModel(application: Application,
                     mutableTimeVisibleRangeFlow.value = defaultTimeVisibleRange
                     mutableFrequencyVisibleRangeFlow.value = defaultFrequencyVisibleRange
                     mutableAmplitudeVisibleRangeFlow.value = defaultAmplitudeVisibleRange
+                    // mutableTimeAxisRangeFlow.value = defaultTimeAxisRange
 
                     /*
                         Connect to the USB data stream, very asynchronously because user
@@ -641,12 +643,13 @@ class UIModel(application: Application,
                         require(result.sampleRate != null)
 
                         val p = LiveUSBPipeline(
+                            pps,
                             viewModelScope,
                             context, model,
                             spectrogramBitmapHolder, amplitudeBitmapHolder,
                             mutableTimeAxisRangeFlow, mutableFrequencyAxisRangeFlow,
                             mutableDetailsTextFlow, result.sampleRate,
-                            result.sampleRate * settings.dataPageIntervalS
+                            result.sampleRate * pps.dataPageTimeSpanS
                         ) {
                             // This lambda is called if a trigger was detected in the live data.
 
@@ -672,15 +675,13 @@ class UIModel(application: Application,
                         )
 
                         pipeline = p
-                        // Preset the time range in live mode to a practical value. This has a side affect of
-                        // updating the axis ranges in the UI:
-                        val logicalTimeRange = FloatRange(
-                            0f,
-                            minOf(
-                                LiveUSBPipeline.DEFAULTLIVETIMESPAN_S / settings.dataPageIntervalS,
-                                1f
-                            )
-                        )
+
+                        // Preset the time range in live mode to a value according to settings.
+                        // This has a side affect of updating the axis ranges in the UI:
+                        val (timeAxisRange, dummy) = getTimeAxisRangeForLive()
+                        mutableTimeAxisRangeFlow.value = timeAxisRange
+                        val logicalTimeRange = FloatRange(0f,
+                            timeAxisRangeFlow.value.endInclusive / pps.dataPageTimeSpanS)
                         internalSetSpectrogramVisibleRange(logicalTimeRange, FloatRange(0f, 1f))
 
                         // Start up the file writer ready to write data to file:
@@ -729,12 +730,40 @@ class UIModel(application: Application,
         }
     }
 
+    /**
+     * On entering live mode or resuming after pause, we may need to reset the
+     * X axis time span to a fixed range.
+     *
+     * The return value is a Pair of the X axis range to use, and a flag indicating if a rerender is required.
+     */
+    fun getTimeAxisRangeForLive(): Pair<FloatRange, Boolean> {
+        require(pipeline != null) { "Logical error: pipeline must exist at this point" }
+        pipeline?.let { p ->
+            val pps: PipelineParameters = p.pipelineParametersSnapshot
+            val initialXSpan = timeAxisRangeFlow.value.difference()
+            if (settings.defaultLiveTimeSpanS == Settings.DefaultLiveTimeSpanOptions.DEFAULTLIVETIMESPAN_NONE.value) {
+                // Create a range from the current live one, with a sanity limit, clamped to the maximum
+                // time span supported:
+                val minSaneTimeRangeS = 0.5F
+                var xSpan = maxOf(timeAxisRangeFlow.value.difference(), minSaneTimeRangeS)
+                xSpan = minOf(xSpan, pps.dataPageTimeSpanS.toFloat())
+                return Pair(FloatRange(0F, xSpan), xSpan != initialXSpan)
+            } else {
+                // Set the time axis range for live mode according to the settings:
+                val xSpan = minOf(settings.defaultLiveTimeSpanS, pps.dataPageTimeSpanS).toFloat()
+                return Pair(FloatRange(0F, xSpan), xSpan != initialXSpan)
+            }
+        }
+
+        // Shouldn't get here:
+        return Pair(FloatRange(0f, settings.defaultLiveTimeSpanS.toFloat()), true)
+    }
+
     fun startAudio() {
         viewModelScope.launch(Dispatchers.Default) {
 
             var audioStartResult: UsbService.AudioStartResult? = null
-            if (BuildConfig.DEBUG)
-                Timber.d("startAudio callled")
+            Timber.d("startAudio callled")
 
             mutex.withLock {
 
@@ -748,8 +777,7 @@ class UIModel(application: Application,
             }
 
             audioStartResult?.let {
-                if (BuildConfig.DEBUG)
-                    Timber.d("Sending result of start audios: $it")
+                Timber.d("Sending result of start audios: $it")
                 audioStartChannel.send(it)
             }
         }
@@ -760,8 +788,7 @@ class UIModel(application: Application,
 
             mutex.withLock {
                 usbService.stopAudio()
-                if (BuildConfig.DEBUG)
-                    Timber.d("stopAudio called")
+                Timber.d("stopAudio called")
             }
         }
     }
@@ -808,33 +835,44 @@ class UIModel(application: Application,
     fun resumeLiveStream() {
         viewModelScope.launch(Dispatchers.Default + CoroutineName("openLive coroutine")) {
             mutex.withLock {
+                Timber.w("Logical error: pipeline must exist at this point (2)")
+                pipeline?.let { p ->
+                    p.resetState()
 
-                pipeline?.resetState()
+                    val tar = timeAxisRangeFlow.value
+                    val tar2 = tar
+                    val pps = p.pipelineParametersSnapshot
 
-                /*
-                    When resuming live acquisition, the visible region may have been panned and
-                    scaled. We will preserve the Y max and min, and the X range, but move
-                    the X range so it starts at 0, and apply a sane minimum time span.
-                 */
-                val saneMinimumTimeSpanS = 0.3F
-                val minTimeSpam = saneMinimumTimeSpanS / settings.dataPageIntervalS
-                val timeVisibleRange = FloatRange(
-                    0f,
-                    maxOf(
-                        (mutableTimeVisibleRangeFlow.value.endInclusive - mutableTimeVisibleRangeFlow.value.start),
-                        minTimeSpam
+                    /*
+                        When resuming live acquisition, the visible region may have been panned and
+                        scaled. We will preserve the Y max and min, and the X range, but move
+                        the X range so it starts at 0, and apply a sane minimum time span.
+                     */
+
+                    // Get the live range to use based on settings:
+                    val (timeAxisRange, rerender) = getTimeAxisRangeForLive()
+                    // Calculate the corresponding logical range:
+                    val visibleTimeRange = FloatRange(
+                        0F,
+                        timeAxisRange.endInclusive / pps.dataPageTimeSpanS
                     )
-                )
 
-                if (BuildConfig.DEBUG)
                     Timber.d(
-                        "resumeLiveStream: adjusting time logical range from ${mutableTimeVisibleRangeFlow.value} to $timeVisibleRange"
+                        "resumeLiveStream: adjusting time logical range from ${mutableTimeVisibleRangeFlow.value} to $visibleTimeRange"
                     )
-                internalSetSpectrogramVisibleRange(
-                    timeVisibleRange,
-                    frequencyVisibleRangeFlow.value
-                )
-                usbService.resume()
+
+                    // onVisibleRangeChange(settings, shouldAutoBnC, rawPageRangeState.value)
+
+                    internalSetSpectrogramVisibleRange(
+                        visibleTimeRange,
+                        frequencyVisibleRangeFlow.value
+                    )
+
+                    // Do a full pipeline rebuild so that any new settings take effect:
+                    reload(settings, null, false)
+
+                    usbService.resume()
+                }
             }
         }
     }
@@ -963,16 +1001,19 @@ class UIModel(application: Application,
      * This method is called from the UI so heavy calculations are offloaded to
      * another thread.
      */
-    fun onSettingsUpdate(settings: Settings, previousSettings: Settings?, rawPageRange: HORange?) {
+    fun onSettingsUpdate(newSettings: Settings, previousSettings: Settings?, rawPageRange: HORange?) {
         viewModelScope.launch(CoroutineName("onSettingsUpdate coroutine")) {
             mutex.withLock {
-                if (BuildConfig.DEBUG)
-                    Timber.d("onSettingsUpdate called")
+                Timber.d("onSettingsUpdate called")
 
                 var resetVisibleRange = false
+                pipeline?.let { p ->
+                    val pps = p.pipelineParametersSnapshot
+                    if (newSettings.pipelineParameters.dataPageTimeSpanS != pps.dataPageTimeSpanS)
+                        resetVisibleRange = true
+                }
                 previousSettings?.let {
-                    if (settings.dataPageIntervalS != it.dataPageIntervalS
-                        || settings.pageOverlapPercent != it.pageOverlapPercent
+                    if (newSettings.pageOverlapPercent != it.pageOverlapPercent
                     ) {
                         resetVisibleRange = true
                     }
@@ -982,7 +1023,7 @@ class UIModel(application: Application,
                   For now, do a complete reload for any settings change. This could be smarter
                   but the reload is pretty fast so probably this is fine.
                  */
-                reload(settings, rawPageRange, resetVisibleRange)
+                reload(newSettings, rawPageRange, resetVisibleRange)
             }
         }
     }
@@ -1002,8 +1043,7 @@ class UIModel(application: Application,
         rawPageRange: HORange?
     ) {
         mutex.withLock {
-            if (BuildConfig.DEBUG)
-                Timber.d("onUISizeChange called: $spectrogramSizeDp; $amplitudeSizeDp")
+            Timber.d("onUISizeChange called: $spectrogramSizeDp; $amplitudeSizeDp")
 
             // If we are on to a new UI generation, reset the cached sizes to avoid using stale data
             // or mixing sizes between generations:
@@ -1027,10 +1067,9 @@ class UIModel(application: Application,
             }
 
             if (changed && this.spectrogramSizeDp != null) {
-                if (BuildConfig.DEBUG)
-                    Timber.d(
-                        "onUISizeChange applying UI size: $generation ${this.spectrogramSizeDp}, ${this.amplitudeSizeDp}"
-                    )
+                Timber.d(
+                    "onUISizeChange applying UI size: $generation ${this.spectrogramSizeDp}, ${this.amplitudeSizeDp}"
+                )
                 viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
                     mutex.withLock {
                         reload(settings, rawPageRange, autoBnCRequiredFlow.value)
@@ -1047,8 +1086,7 @@ class UIModel(application: Application,
      * this is transformed (the page).
      */
     fun onPageChange(settings: Settings, rawPageRange: HORange) {
-        if (BuildConfig.DEBUG)
-            Timber.d("onPageChange called: $rawPageRange")
+        Timber.d("onPageChange called: $rawPageRange")
         pipeline?.let {
             viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
                 mutex.withLock {
@@ -1074,15 +1112,13 @@ class UIModel(application: Application,
         resetVisibleRange: Boolean = false
     ) {
         pipeline?.let { p ->
-            if (BuildConfig.DEBUG)
-                Timber.d("reload called for rawPageRange = ${rawPageRange}")
+            Timber.d("reload called for rawPageRange = ${rawPageRange}")
 
-            val newFftParameters = getFftParameters(settings)
+            val newFftParameters = getFftParameters(p.pipelineParametersSnapshot, settings)
             var fftParametersChanged = false
             newFftParameters?.let { fftp ->
                 fftParametersChanged = shouldRenderForFft(fftp)
-                if (BuildConfig.DEBUG)
-                    Timber.d("reload transformed required: $fftParametersChanged")
+                Timber.d("reload transformed required: $fftParametersChanged")
                 currentFftParameters = fftp
             }
 
@@ -1133,8 +1169,7 @@ class UIModel(application: Application,
         if (newBnCRange != null) {
             val logicalBnCRange = ColourMapStep.bnCRangeDbToLogical(newBnCRange)
 
-            if (BuildConfig.DEBUG)
-                Timber.d("doAutoBnC called: $newBnCRange")
+            Timber.d("doAutoBnC called: $newBnCRange")
             // Update our single source of truth, notifying the UI as a side effect:
             mutableBnCRangeFlow.value = logicalBnCRange
 
@@ -1147,13 +1182,14 @@ class UIModel(application: Application,
      * Return true if either values has changed since the last call that are enabled for auto
      * in the settings. This can be used to trigger UI a re-rendering.
      */
-    private suspend fun getFftParameters(settings: Settings, sampleRate: Int? = null)
+    private suspend fun getFftParameters(pps: PipelineParameters, settings: Settings, sampleRate: Int? = null)
             : AbstractPipeline.FftParameters? {
 
         val xAxisSpan = timeAxisRangeFlow.value.difference()
         val yAxisSpan = frequencyAxisRangeFlow.value.difference()
 
-        val newFftParameters = calculateFftParameters(xAxisSpan, yAxisSpan, sampleRate, settings)
+        val newFftParameters = calculateFftParameters(
+            xAxisSpan, yAxisSpan, sampleRate, pps)
 
         return newFftParameters
     }
@@ -1174,7 +1210,7 @@ class UIModel(application: Application,
         xAxisSpan: Float,
         yAxisSpan: Float,
         sampleRate: Int?,
-        settings: Settings
+        pipelineParameters: PipelineParameters
     ): AbstractPipeline.FftParameters? {
 
         var newFftParameters: AbstractPipeline.FftParameters? = null       // Window size, overlap.
@@ -1194,7 +1230,7 @@ class UIModel(application: Application,
                 }
             } else {
                 newFftParameters = AbstractPipeline.calculateFftParameters(
-                    settings, screenFactors, sampleRate
+                    pipelineParameters, screenFactors, sampleRate
                 )
 
             }

@@ -28,30 +28,35 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 
+/**
+ * There are two kinds of settings:
+ * * General settings that take effect immediately.
+ * * Pipeline related settings that are used when creating a processing pipeline, and are
+ *      associated the pipeline that was created.
+ */
 data class Settings(
     var useDarkTheme: Boolean = true,
     var amplitudePaneVisibility: Int = VisibilityOptions.AUTO.value,
     var showGrid: Boolean = true,
-    var dataPageIntervalS: Int = DataBufferIntervalOptions.DATABUFFER_5S.value,
-    var pageOverlapPercent: Int = PagingOverlapOptions.PAGINGOVERLAP_25.value,
-    var fftOverlapPercent: Int = FftOverlapOptions.OVERLAP_AUTO75.value,
+    var defaultLiveTimeSpanS: Int = DefaultLiveTimeSpanOptions.DEFAULTLIVETIMESPAN_3S.value,
+    var pageOverlapPercent: Int = PagingOverlapOptions.PAGINGOVERLAP_25.value,                  // *
     var autoBnCEnabledViewer: Boolean = true,
     var autoBnCEnabledLive: Boolean = false,
-    var nFft: Int = NFftOptions.NFFT_AUTO.value,
     var showParameterOverlay: Boolean = true,
-    var leftHandButtons: Boolean = true,
+    var leftHandButtons: Boolean = false,
     var enableLogging: Boolean = false,
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
-    var heterodyneRef2kHz: Int = 83,
-    var locationInFile: Boolean = true,
+    var heterodyneRef2kHz: Int = 20,
+    var includeLocationInFile: Boolean = true,
     var audioBoostShift: Int = AudioBoostOptions.AUDIOBOOST_8.value,
     var preTriggerTimeMs: Int = PreTriggerTimeOptions.PRETRIGGER_TIME_500MS.value,
     var postTriggerTimeMs: Int = PostTriggerTimeOptions.POSTTRIGGER_TIME_1000MS.value,
     var maxFileTimeMs: Int = MaxFileTimeOptions.MAX_FILE_TIME_5000MS.value,
     var autoTriggerThresholdDb: Float = 40f,
     var autoTriggerRangeMinkHz: Float = 16f,
-    var autoTriggerRangeMaxkHz: Float = 120f
+    var autoTriggerRangeMaxkHz: Float = 120f,
+    var pipelineParameters: PipelineParameters = PipelineParameters()
 ) {
     // Provide some abstraction to allow different enums to be handled the same way:
     interface EnumHelper {
@@ -95,12 +100,24 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
-    enum class DataBufferIntervalOptions(val value: Int, val label: String) : EnumHelper {
+    enum class DataBufferTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
         DATABUFFER_5S(5, "5s"),
         DATABUFFER_10S(10, "10s"),
         DATABUFFER_15S(15, "15s"),
-        DATABUFFER_20S(20, "20s"),
-        DATABUFFER_30S(30, "30s");
+        DATABUFFER_20S(20, "20s");
+        // DATABUFFER_30S(30, "30s");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+    }
+
+    enum class DefaultLiveTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
+        DEFAULTLIVETIMESPAN_NONE(0, "Use existing"),
+        DEFAULTLIVETIMESPAN_1S(1, "1s"),
+        DEFAULTLIVETIMESPAN_2S(2, "2s"),
+        DEFAULTLIVETIMESPAN_3S(3, "3s"),
+        DEFAULTLIVETIMESPAN_5S(5, "5s"),
+        DEFAULTLIVETIMESPAN_10S(10, "10s");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
@@ -152,18 +169,6 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
-    enum class MinFileTimeOptions(val value: Int, val label: String) : EnumHelper {
-        MIN_FILE_TIME_500MS(500, "0.5s"),
-        MIN_FILE_TIME_1000MS(1000, "1s"),
-        MIN_FILE_TIME_2000MS(2000, "2s"),
-        MIN_FILE_TIME_5000MS(5000, "5s"),
-        MIN_FILE_TIME_10000MS(10000, "10s"),
-        MIN_FILE_TIME_15000MS(15000, "15s");
-
-        override fun theValue(): Int = value
-        override fun theLabel(): String = label
-    }
-
     enum class MaxFileTimeOptions(val value: Int, val label: String) : EnumHelper {
         MAX_FILE_TIME_500MS(500, "0.5s"),
         MAX_FILE_TIME_1000MS(1000, "1s"),
@@ -176,17 +181,6 @@ data class Settings(
         override fun theLabel(): String = label    }
 
     companion object {
-        /**
-         * Coerce the FFT window size provided to the range supported.
-         */
-        fun coerceNFft(nFft: Int): Int {
-            return nFft.coerceIn(NFftOptions.NFFT_64.value, NFftOptions.NFFT_4096.value)
-        }
-
-        fun isAutoOverlap(overlapOption: Int): Boolean {
-            return overlapOption == FftOverlapOptions.OVERLAP_AUTO75.value
-                    || overlapOption == FftOverlapOptions.OVERLAP_AUTO90.value
-        }
     }
 
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")
@@ -194,10 +188,8 @@ data class Settings(
     private val keyShowGrid = booleanPreferencesKey("showGrid")
     private val keyAutoBnCViewer = booleanPreferencesKey("autoBnCViewer")
     private val keyAutoBnCLive = booleanPreferencesKey("autoBnCLive")
-    private val keyNFft = intPreferencesKey("nFft")
     private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
-    private val keyFftOverlapPercent = intPreferencesKey("fftOverlapPercent")
-    private val keyDataBufferIntervalS = intPreferencesKey("keyDataBufferIntervalS")
+    private val keyDefaultLiveTimeSpanS = intPreferencesKey("keyDefaultLiveTimeSpanS")
     private val keyPageOverlapPercent = intPreferencesKey("keyPageOverlapPercent")
     private val keyLeftHandedMode = booleanPreferencesKey("keyLeftHandedMode")
     private val keyEnableLogging = booleanPreferencesKey("enableLogging")
@@ -215,6 +207,9 @@ data class Settings(
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
+
+        pipelineParameters.copyToPreferences(prefs)
+
         // Copy the settings data into the preferences datastore:
         prefs[keyUseDarkTheme] = useDarkTheme
         prefs[keyShowParameterOverlay] = showParameterOverlay
@@ -222,9 +217,7 @@ data class Settings(
         prefs[keyShowGrid] = showGrid
         prefs[keyAutoBnCViewer] = autoBnCEnabledViewer
         prefs[keyAutoBnCLive] = autoBnCEnabledLive
-        prefs[keyNFft] = nFft
-        prefs[keyFftOverlapPercent] = fftOverlapPercent
-        prefs[keyDataBufferIntervalS] = dataPageIntervalS
+        prefs[keyDefaultLiveTimeSpanS] = defaultLiveTimeSpanS
         prefs[keyPageOverlapPercent] = pageOverlapPercent
         prefs[keyLeftHandedMode] = leftHandButtons
         prefs[keyEnableLogging] = enableLogging
@@ -232,7 +225,7 @@ data class Settings(
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
         prefs[keyAudioBoostShift] = audioBoostShift
-        prefs[keyLocationInFile] = locationInFile
+        prefs[keyLocationInFile] = includeLocationInFile
         prefs[keyPreTriggerTimeMs] = preTriggerTimeMs
         prefs[keyPostTriggerTimeMs] = postTriggerTimeMs
         prefs[keyMaxFileTimeMs] = maxFileTimeMs
@@ -242,6 +235,9 @@ data class Settings(
     }
 
     fun copyFromPreferences(prefs: Preferences) {
+
+        pipelineParameters.copyFromPreferences(prefs)
+
         if (prefs[keyUseDarkTheme] != null)
             useDarkTheme = requireNotNull(prefs[keyUseDarkTheme])
         if (prefs[keyShowParameterOverlay] != null)
@@ -254,12 +250,8 @@ data class Settings(
             autoBnCEnabledViewer = requireNotNull(prefs[keyAutoBnCViewer])
         if (prefs[keyAutoBnCLive] != null)
             autoBnCEnabledLive = requireNotNull(prefs[keyAutoBnCLive])
-        if (prefs[keyNFft] != null)
-            nFft = requireNotNull(prefs[keyNFft])
-        if (prefs[keyFftOverlapPercent] != null)
-            fftOverlapPercent = requireNotNull(prefs[keyFftOverlapPercent])
-        if (prefs[keyDataBufferIntervalS] != null)
-            dataPageIntervalS = requireNotNull(prefs[keyDataBufferIntervalS])
+        if (prefs[keyDefaultLiveTimeSpanS] != null)
+            defaultLiveTimeSpanS = requireNotNull(prefs[keyDefaultLiveTimeSpanS])
         if (prefs[keyPageOverlapPercent] != null)
             pageOverlapPercent = requireNotNull(prefs[keyPageOverlapPercent])
         if (prefs[keyLeftHandedMode] != null)
@@ -275,7 +267,7 @@ data class Settings(
         if (prefs[keyAudioBoostShift] != null)
             audioBoostShift = requireNotNull(prefs[keyAudioBoostShift])
         if (prefs[keyLocationInFile] != null)
-            locationInFile = requireNotNull(prefs[keyLocationInFile])
+            includeLocationInFile = requireNotNull(prefs[keyLocationInFile])
         if (prefs[keyPreTriggerTimeMs] != null)
             preTriggerTimeMs = requireNotNull(prefs[keyPreTriggerTimeMs])
         if (prefs[keyPostTriggerTimeMs] != null)
@@ -288,5 +280,89 @@ data class Settings(
             autoTriggerRangeMinkHz = requireNotNull(prefs[keyAutoTriggerRangeStartkHz])
         if (prefs[keyAutoTriggerRangeEndkHz] != null)
             autoTriggerRangeMaxkHz = requireNotNull(prefs[keyAutoTriggerRangeEndkHz])
+    }
+}
+
+data class PipelineParameters(
+    var dataPageTimeSpanS: Int = DataBufferTimeSpanOptions.DATABUFFER_5S.value,                 // *
+    var fftOverlapPercent: Int = FftOverlapOptions.OVERLAP_AUTO75.value,                        // *
+    var nFft: Int = NFftOptions.NFFT_AUTO.value,                                                // *
+) {
+    // Provide some abstraction to allow different enums to be handled the same way:
+    interface EnumHelper {
+        fun theValue(): Int
+        fun theLabel(): String
+    }
+
+    enum class NFftOptions(val value: Int, val label: String) : EnumHelper {
+        NFFT_AUTO(0, "Auto"),
+        NFFT_64(64, "64"),
+        NFFT_128(128, "128"),
+        NFFT_256(256, "256"),
+        NFFT_512(512, "512"),
+        NFFT_1024(1024, "1024"),
+        NFFT_2048(2048, "2048"),
+        NFFT_4096(4096, "4096");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+    }
+
+    enum class FftOverlapOptions(val value: Int, val label: String) : EnumHelper {
+        OVERLAP_AUTO75(0, "Auto (up to 75%)"),
+        OVERLAP_AUTO90(-1, "Auto (up to 90%)"), // Can be heavy on CPU.
+        OVERLAP_25(25, "25%"),
+        OVERLAP_50(50, "50%"),
+        OVERLAP_75(75, "75%"),
+        OVERLAP_90(90, "90%"),
+        OVERLAP_95(95, "95%");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+    }
+
+    enum class DataBufferTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
+        DATABUFFER_5S(5, "5s"),
+        DATABUFFER_10S(10, "10s"),
+        DATABUFFER_15S(15, "15s"),
+        DATABUFFER_20S(20, "20s"),
+        DATABUFFER_30S(30, "30s");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+    }
+
+    companion object {
+        /**
+         * Coerce the FFT window size provided to the range supported.
+         */
+        fun coerceNFft(nFft: Int): Int {
+            return nFft.coerceIn(NFftOptions.NFFT_64.value, NFftOptions.NFFT_4096.value)
+        }
+
+        fun isAutoOverlap(overlapOption: Int): Boolean {
+            return overlapOption == FftOverlapOptions.OVERLAP_AUTO75.value
+                    || overlapOption == FftOverlapOptions.OVERLAP_AUTO90.value
+        }
+    }
+
+    private val keyNFft = intPreferencesKey("nFft")
+    private val keyFftOverlapPercent = intPreferencesKey("fftOverlapPercent")
+    private val keyDataBufferIntervalS = intPreferencesKey("keyDataBufferIntervalS")
+
+    fun copyToPreferences(prefs: MutablePreferences) {
+        // Copy the settings data into the preferences datastore:
+        prefs[keyNFft] = nFft
+        prefs[keyFftOverlapPercent] = fftOverlapPercent
+        prefs[keyDataBufferIntervalS] = dataPageTimeSpanS
+    }
+
+    fun copyFromPreferences(prefs: Preferences) {
+        if (prefs[keyNFft] != null)
+            nFft = requireNotNull(prefs[keyNFft])
+        if (prefs[keyFftOverlapPercent] != null)
+            fftOverlapPercent = requireNotNull(prefs[keyFftOverlapPercent])
+        if (prefs[keyDataBufferIntervalS] != null)
+            dataPageTimeSpanS = requireNotNull(prefs[keyDataBufferIntervalS])
     }
 }

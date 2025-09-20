@@ -26,6 +26,7 @@ import android.graphics.Bitmap
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
+import timber.log.Timber
 
 class ColourMapStep(
     private val transformedDataBuffer: FloatArray,
@@ -107,7 +108,6 @@ class ColourMapStep(
                 offset, multiplier
             )
             require(rc >= 0) { "doColourMapping failed: rc = $rc" }
-
         }
     }
 

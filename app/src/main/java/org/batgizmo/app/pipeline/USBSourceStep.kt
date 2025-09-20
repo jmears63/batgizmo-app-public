@@ -93,59 +93,60 @@ class USBSourceStep(
                         )
 
                         /*
-                        Here's what we need to do. Data is arriving in native buffers, we know how much
-                        arrives, and it is appended to the raw data buffer in a circular way.
+                            Here's what we need to do. Data is arriving in native buffers, we know how much
+                            arrives, and it is appended to the raw data buffer in a circular way.
 
-                        We need to pass it to the pipeline in exact slices, which is a certain number
-                        of data samples starting from a slice starting offset. That means we have
-                        to track the slice we last sent, detect when we have enough data to send the next
-                        slice, and do so. And handle the wrapping case.
+                            We need to pass it to the pipeline in exact slices, which is a certain number
+                            of data samples starting from a slice starting offset. That means we have
+                            to track the slice we last sent, detect when we have enough data to send the next
+                            slice, and do so. And handle the wrapping case.
 
-                        Slices are sized to be an exact number of strides, as defined by the FFT window
-                        size and overlap. The raw data range for a slice has to overlap so that the first
-                        transformed value in a slice is corresponds to one stride on from the last
-                        one in the previous slice. This procedure keeps calculations simple downstream.
+                            Slices are sized to be an exact number of strides, as defined by the FFT window
+                            size and overlap. The raw data range for a slice has to overlap so that the first
+                            transformed value in a slice is corresponds to one stride on from the last
+                            one in the previous slice. This procedure keeps calculations simple downstream.
 
-                        Salient values are:
-                            CalculatedParams.rawSliceEntries        basic slice size in raw points, but...
-                            CalculatedParams.rawSliceOverlap
-                            sliceTransformedTimeBucketCount         equivalent number of transformed time points
+                            Salient values are:
+                                CalculatedParams.rawSliceEntries        basic slice size in raw points, but...
+                                CalculatedParams.rawSliceOverlap
+                                sliceTransformedTimeBucketCount         equivalent number of transformed time points
 
-                        So the raw data index starts at zero and advances by (rawSliceEntries - rawSliceOverlap).
+                            So the raw data index starts at zero and advances by (rawSliceEntries - rawSliceOverlap).
 
-                        Any data left over after the last full slice is discarded - no fractional slices.
-                    */
+                            Any data left over after the last full slice is discarded - no fractional slices.
+                        */
 
                         // Loop while there is enough data buffered to fill a slice:
                         while (rawDataBufferOffset >= nextSliceEndIndexHO) {
 
                             /*
-                         * We have enough data to submit a slice to the pipeline.
-                         *
-                         * Beware that we are executing the pipeline slice calculation asynchronously here,
-                         * without any locking that would prevent contention with other pipeline execution
-                         * resulting from initial loading or the UI. Higher level application logic prevents
-                         * this happening. But perhaps this should be more rigorous, and invoke the slice
-                         * execution via the owning pipeline object, which would grab the pipeline mutex.
-                         *
-                         * We do the sliceRender call back in through the front door so that the pipeline
-                         * is locked versus any other pipeline requests, such as from the UI. That is OK
-                         * as we aren't holding any other locks at this point.
-                         */
+                             * We have enough data to submit a slice to the pipeline.
+                             *
+                             * We do the sliceRender call back in through the front door so that the pipeline
+                             * is locked versus any other pipeline requests, such as from the UI. That is OK
+                             * as we aren't holding any other locks at this point.
+                             */
 
-                            // Have the pipeline process the new slice:
+                            val rawDataSize = rangedRawDataBuffer.buffer.size - AbstractPipeline.CANARY_ENTRIES
+
+                            /*
+                             * BEWARE: both rawDataBufferOffset and nextSliceEndIndexHO can be beyond the end of the raw data buffer at this point.
+                             * So, we clamp to the valid buffer data range:
+                             */
+                            val bufferEndReached = nextSliceEndIndexHO >= rawDataSize
                             val sliceDataRange = HORange(
-                                nextSliceEndIndexHO - calcs.rawSliceEntries,
-                                nextSliceEndIndexHO
+                                maxOf(nextSliceEndIndexHO - calcs.rawSliceEntries,0),
+                                minOf(nextSliceEndIndexHO, rawDataSize)
                             )
 
-                            // Keep track of the contiguous range raw data that we have populated:
+                            // Keep track of the contiguous range of raw data that we have populated:
                             val dar = rangedRawDataBuffer.assignedRange
                             if (dar == null) {
                                 // This is the first slice we've seen:
                                 rangedRawDataBuffer.assignedRange = sliceDataRange
                             } else {
-                                // Extend the existing range to include the current range:
+                                // Extend the existing range to include the current range, limiting to the
+                                // size of the raw data buffer for sanity:
                                 rangedRawDataBuffer.assignedRange = HORange(
                                     minOf(dar.first, sliceDataRange.first),
                                     maxOf(dar.second, sliceDataRange.second)
@@ -153,7 +154,9 @@ class USBSourceStep(
                             }
                             // Timber.d("JM: new raw data _dataAssignedRange = ${rangedRawDataBuffer.assignedRange}")
 
-                            pipeline.sliceRender(sliceDataRange, transformedDataBufferOffset)
+                            pipeline.sliceRender(
+                                sliceDataRange,
+                                transformedDataBufferOffset)
 
                             // Render the slices to UI as we go:
                             spectrogramBitmapHolder.signalUpdate()
@@ -161,29 +164,17 @@ class USBSourceStep(
 
                             // Did we overlap the end of the visible region?
                             val visibleBufferOffsetLimit =
-                                (rangedRawDataBuffer.buffer.size * model.timeVisibleRangeFlow.value.endInclusive)
+                                (rawDataSize * model.timeVisibleRangeFlow.value.endInclusive)
                                     .toInt()
                                     .coerceIn(
                                         calcs.rawSliceEntries,
-                                        rangedRawDataBuffer.buffer.size
+                                        rawDataSize
                                     )
                             val visibleRegionOverflow =
                                 nextSliceEndIndexHO > visibleBufferOffsetLimit
 
-                            // Increment allowing for slice overlap so that the slices result in transformed
-                            // data at equal intervals:
-                            nextSliceEndIndexHO += (calcs.rawSliceEntries - calcs.rawSliceOverlap)
-                            transformedDataBufferOffset += calcs.sliceTransformedTimeBucketCount
-
-                            /*
-                            Wrap if we need to. There are two cases that need a wrap:
-                            * The slice we just rendered overlaps the end of the visible region,
-                            * OR, the next slice would overflow the end of the raw buffer.
-                            Actually the second shouldn't arise, but we check for paranoia reasons.
-                         */
-
-                            // Would the next slice worth of data overlap the end of the visible region?
-                            if (visibleRegionOverflow) {
+                            // Do we need to wrap to the start of the buffer:
+                            if (bufferEndReached || visibleRegionOverflow) {
                                 // Simplification - just discard surplus data at the end of the raw buffer
                                 // and reset. No one can tell if the start of the visible spectrogram exactly
                                 // picks up where it left off at the end.
@@ -191,6 +182,14 @@ class USBSourceStep(
                                 rawDataBufferOffset = 0
                                 nextSliceEndIndexHO = calcs.rawSliceEntries
                                 transformedDataBufferOffset = 0
+                            }
+                            else
+                            {
+                                // Increment allowing for slice overlap so that the slices result in transformed
+                                // data at equal intervals. Beware that nextSliceEndIndexHO can be off the end
+                                // of the raw data buffer - subsequent code needs to handle that.
+                                nextSliceEndIndexHO += (calcs.rawSliceEntries - calcs.rawSliceOverlap)
+                                transformedDataBufferOffset += calcs.sliceTransformedTimeBucketCount
                             }
                         }
                     }

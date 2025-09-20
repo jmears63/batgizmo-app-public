@@ -35,6 +35,7 @@ import kotlinx.coroutines.sync.withLock
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
+import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.pipeline.ColourMapStep.Companion.dbRangeMax
@@ -46,6 +47,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 abstract class AbstractPipeline(
+    val pipelineParametersSnapshot: PipelineParameters,
     protected val scope: CoroutineScope,
     protected val context: Context,
     protected val model: UIModel,
@@ -87,13 +89,13 @@ abstract class AbstractPipeline(
          * and screen factors.
          */
         fun calculateFftParameters(
-            settings: Settings,
+            pipelineParameters: PipelineParameters,
             screenFactors: ScreenFactors,
             sampleRate: Int
         ) : FftParameters {
 
-            var fftWindowSamples: Int = settings.nFft
-            if (fftWindowSamples == Settings.NFftOptions.NFFT_AUTO.value) {
+            var fftWindowSamples: Int = pipelineParameters.nFft
+            if (fftWindowSamples == PipelineParameters.NFftOptions.NFFT_AUTO.value) {
                 /*
                     Find a window size that results in roughly square transformed data points as
                     viewed on the screen:
@@ -110,7 +112,7 @@ abstract class AbstractPipeline(
                 calculatedWindowSamples *= 2  // Subjectively, this looks better.
 
                 // Limit the range of windows sizes we support:
-                fftWindowSamples = Settings.coerceNFft(calculatedWindowSamples)
+                fftWindowSamples = PipelineParameters.coerceNFft(calculatedWindowSamples)
             }
 
             /*
@@ -118,9 +120,9 @@ abstract class AbstractPipeline(
                 what window overlap we want.
             */
 
-            var overlapPercentage: Int = settings.fftOverlapPercent
+            var overlapPercentage: Int = pipelineParameters.fftOverlapPercent
 
-            if (Settings.isAutoOverlap(settings.fftOverlapPercent)) {
+            if (PipelineParameters.isAutoOverlap(pipelineParameters.fftOverlapPercent)) {
 
                 /*
                     Find a window overlap size that gives us no more than half a data point per
@@ -132,7 +134,7 @@ abstract class AbstractPipeline(
                 val multiplier: Float = 2f / fftWindowPixels
                 val calculatedOverlapPercentage = 100f / multiplier
                 val maxOverlap: Float =
-                    if (settings.fftOverlapPercent == Settings.FftOverlapOptions.OVERLAP_AUTO75.value)
+                    if (pipelineParameters.fftOverlapPercent == Settings.FftOverlapOptions.OVERLAP_AUTO75.value)
                         75f else 90f
                 overlapPercentage = calculatedOverlapPercentage.coerceIn(0f, maxOverlap).toInt()
             }
@@ -386,8 +388,7 @@ abstract class AbstractPipeline(
         amplitudeSizeDp: DpSize? = null,
         doRender: Boolean,
     ) {
-        if (BuildConfig.DEBUG)
-            Timber.d("internalExecute called")
+        Timber.d("internalFullExecute called")
 
         // Slight hack if no amplitude pane:
         val dummyAmplitudeSize = DpSize(100.dp, 100.dp)
@@ -396,8 +397,7 @@ abstract class AbstractPipeline(
         // UI, to avoid momentary blanking of the screen.
         internalShutdown(updateUI = false)
 
-        if (BuildConfig.DEBUG)
-            Timber.d("internalExecute calling setupPipeline")
+        Timber.d("internalFullExecute calling setupPipeline")
         pipelineData = setupPipeline(
             fftParameters,
             rawPageRange,
@@ -548,7 +548,7 @@ abstract class AbstractPipeline(
         try {
             // Calculate everything we need to know to set up the pipeline:
             val calcs: CalculatedParams =
-                doCalculations(model.settings, sampleRate, sampleCount, fftParameters, rawPageRange)
+                doCalculations(pipelineParametersSnapshot, sampleRate, sampleCount, fftParameters, rawPageRange)
 
             // Update the UI with details of the transform:
             mutableDetailsTextFlow.value = "%.1fs at %d kHz\nFFT window %d, overlap %d".format(
@@ -682,12 +682,11 @@ abstract class AbstractPipeline(
      * the data.
      */
     suspend fun getDefaultFftParameters(
-        //wfi: WavFileReader.WavFileInfo,
         sampleRate: Int,
         canvasSize: DpSize
     ): FftParameters {
         mutex.withLock {
-            val maxRawDataCount = (model.settings.dataPageIntervalS * sampleRate).toInt()
+            val maxRawDataCount = (pipelineParametersSnapshot.dataPageTimeSpanS * sampleRate).toInt()
             val rawDataCount: Int = minOf(sampleCount, maxRawDataCount)
             // val xAxisSpan = rawDataCount.toFloat() / sampleRate
 
@@ -697,14 +696,14 @@ abstract class AbstractPipeline(
                 yAxisSpan
             )
 
-            val fftParameters = calculateFftParameters(model.settings, screenFactors, sampleRate)
+            val fftParameters = calculateFftParameters(pipelineParametersSnapshot, screenFactors, sampleRate)
 
             return fftParameters
         }
     }
 
     private fun doCalculations(
-        settings: Settings,
+        pipelineParameters: PipelineParameters,
         sampleRate: Int,
         sampleCount: Int,
         fftParameters: FftParameters,
@@ -713,8 +712,8 @@ abstract class AbstractPipeline(
 
         // Limit the raw data buffer size to the maximum file window configured in
         // settings:
-        val rawSamplesPerInterval = (settings.dataPageIntervalS * sampleRate).toInt()
-        val rawPageRange = theRawPageRange ?: HORange(0, minOf(sampleCount, rawSamplesPerInterval))
+        val rawSamplesPerPage = (pipelineParameters.dataPageTimeSpanS * sampleRate).toInt()
+        val rawPageRange = theRawPageRange ?: HORange(0, minOf(sampleCount, rawSamplesPerPage))
         val rawPageDataCount = rawPageRange.second - rawPageRange.first
 
         // Use calculated FFT parameters values rather values from settings:
@@ -763,7 +762,7 @@ abstract class AbstractPipeline(
 
         // The following size must be greater than the maximum FFT window size - preferably,
         // many times. This value determines the UI update granularity.
-        val nominalSliceEntries = 10000 // 20000
+        val nominalSliceEntries = 10000 // Approx 26ms at 384 kHz.
 
         // Round the slice size to accommodate an exact number of strides, allowing for a half window at
         // each end of the slice:
@@ -796,8 +795,7 @@ abstract class AbstractPipeline(
 
     /**
      * This function is called in the UI thread.
-     *
-     * Calculate the axis ranges corresponding to the logical visible ranges
+     *     * Calculate the axis ranges corresponding to the logical visible ranges
      * supplied, and update the Flows that drive the UI subscribes to.
      */
     suspend fun updateAxisRangesFromLogical(xVisibleRange: FloatRange, yVisibleRange: FloatRange) {
@@ -830,7 +828,7 @@ abstract class AbstractPipeline(
             val mySampleRate: Int? = pipelineData?.calcs?.rawSampleRate
 
             return if (mySampleRate != null)
-                calculateFftParameters(settings, screenFactors, mySampleRate)
+                calculateFftParameters(pipelineParametersSnapshot,  screenFactors, mySampleRate)
             else
                 null
         }
@@ -839,6 +837,7 @@ abstract class AbstractPipeline(
     data class PagingData(
         val rawTotalDataLength: Int,
         val rawSampleRate: Int,
+        val pipelineParametersSnapshot: PipelineParameters
     )
 
     suspend fun getPagingData(): PagingData? {
@@ -848,6 +847,7 @@ abstract class AbstractPipeline(
                 pagingData = PagingData(
                     rawTotalDataLength = it.calcs.rawTotalDataLength,
                     rawSampleRate = it.calcs.rawSampleRate,
+                    pipelineParametersSnapshot
                 )
             }
         }

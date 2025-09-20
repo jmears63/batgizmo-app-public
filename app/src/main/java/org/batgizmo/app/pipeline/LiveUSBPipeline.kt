@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.FloatRange
+import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.UIModel
 
 /**
@@ -34,6 +35,7 @@ import org.batgizmo.app.UIModel
  * and are therefore implemented in thread-safe way.
  */
 class LiveUSBPipeline(
+    pipelineParameters: PipelineParameters,
     scope: CoroutineScope,
     context: Context,
     model: UIModel,
@@ -44,8 +46,9 @@ class LiveUSBPipeline(
     mutableDetailsTextFlow: MutableStateFlow<String?>,
     sampleRate: Int,
     sampleCount: Int,
-    onTrigger: () ->Unit
+    onTrigger: () -> Unit
 ) : AbstractPipeline(
+    pipelineParameters,
     scope,
     context,
     model,

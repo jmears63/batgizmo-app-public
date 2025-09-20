@@ -734,7 +734,7 @@ class FileWriter(
         usbConnectResult.productName?.let { fields["Model"] = it }
         guanoDataTime?.let { fields["Timestamp"] = it }
 
-        if (model.settings.locationInFile) {
+        if (model.settings.includeLocationInFile) {
             locationFlow.value?.let {
                 fields["Loc Position"] = "${it.latitude} ${it.longitude}"
             }

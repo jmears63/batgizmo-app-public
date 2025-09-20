@@ -41,14 +41,17 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.ui.GraphBase
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 
 class SpectrogramDrawThread(
@@ -388,9 +391,32 @@ class SpectrogramRenderer(
         }
     }
 
-    private fun onPan(scope: CoroutineScope, displacement: Offset, size: IntSize): Unit {
-        Log.i(this::class.simpleName, "gesture action onPan called: $displacement")
+    /**
+     * Most recent gesture job, if any. We use this to prevent gesture job coroutines,
+     * which contain heavy processing, piling up.
+     */
+    private var gestureJobCPUIntesive: Job? = null
+    private var skipCount = 0   // For debugging.
 
+    private fun gestureJobInProgress(): Boolean
+    {
+        gestureJobCPUIntesive?.let { gj ->
+            if (gj.isActive) {
+                Timber.d("Skipping gesture job (${skipCount++}): previous job is still running")
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun onPan(scope: CoroutineScope, displacement: Offset, size: IntSize): Unit {
+        Timber.i("gesture action onPan called: $displacement")
+
+        if (gestureJobInProgress())
+            return
+
+        // This is very quick to execute, so we don't set gestureJob:
         scope.launch(CoroutineName("onPan coroutine")) {
             // UI thread:
             model.panSpectrogramVisibleRange(displacement, size, liveMode)
@@ -403,53 +429,85 @@ class SpectrogramRenderer(
         p1: Offset, p2: Offset,
         size: IntSize
     ) {
-        Log.i(this::class.simpleName, "gesture action onZoom called")
+        Timber.i("gesture action onZoom called")
 
+        if (gestureJobInProgress())
+            return
+
+        // This is very quick to execute, so we don't set gestureJob:
         scope.launch(CoroutineName("onZoom coroutine")) {
-            // UI thread:
             model.zoomSpectrogramVisibleRange(startCentroid, previousP1, previousP2,
                 p1, p2, size, liveMode)
         }
     }
 
     private fun onLongPress(scope: CoroutineScope, displacement: Offset, size: IntSize): Unit {
-        Log.i(this::class.simpleName, "gesture action onLongPress called")
+        Timber.d("onLongPress start")
 
-        scope.launch(CoroutineName("onZoom coroutine")) {
-            // UI thread:
-            model.onLongPress(graph, displacement, size, liveMode)
+        if (gestureJobInProgress()) {
+            Timber.d("*** onLongPress skipped")
+            return
+        }
+
+        gestureJobCPUIntesive = scope.launch(CoroutineName("onZoom coroutine")) {
+            // Move it off the UI thread:
+            withContext(Dispatchers.Default) {
+                model.onLongPress(graph, displacement, size, liveMode)
+            }
+            Timber.d("onLongPress finish")
         }
     }
 
     private fun onDoubleTap(scope: CoroutineScope): Unit {
-        Log.i(this::class.simpleName, "gesture action onDoubleTap called")
+        Timber.d("onDoubleTap start")
+
+        if (gestureJobInProgress()) {
+            Timber.d("*** onDoubleTap skipped")
+            return
+        }
 
         // Reset ranges to make all data visible:
-        scope.launch(CoroutineName("onZoom coroutine")) {
-            // UI thread:
-            model.onDoubleTap(graph, liveMode, model.autoBnCRequiredFlow.value)
+        gestureJobCPUIntesive = scope.launch(CoroutineName("onZoom coroutine")) {
+            // Move it off the UI thread:
+            withContext(Dispatchers.Default) {
+                model.onDoubleTap(graph, liveMode, model.autoBnCRequiredFlow.value)
+            }
+            Timber.d("onDoubleTap finish")
         }
     }
 
     private fun onCompleteZoom(scope: CoroutineScope): Unit {
-        Log.i(this::class.simpleName, "gesture action onZoomComplete called")
+        Timber.d("onCompleteZoom start")
 
-        scope.launch(CoroutineName("onCompleteZoom coroutine")) {
-            // UI thread:
-            // Results in a pipeline rebuild if required:
-            if (!liveMode)
+        if (gestureJobInProgress()) {
+            Timber.d("*** onCompleteZoom skipped")
+            return
+        }
+
+        gestureJobCPUIntesive = scope.launch(CoroutineName("onCompleteZoom coroutine")) {
+            // Move it off the UI thread:
+            withContext(Dispatchers.Default) {
+                // Results in a pipeline rebuild and BnC as required:
                 graph.onVisibleRangeChange(model.autoBnCRequiredFlow.value)
+            }
+            Timber.d("onCompleteZoom finish")
         }
     }
 
     private fun onCompletePan(scope: CoroutineScope): Unit {
-        Log.i(this::class.simpleName, "gesture action onCompletePan called")
+        Timber.d("onCompletePan start")
 
-        scope.launch(CoroutineName("onCompletePan coroutine")) {
-            // UI thread:
-            // Results in a pipeline rebuild if required:
-            if (!liveMode)
+        if (gestureJobInProgress()) {
+            Timber.d("*** onCompletePan skipped")
+            return
+        }
+
+        gestureJobCPUIntesive = scope.launch(CoroutineName("onCompletePan coroutine")) {
+            // Move it off the UI thread:
+            withContext(Dispatchers.Default) {
                 graph.onVisibleRangeChange(model.autoBnCRequiredFlow.value)
+                Timber.d("onCompletePan finish")
+            }
         }
     }
 }

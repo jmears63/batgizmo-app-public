@@ -119,6 +119,7 @@ import org.batgizmo.app.FileWriter
 import org.batgizmo.app.FileWriter.TriggerType
 import org.batgizmo.app.HORange
 import org.batgizmo.app.OpenWavFileResult
+import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
@@ -250,8 +251,8 @@ class SpectrogramUI(
      * and enabling of paging UI elements directly.
      */
     class PagingStateHandler(
-        settings: Settings,
         private val pagingData: AbstractPipeline.PagingData,
+        settings: Settings,                         // For settings that take immediate effect.
         private val rawPageRange: MutableState<HORange?>,
         private val pagingEnabled: MutableState<Boolean>,
         private val pageRightEnabled: MutableState<Boolean>,
@@ -264,19 +265,19 @@ class SpectrogramUI(
             var currentPage: Int
         )
 
-        private var internals = calcInternals(settings)
+        private var internals = calcInternals(pagingData.pipelineParametersSnapshot, settings)
 
         init {
             // reset()  // Not needed here.
             updateUI()
         }
 
-        private fun calcInternals(settings: Settings): Internals {
-            val rawPageLength = settings.dataPageIntervalS * pagingData.rawSampleRate
+        private fun calcInternals(pipelineParameters: PipelineParameters, settings: Settings): Internals {
+            val rawPageLength = pipelineParameters.dataPageTimeSpanS * pagingData.rawSampleRate
             val stride =
                 (rawPageLength.toFloat() * (1f - settings.pageOverlapPercent.toFloat() / 100f) + 0.5).toInt()
                     .coerceIn(1, rawPageLength)
-            val totalPages = pagingData.rawTotalDataLength / stride + 1
+            val totalPages = 1 + (pagingData.rawTotalDataLength - rawPageLength) / stride
 
             return Internals(
                 rawPageLength = rawPageLength,
@@ -335,7 +336,7 @@ class SpectrogramUI(
         }
 
         fun reset(settings: Settings) {
-            internals = calcInternals(settings)
+            internals = calcInternals(pagingData.pipelineParametersSnapshot, settings)
             setPage(0)
         }
     }
@@ -448,14 +449,20 @@ class SpectrogramUI(
                     || uiState.audioMode.intValue == AudioMode.ON.value)
         }
 
+        /**
+         * Handle the case when data streaming has started.
+         */
         LaunchedEffect(appMode.intValue, uiState.liveMode.intValue) {
-            val liveAndStreaming = appMode.intValue == AppMode.LIVE.value &&
+            val isLiveAndStreaming = appMode.intValue == AppMode.LIVE.value &&
                     uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
-            buttonState.audioEnabled.value = liveAndStreaming
-            buttonState.manualRecordingEnabled.value = liveAndStreaming
-            buttonState.triggeredRecordingEnabled.value = liveAndStreaming
+            buttonState.audioEnabled.value = isLiveAndStreaming
+            buttonState.manualRecordingEnabled.value = isLiveAndStreaming
+            buttonState.triggeredRecordingEnabled.value = isLiveAndStreaming
         }
 
+        /**
+         * Logic to enable/disable auto BnC.
+         */
         LaunchedEffect(appMode.intValue, model.settings.autoBnCEnabledLive, model.settings.autoBnCEnabledViewer) {
             // Logic to determine if auto BnC should be applied. This happens asynchronously so
             // there may be races.
@@ -469,7 +476,9 @@ class SpectrogramUI(
 
         // buttonState.audioEnabled.value
 
-        // Prevent sleep when we are acquiring live data:
+        /**
+         * Prevent sleep when we are acquiring live data:
+         */
         val activity: Activity = LocalActivity.current as Activity
         LaunchedEffect(uiState.liveMode.intValue, appMode.intValue) {
             val keepScreenOn = appMode.intValue == AppMode.LIVE.value && uiState.liveMode.intValue != LiveMode.OFF.value
@@ -480,45 +489,34 @@ class SpectrogramUI(
                 activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 
-        // Prevent any change to the X visible range during live data update, to avoid
-        // confusing UI behaviour:
+        /**
+         * Prevent any change to the X visible range during live data update, to avoid
+         * confusing UI behaviour:
+         */
         LaunchedEffect(uiState.liveMode.intValue, appMode.intValue) {
             spectrogramGraph.setClampX(uiState.liveMode.intValue == LiveMode.STREAMING.value && appMode.intValue == AppMode.LIVE.value)
         }
 
-        // Propagate audio settings changes through the UI, when any of the arguments
-        // change in value:
-        LaunchedEffect(appMode.intValue,
-                uiState.audioMode.intValue,
-                model.settings.heterodyneRef1kHz, model.settings.heterodyneRef2kHz,
-                model.settings.heterodyneDual
-            ) {
-            if (uiState.audioMode.intValue in setOf(AudioMode.ON.value)
-                &&
-                appMode.intValue in setOf(AppMode.LIVE.value)) {
-
-                // Assigning these values makes the audio cursor appear on the graph:
-                uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
-                uiState.heterodyneRef2kHz.value = if (model.settings.heterodyneDual)
-                        model.settings.heterodyneRef2kHz
-                    else
-                        null
-            }
-            else {
-                uiState.heterodyneRef1kHz.value = null
-                uiState.heterodyneRef2kHz.value = null
-            }
-
-            // Trigger a re-render to take these changes into account:
-            model.spectrogramBitmapHolder.signalUpdate()
+        /**
+         * Propagate audio settings changes through the UI and model, when any of the arguments
+         * change in value. Note that changes to settings values cam't trigger a launched effect.
+         */
+        LaunchedEffect(appMode.intValue, uiState.audioMode.intValue) {
+            updateHeterodyneUIState(appMode)
         }
 
+        /**
+         * Notify the heterodyne frequencies to the native layer.
+         */
         LaunchedEffect(uiState.heterodyneRef1kHz.value, uiState.heterodyneRef2kHz.value) {
             uiState.heterodyneRef1kHz.value?.let { kHz1 ->
                 model.setHeterodyne(kHz1, uiState.heterodyneRef2kHz.value)
             }
         }
 
+        /**
+         * Logic to enable the sliders button.
+         */
         val autoBnCRequiredState = model.autoBnCRequiredFlow.collectAsStateWithLifecycle()
         LaunchedEffect(uiState.dataPresent.value, autoBnCRequiredState.value) {
             val enabled = shouldEnableSlidersButton()
@@ -707,6 +705,9 @@ class SpectrogramUI(
                         uiState.showAudioConfig.value = false
                         uiState.audioSettingsAlreadyShown.value = true
 
+                        // Notify changes to the UI, and model:
+                        updateHeterodyneUIState(appMode)
+
                         // Start audio asynchronously. We will be notified of the outcome
                         // in due course:
                         model.startAudio()
@@ -776,6 +777,17 @@ class SpectrogramUI(
                                 "Close file", true
                             ) {
                                 model.resetUIMode(AppMode.LIVE)
+                            }
+                        }
+                    }
+
+                    if (uiState.audioMode.value == AudioMode.ON.value) {
+                        Column {
+                            uiState.heterodyneRef1kHz.value?.let {
+                                Text("${uiState.heterodyneRef1kHz.value} kHz")
+                            }
+                            uiState.heterodyneRef2kHz.value?.let {
+                                Text("${uiState.heterodyneRef2kHz.value} kHz")
                             }
                         }
                     }
@@ -872,6 +884,27 @@ class SpectrogramUI(
             // Layer 2: dynamic things:
             ComposeHeterodyneCursor()
        }
+    }
+
+    private fun updateHeterodyneUIState(appMode: MutableIntState) {
+        if (uiState.audioMode.intValue in setOf(AudioMode.ON.value)
+            &&
+            appMode.intValue in setOf(AppMode.LIVE.value)) {
+
+            // Assigning these values makes the audio cursor appear on the graph:
+            uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
+            uiState.heterodyneRef2kHz.value = if (model.settings.heterodyneDual)
+                model.settings.heterodyneRef2kHz
+            else
+                null
+        }
+        else {
+            uiState.heterodyneRef1kHz.value = null
+            uiState.heterodyneRef2kHz.value = null
+        }
+
+        // Trigger a re-render to take these changes into account:
+        model.spectrogramBitmapHolder.signalUpdate()
     }
 
     @SuppressLint("UnusedBoxWithConstraintsScope")
@@ -1282,7 +1315,7 @@ class SpectrogramUI(
 
                     // Start data streaming from the USB device, asynchronously:
                     liveMode.intValue = LiveMode.CONNECTING.value
-                    model.openLive(model.settings, ::fileWriterErrorHandler)
+                    model.openLive(::fileWriterErrorHandler)
                 }
                 else {
                     // Unchecked and already OFF, no action.
@@ -1436,7 +1469,7 @@ class SpectrogramUI(
         uiState.pagingState.value = null
 
         // Timber.d("processingFlag set true")
-        viewModel.openFile(uri, filename ?: "(unknown)", model.settings)
+        viewModel.openFile(uri, filename ?: "(unknown)")
     }
 
     private fun onViewingFileOpened(
@@ -1456,11 +1489,13 @@ class SpectrogramUI(
             uiState.title.value = title
             uiState.fileIsOpen.value = true
 
+            // Paging data is constant for the data file, it doesn't
+            // change when the page sized is changed:
             val pd = owfr.pagingData
             pd?.let {
                 uiState.pagingState.value = PagingStateHandler(
-                    model.settings,
                     pd,
+                    model.settings,
                     uiState.rawPageRange,
                     uiState.pagingEnabled,
                     uiState.pageRightEnabled,
@@ -1578,22 +1613,22 @@ class SpectrogramUI(
         uiState.showErrorDialog.value = true
     }
 
-    fun onSettingsUpdate(settings: Settings, previousSettings: Settings?) {
+    fun onSettingsUpdate(newSettings: Settings, previousSettings: Settings?) {
         var resetPaging = false
         previousSettings?.let {
-            if (settings.pageOverlapPercent != previousSettings.pageOverlapPercent
-                || settings.dataPageIntervalS != previousSettings.pageOverlapPercent
-                || settings.showParameterOverlay != previousSettings.showParameterOverlay
+            if (newSettings.pageOverlapPercent != previousSettings.pageOverlapPercent
+                || newSettings.pipelineParameters.dataPageTimeSpanS != previousSettings.pageOverlapPercent
+                || newSettings.showParameterOverlay != previousSettings.showParameterOverlay
             )
                 resetPaging = true
         }
 
         if (resetPaging) {
             // Something related to paging changed so we need to reset to take that into account:
-            uiState.pagingState.value?.reset(settings)
+            uiState.pagingState.value?.reset(newSettings)
         }
 
-        model.onSettingsUpdate(settings, previousSettings, uiState.rawPageRange.value)
+        model.onSettingsUpdate(newSettings, previousSettings, uiState.rawPageRange.value)
     }
 
     private fun closeLive() {
@@ -1666,7 +1701,7 @@ class SpectrogramUI(
         model.locationTracker.startPeriodicUpdates()
 
         if (streaming)
-            model.openLive(model.settings, ::fileWriterErrorHandler)
+            model.openLive(::fileWriterErrorHandler)
     }
 
     fun shouldEnableSlidersButton(): Boolean {

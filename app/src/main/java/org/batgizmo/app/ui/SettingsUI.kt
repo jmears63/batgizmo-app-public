@@ -215,14 +215,14 @@ class SettingsUI(private val model: UIModel) {
 
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.DataBufferIntervalOptions>(
-                        Settings.DataBufferIntervalOptions.entries,
-                        "Data buffer length",
-                        model.settings.dataPageIntervalS
+                    MyListSelector<Settings.DefaultLiveTimeSpanOptions>(
+                        Settings.DefaultLiveTimeSpanOptions.entries,
+                        "Live acquisition time span",
+                        model.settings.defaultLiveTimeSpanS
                     ) { value: Int ->
                         // Signal the updated settings values:
                         scope.launch {
-                            model.updateStoredSettings(model.settings.copy(dataPageIntervalS = value))
+                            model.updateStoredSettings(model.settings.copy(defaultLiveTimeSpanS = value))
                         }
                     }
                 }
@@ -248,11 +248,13 @@ class SettingsUI(private val model: UIModel) {
                     MyListSelector<Settings.NFftOptions>(
                         Settings.NFftOptions.entries,
                         "FFT window size",
-                        model.settings.nFft
+                        model.settings.pipelineParameters.nFft
                     ) { value: Int ->
                         // Signal the updated settings values:
                         scope.launch {
-                            model.updateStoredSettings(model.settings.copy(nFft = value))
+                            model.updateStoredSettings(model.settings.copy(
+                                pipelineParameters = model.settings.pipelineParameters.copy(nFft = value)))
+
                         }
                     }
                 }
@@ -263,11 +265,28 @@ class SettingsUI(private val model: UIModel) {
                     MyListSelector<Settings.FftOverlapOptions>(
                         Settings.FftOverlapOptions.entries,
                         "FFT window overlap",
-                        model.settings.fftOverlapPercent
+                        model.settings.pipelineParameters.fftOverlapPercent
                     ) { value: Int ->
                         // Signal the updated settings values:
                         scope.launch {
-                            model.updateStoredSettings(model.settings.copy(fftOverlapPercent = value))
+                            model.updateStoredSettings(model.settings.copy(
+                                pipelineParameters = model.settings.pipelineParameters.copy(fftOverlapPercent = value)))
+                        }
+                    }
+                }
+            }
+
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MyListSelector<Settings.DataBufferTimeSpanOptions>(
+                        Settings.DataBufferTimeSpanOptions.entries,
+                        "Maximum viewable time span",
+                        model.settings.pipelineParameters.dataPageTimeSpanS
+                    ) { value: Int ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(
+                                pipelineParameters = model.settings.pipelineParameters.copy(dataPageTimeSpanS = value)))
                         }
                     }
                 }
@@ -280,11 +299,11 @@ class SettingsUI(private val model: UIModel) {
 
             item {
                 MyCheckbox(
-                    "Include location in files", model.settings.locationInFile
+                    "Include location in files", model.settings.includeLocationInFile
                 ) { value: Boolean ->
                     // Signal the updated settings values:
                     scope.launch {
-                        model.updateStoredSettings(model.settings.copy(locationInFile = value))
+                        model.updateStoredSettings(model.settings.copy(includeLocationInFile = value))
                     }
                 }
             }

@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.FloatRange
+import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.WavFileReader
 
@@ -35,6 +36,7 @@ import org.batgizmo.app.WavFileReader
  * and are therefore implemented in thread-safe way.
  */
 class FileViewerPipeline(
+    pipelineParameters: PipelineParameters,
     scope: CoroutineScope,
     private val custodialWavFileReader: WavFileReader,      // This class owns this and most close it eventually.
     context: Context,
@@ -47,18 +49,19 @@ class FileViewerPipeline(
     sampleRate: Int,
     sampleCount: Int
 ) : AbstractPipeline(
-        scope,
-        context,
-        model,
-        spectrogramBitmapHolder,
-        amplitudeBitmapHolder,
-        mutableXAxisRangeFlow,
-        mutableYAxisRangeFlow,
-        mutableDetailsTextFlow,
-        sampleRate,
-        sampleCount,
-        showCursor = false,
-        preserveRawDataBuffer = false
+    pipelineParameters,
+    scope,
+    context,
+    model,
+    spectrogramBitmapHolder,
+    amplitudeBitmapHolder,
+    mutableXAxisRangeFlow,
+    mutableYAxisRangeFlow,
+    mutableDetailsTextFlow,
+    sampleRate,
+    sampleCount,
+    preserveRawDataBuffer = false,
+    showCursor = false
 ) {
     override fun createDataSourceStep(
         pipeline: AbstractPipeline,

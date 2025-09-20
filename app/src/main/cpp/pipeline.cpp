@@ -102,6 +102,7 @@ Java_org_batgizmo_app_pipeline_TransformStep_00024Companion_unwrapSlices(JNIEnv 
     jint rc = 0;
     jshort *rawData = env->GetShortArrayElements(raw_data_buffer, nullptr);
     jfloat *sliceBufferData = env->GetFloatArrayElements(input_slice_buffer, nullptr);
+    jsize sliceBufferDataLength = env->GetArrayLength(input_slice_buffer);
     jfloat *windowData = env->GetFloatArrayElements(window, nullptr);
     if (rawData == nullptr || sliceBufferData == nullptr || sliceBufferData == windowData) {
         rc = -1;
@@ -187,7 +188,7 @@ static void cleanup_fft() {
 
 /*
  * Scaling factor used in scaling the squared amplitude to dB.
- *dB is 10 log10(power).
+ * dB is 10 log10(power).
  *  - We have already squared the signal level so it represents power.
  *  - We use log2 below for efficiency, so scale it to result in log10.
  */
@@ -209,7 +210,9 @@ Java_org_batgizmo_app_pipeline_TransformStep_00024Companion_doFft(JNIEnv *env, j
     const float *pWindowData = nullptr;
 
     jfloat *unwrappedRawData = env->GetFloatArrayElements(input_slice_buffer, nullptr);
+    jsize unwrappedRawDataLength = env->GetArrayLength(input_slice_buffer);
     jfloat *transformedData = env->GetFloatArrayElements(output_slice_buffer, nullptr);
+    jsize transformedDataLength = env->GetArrayLength(output_slice_buffer);
     jint *triggerFlag = env->GetIntArrayElements(trigger_flag, nullptr);
 
     // jsize length = env->GetArrayLength(output_slice_buffer);
@@ -276,7 +279,7 @@ Java_org_batgizmo_app_pipeline_TransformStep_00024Companion_doFft(JNIEnv *env, j
 
     if (unwrappedRawData) {
         // JNI_ABORT means don't copy elements back, just free the memory:
-        env->ReleaseFloatArrayElements(input_slice_buffer, unwrappedRawData, 0);    // Change back to JNI_ABORT
+        env->ReleaseFloatArrayElements(input_slice_buffer, unwrappedRawData, JNI_ABORT);
     }
     if (transformedData) {
         // 0 means copy changes back and free memory:
