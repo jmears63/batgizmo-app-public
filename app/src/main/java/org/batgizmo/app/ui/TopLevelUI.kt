@@ -137,27 +137,29 @@ class TopLevelUI(private val model: UIModel) {
             settingsAvailable.value = true
 
             spectrogramUI.onSettingsUpdate(model.settings, previousSettings)
-            if (model.settings.enableLogging) {
-                diagnosticLogger.startLogging(context)
-                diagnosticLogger.log { "Build.VERSION.SDK_INT = ${Build.VERSION.SDK_INT}" }
-                diagnosticLogger.log { "Build.MANUFACTURER = ${Build.MANUFACTURER}" }
-                diagnosticLogger.log { "Build.MODEL = ${Build.MODEL}" }
-                diagnosticLogger.log { "Build.BRAND = ${Build.BRAND}" }
-                diagnosticLogger.log { "Build.DEVICE = ${Build.DEVICE}" }
-                diagnosticLogger.log { "Build.PRODUCT = ${Build.PRODUCT}" }
-                diagnosticLogger.log { "Build.HARDWARE = ${Build.HARDWARE}" }
-
-                val runtime = Runtime.getRuntime()
-                diagnosticLogger.log { "runtime.maxMemory = ${runtime.maxMemory() / 1024} KB" }
-                diagnosticLogger.log { "runtime.totalMemory = ${runtime.totalMemory() / 1024} KB" }
-                diagnosticLogger.log { "runtime.freeMemory = ${runtime.freeMemory() / 1024} KB" }
-             }
-            else
-                diagnosticLogger.stopLogging()
         }
 
         LaunchedEffect(Unit) {
             model.settingsReadyFlow.collectLatest {
+
+                if (model.settings.enableLogging) {
+                    diagnosticLogger.startLogging(context)
+                    diagnosticLogger.log { "Build.VERSION.SDK_INT = ${Build.VERSION.SDK_INT}" }
+                    diagnosticLogger.log { "Build.MANUFACTURER = ${Build.MANUFACTURER}" }
+                    diagnosticLogger.log { "Build.MODEL = ${Build.MODEL}" }
+                    diagnosticLogger.log { "Build.BRAND = ${Build.BRAND}" }
+                    diagnosticLogger.log { "Build.DEVICE = ${Build.DEVICE}" }
+                    diagnosticLogger.log { "Build.PRODUCT = ${Build.PRODUCT}" }
+                    diagnosticLogger.log { "Build.HARDWARE = ${Build.HARDWARE}" }
+
+                    val runtime = Runtime.getRuntime()
+                    diagnosticLogger.log { "runtime.maxMemory = ${runtime.maxMemory() / 1024} KB" }
+                    diagnosticLogger.log { "runtime.totalMemory = ${runtime.totalMemory() / 1024} KB" }
+                    diagnosticLogger.log { "runtime.freeMemory = ${runtime.freeMemory() / 1024} KB" }
+                }
+                else
+                    diagnosticLogger.stopLogging()
+
                 // Log.d(this::class.simpleName, "Collect the value from settingsReadyFlow")
                 onSettingsUpdate()
             }
