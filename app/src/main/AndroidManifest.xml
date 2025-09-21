@@ -27,13 +27,18 @@
                 and back again, finding it in the same state. So, recording or audio is
                 interrupted to reply to an email, for example. rememberSaveable retains
                 UI state.
+
+                android:screenOrientation="fullSensor" is present, despite the deprecation warning
+                to allow the phone to rotated to fully inverted portrait.
          -->
         <activity
             android:name="org.batgizmo.app.MainActivity"
             android:hardwareAccelerated="true"
             android:exported="true"
             android:theme="@style/Theme.BatgizmoApp"
-            android:launchMode="singleTask">
+            android:launchMode="singleTask"
+            android:screenOrientation="fullSensor"
+            >
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
