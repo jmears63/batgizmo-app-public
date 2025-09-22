@@ -280,7 +280,7 @@ class SettingsUI(private val model: UIModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     MyListSelector<Settings.DataBufferTimeSpanOptions>(
                         Settings.DataBufferTimeSpanOptions.entries,
-                        "Maximum viewable time span",
+                        "Maximum viewable time span (restart needed)",
                         model.settings.pipelineParameters.dataPageTimeSpanS
                     ) { value: Int ->
                         // Signal the updated settings values:
