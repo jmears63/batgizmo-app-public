@@ -1,5 +1,9 @@
 Version     Date            Description
 
+1.0.13      2025-09-22      Support inverted portrait mode.
+                            Fails gracefully when memory is over committed.
+                            Write memory information to the diagnostic log.
+
 1.0.12      2025-09-20      Added a new setting for the time span for live mode.
                             Renamed the existing buffer size setting to maximum viewable time span.
                             Improvements to gesture responsiveness on lower spec devices.
