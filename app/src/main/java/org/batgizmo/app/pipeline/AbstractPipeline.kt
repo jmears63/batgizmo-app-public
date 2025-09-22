@@ -38,9 +38,9 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
+import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.ColourMapStep.Companion.dbRangeMax
 import timber.log.Timber
-import uk.org.gimell.batgimzoapp.BuildConfig
 import kotlin.math.log2
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -378,6 +378,7 @@ abstract class AbstractPipeline(
         doRender: Boolean = true
     ) {
         mutex.withLock {
+            // Might throw an OutOfMemoryError:
             internalFullExecute(fftParameters, rawPageRange, amplitudeSizeDp, doRender)
         }
     }
@@ -398,16 +399,24 @@ abstract class AbstractPipeline(
         internalShutdown(updateUI = false)
 
         Timber.d("internalFullExecute calling setupPipeline")
+        /*
+         * Release existing memory allocations to the garbage collector so that
+         * that setupPipeline standards the best chance of allocating new
+         * arrays:
+         */
+        pipelineData = null
+
+        // The following might throw an OutOfMemoryError:
         pipelineData = setupPipeline(
             fftParameters,
             rawPageRange,
             amplitudeSizeDp ?: dummyAmplitudeSize
         )
+
         pipelineData?.let {
             startPipeline(it)
-            if (doRender) {
+            if (doRender)
                 it.dataSourceStep.fullRender()
-            }
         }
     }
 
@@ -434,8 +443,7 @@ abstract class AbstractPipeline(
             mapStep?.let {
                 val params = it.params
                 if (params != null) {
-                    if (BuildConfig.DEBUG)
-                        Timber.d("applyBnC: $range is being set")
+                    Timber.d("applyBnC: $range is being set")
                     val newParams =
                         ColourMapStep.Params(params.calcs, bnCRangeLogical = range)
                     it.params = newParams
@@ -520,8 +528,7 @@ abstract class AbstractPipeline(
                 val blackRange = diff * 0.25f
                 floatRange = FloatRange(lower + blackRange, range[1])
             }
-            if (BuildConfig.DEBUG)
-                Timber.d("auto BnC range in visible region is $floatRange")
+            Timber.d("auto BnC range in visible region is $floatRange")
 
             return floatRange
         }
@@ -545,6 +552,10 @@ abstract class AbstractPipeline(
          * calling trigger on the step. Each step triggers the next on completion.
          */
 
+        val runtime = Runtime.getRuntime()
+        diagnosticLogger.log { "setupPipeline start: runtime.{maxMemory, totalMemory, freeMemory) = " +
+                "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
+
         try {
             // Calculate everything we need to know to set up the pipeline:
             val calcs: CalculatedParams =
@@ -557,18 +568,14 @@ abstract class AbstractPipeline(
                 calcs.fftWindowSize, calcs.fftOverlap
             )
 
-            if (BuildConfig.DEBUG)
-                Timber.d("Calculations: fftWindowSize = ${calcs.fftWindowSize}, " +
-                    "fftWindowSize = ${calcs.fftOverlap}, " +
-                    "rawSliceEntries = ${calcs.rawSliceEntries}, " +
-                    "slice time = ${calcs.rawSliceEntries * 1000 / calcs.rawSampleRate} ms"
-                )
+            Timber.d("Calculations: fftWindowSize = ${calcs.fftWindowSize}, " +
+                "fftWindowSize = ${calcs.fftOverlap}, " +
+                "rawSliceEntries = ${calcs.rawSliceEntries}, " +
+                "slice time = ${calcs.rawSliceEntries * 1000 / calcs.rawSampleRate} ms"
+            )
 
-            /**
-             * Allocate buffers used to share data between steps. These buffers are
-             * sized to accommodate the entire data range corresponding to the
-             * maximum file time window.
-             */
+            // throw OutOfMemoryError("testing running out of memory")    // Uncomment this to test OOM.
+
             /**
              * Allocate buffers used to share data between steps. These buffers are
              * sized to accommodate the entire data range corresponding to the
@@ -580,11 +587,11 @@ abstract class AbstractPipeline(
             val sizeRequired = calcs.rawPagedDataLength + CANARY_ENTRIES
             val crwb = cachedRawDataBuffer
             if (preserveRawDataBuffer && crwb != null && crwb.buffer.size == sizeRequired) {
-                if (BuildConfig.DEBUG)
-                    Timber.d("reusing the raw data buffer: assignedRange = ${cachedRawDataBuffer?.assignedRange}")
+                Timber.d("reusing the raw data buffer: assignedRange = ${cachedRawDataBuffer?.assignedRange}")
                 rangedRawDataBuffer = cachedRawDataBuffer
             }
             else {
+                Timber.i("Attempting to allocate ShortArray($sizeRequired), ${Short.SIZE_BYTES * sizeRequired/1000} KB")
                 rangedRawDataBuffer = RangedRawDataBuffer(ShortArray(sizeRequired))
             }
             require(rangedRawDataBuffer != null) { "Internal error: rawDataBuffer should not be null" }
@@ -597,8 +604,9 @@ abstract class AbstractPipeline(
                 calcs.transformedTimeBucketCount * calcs.transformedFrequencyBucketCount
 
             // Buffer for transformed data generated by the SFFT transform step.
-            // We flatten the data into a one dimensional array in the way you
+            // We flatten the data into a one dimensional array in the way youf
             // would guess:
+            Timber.i("Attempting to allocate FloatArray($transformedDataBufferSize), ${Float.SIZE_BYTES * transformedDataBufferSize/1000} KB")
             val transformedDataBuffer = FloatArray(transformedDataBufferSize)
             // Initialize to the value of the lowest end of the colour map:
             transformedDataBuffer.fill(dbRangeMax.start)
@@ -650,15 +658,20 @@ abstract class AbstractPipeline(
                 showCursor
             )
             val p = TransformStep.Params(calcs = calcs)
-            if (BuildConfig.DEBUG)
-                Timber.d(
-                    "assigning transformStep.params with ${p.calcs.fftWindowSize}"
-                )
+            Timber.d(
+                "assigning transformStep.params with ${p.calcs.fftWindowSize}"
+            )
             transformStep.params = p
 
             // Create a step to populate the raw data buffer from the data file:
             val dataSourceStep = createDataSourceStep(this, transformStep, rangedRawDataBuffer)
             dataSourceStep.params = DataSourceStep.Params(calcs = calcs)
+
+            // Slight hack to make sure we some memory left in hand. The GC will recover this
+            // allocation when dummy has gone out of scope. If we don't have this much memory left,
+            // an Error will be thrown:
+            val memoryReserved = 10000
+            val dummy = CharArray(memoryReserved)
 
             val pld = PipelineData(
                 calcs = calcs,
@@ -673,6 +686,10 @@ abstract class AbstractPipeline(
         } catch (e: Exception) {
             shutdown()
             throw e
+        }
+        finally {
+            diagnosticLogger.log { "setupPipeline end: runtime.{maxMemory, totalMemory, freeMemory) = " +
+                    "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
         }
     }
 

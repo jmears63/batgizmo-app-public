@@ -26,7 +26,6 @@ import android.app.Application
 import android.content.Context
 import android.location.Location
 import android.net.Uri
-import android.util.Log
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
@@ -471,6 +470,9 @@ class UIModel(application: Application,
         return result
     }
 
+    val oomMessage = "Your device has insufficient free memory for rendering spectrograms of this size.\n\n"+
+            "Try reducing the maximum viewable time span in settings."
+
     /**
      * Call from the UI thread.
      *
@@ -572,22 +574,26 @@ class UIModel(application: Application,
                         "Error: ${e.localizedMessage ?: "Unknown error"}"
                     }
 
-                    Log.w(
-                        this::class.simpleName,
-                        "Exception when opening wav file. $message"
-                    )
-                    Log.i(
-                        this::class.simpleName,
-                        "Exception when opening wav file: ${e.stackTrace.asList()}"
-                    )
+                    Timber.w("Exception when opening wav file. $message")
+                    Timber.i("Exception when opening wav file: ${e.stackTrace.asList()}")
 
                     // Return the message to the UI for display to the user:
                     result = OpenWavFileResult(null, message)
                 }
+                catch (e: OutOfMemoryError) {
+                    internalClosePipeline()
+
+                    // Note: this is an error, not an exception, so needs its own catch.
+                    diagnosticLogger.log { "Out of memory in openFile()" }
+
+                    // Return the message to the UI for display to the user:
+                    result = OpenWavFileResult(null, oomMessage)
+                }
             }
+
             // Do this suspending operation outside the critical section to avoid
             // blocking with the lock:
-            Log.i(this::class.simpleName, "Emitting result from open: $result")
+            Timber.i("Emitting result from open: $result")
             result?.let { fileOpenedChannel.send(it) }
         }
     }
@@ -706,17 +712,20 @@ class UIModel(application: Application,
                         "Error: ${e.localizedMessage ?: "Unknown error"}"
                     }
 
-                    Log.w(
-                        this::class.simpleName,
-                        "Exception during live connect: $message"
-                    )
-                    Log.d(
-                        this::class.simpleName,
-                        "Exception during live connect: ${e.stackTrace.asList()}"
-                    )
+                    Timber.w("Exception during live connect: $message")
+                    Timber.d("Exception during live connect: ${e.stackTrace.asList()}")
 
                     // Return the message to the UI for display to the user:
                     usbConnectResult = UsbService.UsbConnectResult(false, message)
+                }
+                catch (e: OutOfMemoryError) {
+                    internalClosePipeline()
+
+                    // Note: this is an error, not an exception, so needs its own catch.
+                    diagnosticLogger.log { "Out of memory in openLive()" }
+
+                    // Return the message to the UI for display to the user:
+                    usbConnectResult = UsbService.UsbConnectResult(false, oomMessage)
                 }
             }
 
@@ -762,6 +771,10 @@ class UIModel(application: Application,
     fun startAudio() {
         viewModelScope.launch(Dispatchers.Default) {
 
+            val runtime = Runtime.getRuntime()
+            Timber.i("startAudio start: runtime.{maxMemory, totalMemory, freeMemory) = " +
+                    "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB")
+
             var audioStartResult: UsbService.AudioStartResult? = null
             Timber.d("startAudio callled")
 
@@ -780,6 +793,9 @@ class UIModel(application: Application,
                 Timber.d("Sending result of start audios: $it")
                 audioStartChannel.send(it)
             }
+
+            Timber.i("startAudio end: runtime.{maxMemory, totalMemory, freeMemory) = " +
+                    "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB")
         }
     }
 
@@ -1023,7 +1039,7 @@ class UIModel(application: Application,
                   For now, do a complete reload for any settings change. This could be smarter
                   but the reload is pretty fast so probably this is fine.
                  */
-                reload(newSettings, rawPageRange, resetVisibleRange)
+                reload(newSettings, rawPageRange, autoBnCRequiredFlow.value, resetVisibleRange)
             }
         }
     }
@@ -1122,21 +1138,29 @@ class UIModel(application: Application,
                 currentFftParameters = fftp
             }
 
-            if (fftParametersChanged || resetVisibleRange) {
-                p.fullExecute(
-                    fftParameters = currentFftParameters,
-                    rawPageRange = rawPageRange,
-                    amplitudeSizeDp = amplitudeSizeDp
-                )
+            try {
+                if (fftParametersChanged || resetVisibleRange) {
+                    p.fullExecute(
+                        fftParameters = currentFftParameters,
+                        rawPageRange = rawPageRange,
+                        amplitudeSizeDp = amplitudeSizeDp
+                    )
+                }
+
+                if (resetVisibleRange)
+                    internalSetSpectrogramVisibleRange(FloatRange(0f, 1f), FloatRange(0f, 1f))
+
+                if (shouldAutoBnC) {
+                    doAutoBnC(p)
+                } else
+                    internalRerender()
             }
-
-            if (resetVisibleRange)
-                internalSetSpectrogramVisibleRange(FloatRange(0f, 1f), FloatRange(0f, 1f))
-
-            if (shouldAutoBnC) {
-                doAutoBnC(p)
-            } else
-                internalRerender()
+            catch (e: OutOfMemoryError) {
+                // Eat any the OOM here, as it will already have been displayed to the
+                // user in openLive/openFile. In other words, we shouldn't get here, but log
+                // just in case:
+                diagnosticLogger.log { "Ignoring out of memory in reload()" }
+            }
         }
     }
 

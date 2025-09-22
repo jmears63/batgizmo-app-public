@@ -115,6 +115,8 @@ class DiagnosticLogger {
                     // hook app shutdown:
                     it.flush()
                 }
+                // Also write it to standard Android logging:
+                Timber.i(message)
             } catch (e: IOException) {
                 Timber.w("Unable to log diagnosticLogger: $e")
             }
