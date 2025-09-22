@@ -104,8 +104,9 @@ data class Settings(
         DATABUFFER_5S(5, "5s"),
         DATABUFFER_10S(10, "10s"),
         DATABUFFER_15S(15, "15s"),
-        DATABUFFER_20S(20, "20s");
-        // DATABUFFER_30S(30, "30s");
+        DATABUFFER_20S(20, "20s"),
+        DATABUFFER_30S(30, "30s (higher spec devices)"),
+        DATABUFFER_60S(60, "60s (higher spec devices)");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
@@ -284,9 +285,9 @@ data class Settings(
 }
 
 data class PipelineParameters(
-    var dataPageTimeSpanS: Int = DataBufferTimeSpanOptions.DATABUFFER_5S.value,                 // *
-    var fftOverlapPercent: Int = FftOverlapOptions.OVERLAP_AUTO75.value,                        // *
-    var nFft: Int = NFftOptions.NFFT_AUTO.value,                                                // *
+    var dataPageTimeSpanS: Int = DataBufferTimeSpanOptions.DATABUFFER_10S.value,
+    var fftOverlapPercent: Int = FftOverlapOptions.OVERLAP_AUTO75.value,
+    var nFft: Int = NFftOptions.NFFT_AUTO.value
 ) {
     // Provide some abstraction to allow different enums to be handled the same way:
     interface EnumHelper {
