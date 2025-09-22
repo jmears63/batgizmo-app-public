@@ -24,7 +24,6 @@ package org.batgizmo.app.ui
 
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -142,21 +141,8 @@ class TopLevelUI(private val model: UIModel) {
         LaunchedEffect(Unit) {
             model.settingsReadyFlow.collectLatest {
 
-                if (model.settings.enableLogging) {
+                if (model.settings.enableLogging)
                     diagnosticLogger.startLogging(context)
-                    diagnosticLogger.log { "Build.VERSION.SDK_INT = ${Build.VERSION.SDK_INT}" }
-                    diagnosticLogger.log { "Build.MANUFACTURER = ${Build.MANUFACTURER}" }
-                    diagnosticLogger.log { "Build.MODEL = ${Build.MODEL}" }
-                    diagnosticLogger.log { "Build.BRAND = ${Build.BRAND}" }
-                    diagnosticLogger.log { "Build.DEVICE = ${Build.DEVICE}" }
-                    diagnosticLogger.log { "Build.PRODUCT = ${Build.PRODUCT}" }
-                    diagnosticLogger.log { "Build.HARDWARE = ${Build.HARDWARE}" }
-
-                    val runtime = Runtime.getRuntime()
-                    diagnosticLogger.log { "runtime.maxMemory = ${runtime.maxMemory() / 1024} KB" }
-                    diagnosticLogger.log { "runtime.totalMemory = ${runtime.totalMemory() / 1024} KB" }
-                    diagnosticLogger.log { "runtime.freeMemory = ${runtime.freeMemory() / 1024} KB" }
-                }
                 else
                     diagnosticLogger.stopLogging()
 

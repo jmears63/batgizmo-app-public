@@ -24,8 +24,10 @@ package org.batgizmo.app
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.core.content.FileProvider
 import timber.log.Timber
+import uk.org.gimell.batgimzoapp.BuildConfig
 import java.io.BufferedWriter
 import java.io.File
 import java.io.FileWriter
@@ -55,19 +57,32 @@ class DiagnosticLogger {
         if (logWriter == null) {
             val f = getFile(context)
             logWriter = BufferedWriter(FileWriter(f, append))
-            log { "Log started at ${System.currentTimeMillis()}" }
+            log { ">>> Log started at ${System.currentTimeMillis()}" }
+            log { "BuildConfig.VERSION_NAME = ${BuildConfig.VERSION_NAME}" }
+            log { "Build.VERSION.SDK_INT = ${Build.VERSION.SDK_INT}" }
+            log { "Build.MANUFACTURER = ${Build.MANUFACTURER}" }
+            log { "Build.MODEL = ${Build.MODEL}" }
+            log { "Build.BRAND = ${Build.BRAND}" }
+            log { "Build.DEVICE = ${Build.DEVICE}" }
+            log { "Build.PRODUCT = ${Build.PRODUCT}" }
+            log { "Build.HARDWARE = ${Build.HARDWARE}" }
+
+            val runtime = Runtime.getRuntime()
+            log { "runtime.maxMemory = ${runtime.maxMemory() / 1024} KB" }
+            log { "runtime.totalMemory = ${runtime.totalMemory() / 1024} KB" }
+            log { "runtime.freeMemory = ${runtime.freeMemory() / 1024} KB" }
         }
     }
 
     fun stopLogging() {
-        log { "Log stopped at ${System.currentTimeMillis()}" }
+        log { "<<< Log stopped at ${System.currentTimeMillis()}" }
         // Idempotent:
         logWriter?.let {
             try {
                 it.flush()
                 it.close()
             } catch (e: IOException) {
-                Timber.w("Unable to shutdown diagnostic logging cleanly: $e")
+                Timber.w("Unable to shut down diagnostic logging cleanly: $e")
             }
         }
         logWriter = null
