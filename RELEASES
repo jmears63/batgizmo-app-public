@@ -1,5 +1,8 @@
 Version     Date            Description
 
+1.0.14      2025-09-23      Fix: respect system level lock orientation setting while permitting inverted portrait.
+                            Perform an auto BnC when pausing live acquisition.
+
 1.0.13      2025-09-22      Support inverted portrait mode.
                             Fails gracefully when memory is over committed.
                             Write memory information to the diagnostic log.
