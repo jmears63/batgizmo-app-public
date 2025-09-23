@@ -22,7 +22,6 @@
 
 package org.batgizmo.app.ui
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
@@ -35,14 +34,9 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -50,11 +44,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
@@ -74,14 +65,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.MutableIntState
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,12 +80,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -105,7 +91,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -113,6 +98,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowSizeClass
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.batgizmo.app.FileWriter
@@ -131,8 +117,6 @@ import uk.org.gimell.batgimzoapp.BuildConfig
 import uk.org.gimell.batgimzoapp.R
 import java.util.Locale
 import kotlin.math.floor
-import kotlin.math.round
-import kotlin.math.roundToInt
 
 class SpectrogramUI(
     private val model: UIModel
@@ -144,7 +128,7 @@ class SpectrogramUI(
 
             cursor?.use {
                 val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (it.moveToFirst()) {
+                if (nameIndex != -1 && it.moveToFirst()) {
                     fileName = it.getString(nameIndex)  // Extract filename
                 }
             }
@@ -240,10 +224,10 @@ class SpectrogramUI(
     private val spectrogramGraph = SpectrogramGraph(model, uiState.rawPageRange)
     private val amplitudeGraph = AmplitudeGraph(model, uiState.rawPageRange)
     private val sliders = Sliders()
+    private val heterodyneCursors = HeterodyneCursors(model,
+        uiState.heterodyneRef1kHz, uiState.heterodyneRef2kHz)
 
     private val audioConfig = AudioConfig()
-
-    private val minimumHeterodynekHz: Int = 10
 
 
     /**
@@ -471,6 +455,7 @@ class SpectrogramUI(
             else
                 model.settings.autoBnCEnabledViewer
 
+            // Set the value via the model - which exposes back to us as autoBnCRequiredFlow.
             model.setAutoBnCRequired(required)
         }
 
@@ -667,14 +652,14 @@ class SpectrogramUI(
             val scope = rememberCoroutineScope()
 
             // Calculate the heterodyne range we can support:
-            var heterodyneRangekHz = IntRange(minimumHeterodynekHz, 150)
+            var heterodyneRangekHz = IntRange(heterodyneCursors.minimumHeterodynekHz, 150)
             uiState.liveSamplingRateHz.value?.let { hz ->
                 var upper = floor(hz / (2f * 1000f)).toInt() - 1
                 // Limit the heterodyne to the useful range so that the UI slider is
                 // more manageable on smaller screens:
                 upper = minOf(upper, 150)
-                if (upper - minimumHeterodynekHz > 2)    // Sanity
-                    heterodyneRangekHz = IntRange(minimumHeterodynekHz, upper)
+                if (upper - heterodyneCursors.minimumHeterodynekHz > 2)    // Sanity
+                    heterodyneRangekHz = IntRange(heterodyneCursors.minimumHeterodynekHz, upper)
             }
 
             val isStarting = uiState.audioMode.intValue != AudioMode.ON.value
@@ -882,7 +867,7 @@ class SpectrogramUI(
             }
 
             // Layer 2: dynamic things:
-            ComposeHeterodyneCursor()
+            heterodyneCursors.Compose()
        }
     }
 
@@ -891,7 +876,7 @@ class SpectrogramUI(
             &&
             appMode.intValue in setOf(AppMode.LIVE.value)) {
 
-            // Assigning these values makes the audio cursor appear on the graph:
+            // Assigning these values makes the heterodyne cursor appear on the graph:
             uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
             uiState.heterodyneRef2kHz.value = if (model.settings.heterodyneDual)
                 model.settings.heterodyneRef2kHz
@@ -905,132 +890,6 @@ class SpectrogramUI(
 
         // Trigger a re-render to take these changes into account:
         model.spectrogramBitmapHolder.signalUpdate()
-    }
-
-    @SuppressLint("UnusedBoxWithConstraintsScope")
-    @Composable
-    private fun ComposeHeterodyneCursor() {
-
-        if (uiState.heterodyneRef1kHz.value != null) {
-            val shape = RoundedCornerShape(12.dp)
-            val iconBoxSizeDp = 42.dp
-            val iconBoxSizePx = with(LocalDensity.current) { iconBoxSizeDp.toPx() }
-            val iconSizeDp = 24.dp
-            val offsetY1 = rememberSaveable { mutableFloatStateOf(0f) }
-            val offsetY2 = rememberSaveable { mutableFloatStateOf(0f) }
-
-            val scope = rememberCoroutineScope()
-
-            BoxWithConstraints(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                val maxHeightPx = with(LocalDensity.current) { maxHeight.toPx() }
-
-                val yAxisState = model.frequencyAxisRangeFlow.collectAsStateWithLifecycle()
-
-                // Calculate the positions of the marker lines, based on the actual rounded reference
-                // kHz value:
-                var y1Px: Float? = null
-                var y2Px: Float? = null
-                uiState.heterodyneRef1kHz.value?.let { ref1kHz ->
-                    y1Px = maxHeightPx * (ref1kHz * 1000f - yAxisState.value.endInclusive) /
-                            (yAxisState.value.start - yAxisState.value.endInclusive)
-                }
-                uiState.heterodyneRef2kHz.value?.let { ref2kHz ->
-                    y2Px = maxHeightPx * (ref2kHz * 1000f - yAxisState.value.endInclusive) /
-                            (yAxisState.value.start - yAxisState.value.endInclusive)
-                }
-
-                // Initialize the icon position to the marker line position:
-                LaunchedEffect(Unit, yAxisState.value) {
-                    // Sync the icon position to the marker line on
-                    // newly composing these elements and whenever the Y scale changes:
-                    y1Px?.let { offsetY1.floatValue = it }
-                    y2Px?.let { offsetY2.floatValue = it }
-                }
-
-                // Draw the horizontal line
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    fun drawLine(y: Float) {
-                        if (y in 0f..size.height) {
-                            drawLine(
-                                color = Color.Yellow,
-                                start = Offset(0f, y),
-                                end = Offset(size.width, y),
-                                strokeWidth = 2.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 10f))
-                            )
-                        }
-                    }
-
-                    y1Px?.let { y1 -> drawLine(y1) }
-                    y2Px?.let { y2 -> drawLine(y2) }
-                }
-
-                @Composable
-                fun drawDraggable(
-                    offsetY: MutableFloatState,
-                    heterodyneRefkHz: MutableState<Int?>,
-                    updateSetting: (kHz: Int) -> Settings
-                ) {
-                    // The draggable icon
-                    if (offsetY.floatValue in -iconBoxSizePx..maxHeightPx) {
-                        // Timber.d("offsetY = $offsetY")
-                        Box(
-                            modifier = Modifier
-                                .size(iconBoxSizeDp)
-                                .align(Alignment.TopStart)
-                                .offset { IntOffset(0, (offsetY.floatValue - iconBoxSizePx / 2).roundToInt()) }
-                                .border(BorderStroke(2.dp, Color.DarkGray), shape)
-                                .clip(shape)
-                                .pointerInput(Unit) {
-                                    detectDragGestures(
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()    // Eat the change.
-
-                                            // Update the offset in response to the drag, with
-                                            // no rounding:
-                                            val newOffset = offsetY.floatValue + dragAmount.y
-                                            offsetY.floatValue =
-                                                newOffset.coerceIn(0f, maxHeightPx)
-
-                                            // Calculate the corresponding rounded reference kHz:
-                                            val hz = yAxisState.value.endInclusive -
-                                                    offsetY.floatValue / maxHeightPx * (yAxisState.value.endInclusive - yAxisState.value.start)
-                                            heterodyneRefkHz.value = maxOf(round(hz / 1000f).toInt(), minimumHeterodynekHz)
-                                        },
-                                        onDragEnd = {
-                                            // They've finished dragging, to write the updated values
-                                            // to settings for persistence:
-                                            heterodyneRefkHz.value?.let { kHz: Int ->
-                                                scope.launch {
-                                                    model.updateStoredSettings(updateSetting(kHz))
-                                                }
-                                            }
-                                        }
-                                    )
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = ImageVector.vectorResource(R.drawable.outline_pan_tool_alt_24),
-                                contentDescription = "Heterodyne reference adjustor",
-                                modifier = Modifier.size(iconSizeDp)
-                            )
-                        }
-                    }
-                }
-
-                drawDraggable(offsetY1, uiState.heterodyneRef1kHz) { kHz: Int ->
-                    model.settings.copy(heterodyneRef1kHz = kHz)
-                }
-                if (model.settings.heterodyneDual) {
-                    drawDraggable(offsetY2, uiState.heterodyneRef2kHz) { kHz: Int ->
-                        model.settings.copy(heterodyneRef2kHz = kHz)
-                    }
-                }
-            }
-        }
     }
 
     private fun doPageLeft() {
@@ -1298,7 +1157,8 @@ class SpectrogramUI(
         }
     }
 
-    private fun acquisitionButtonHandler(appMode: MutableIntState,
+    private fun acquisitionButtonHandler(scope: CoroutineScope,
+                                         appMode: MutableIntState,
                                          liveMode: MutableIntState,
                                          checked: Boolean) {
         // Assumption: we are already in live mode. The button is disabled
@@ -1325,10 +1185,10 @@ class SpectrogramUI(
                 // Already connecting, nothing to do at present.
                 if (BuildConfig.DEBUG)
                     Timber.d("Live mode: currently connecting, no action taken.")
+                /*
                 if (!checked) {
-                    // TODO should we try to disconnect if checked is false while we are connecting?
-                    // Debouncing?
                 }
+                 */
             }
             LiveMode.STREAMING.value -> {
                 if (!checked) {
@@ -1336,6 +1196,12 @@ class SpectrogramUI(
                     Timber.i("Live mode: pausing.")
                     uiState.liveMode.intValue = LiveMode.PAUSED.value
                     model.pauseLiveStream()
+
+                    // Is the following a good idea? It does an auto BnC whenever
+                    //  acquisition is paused, which may just be making the noise very vivid.
+                    if (model.autoBnCRequiredFlow.value) {
+                        model.doAutoBnC()
+                    }
                 }
                 else {
                     // Checked and already streaming, no action.
@@ -1360,6 +1226,8 @@ class SpectrogramUI(
         liveMode: MutableIntState,
         appMode: MutableIntState
     ) {
+        val scope = rememberCoroutineScope()
+
         MyLatchingButton(
             buttonState.acquisitionChecked, buttonState.acquisitionEnabled,
             ImageVector.vectorResource(R.drawable.baseline_mic_24_filled),
@@ -1373,7 +1241,7 @@ class SpectrogramUI(
                 }
 
                 // Start/stop acquisition as required:
-                acquisitionButtonHandler(appMode, liveMode, checked)
+                acquisitionButtonHandler(scope, appMode, liveMode, checked)
             }
         )
 

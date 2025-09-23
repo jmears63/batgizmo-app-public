@@ -551,7 +551,7 @@ class UIModel(application: Application,
                             *after* the entire pipeline has rendered, so that the entire transformed
                             data is available.
                          */
-                        doAutoBnC(p)
+                        internalDoAutoBnC(p)
                     } else
                         internalRerender()
 
@@ -1151,7 +1151,7 @@ class UIModel(application: Application,
                     internalSetSpectrogramVisibleRange(FloatRange(0f, 1f), FloatRange(0f, 1f))
 
                 if (shouldAutoBnC) {
-                    doAutoBnC(p)
+                    internalDoAutoBnC(p)
                 } else
                     internalRerender()
             }
@@ -1178,13 +1178,21 @@ class UIModel(application: Application,
         amplitudeBitmapHolder.signalUpdate()
     }
 
+    fun doAutoBnC() {
+        viewModelScope.launch(Dispatchers.Default + CoroutineName("doAutoBnC coroutine")) {
+            mutex.withLock {
+                pipeline?.let { internalDoAutoBnC(it) }
+            }
+        }
+    }
+
     /**
      * Do an auto BnC calculation based on the visible range supplied, and apply it
      * so that the UI is re-rendered accordingly.
      *
      * Contains heavy calculations so don't call it from the UI thread.
      */
-    private suspend fun doAutoBnC(thePipeline: AbstractPipeline) {
+    private suspend fun internalDoAutoBnC(thePipeline: AbstractPipeline) {
         val newBnCRange =
             thePipeline.calculateAutoBnC(
                 timeVisibleRangeFlow.value,
