@@ -28,8 +28,10 @@
                 interrupted to reply to an email, for example. rememberSaveable retains
                 UI state.
 
-                android:screenOrientation="fullSensor" is present, despite the deprecation warning
-                to allow the phone to rotated to fully inverted portrait.
+                android:screenOrientation="fullUser" is present, despite the deprecation warning
+                to allow the phone to rotated to fully inverted portrait. Unfortunately that
+                means that the app ignores the systen level lock orientation setting, so
+                this app provides its own lock orientation setting.
          -->
         <activity
             android:name="org.batgizmo.app.MainActivity"
@@ -37,7 +39,7 @@
             android:exported="true"
             android:theme="@style/Theme.BatgizmoApp"
             android:launchMode="singleTask"
-            android:screenOrientation="fullSensor"
+            android:screenOrientation="fullUser"
             >
 
             <intent-filter>
