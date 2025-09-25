@@ -16,6 +16,7 @@ datastorePreferences = "1.1.4"
 playServicesLocation = "21.0.1"
 fragment = "1.8.2"
 timber = "5.0.1"
+documentfile = "1.1.0"
 
 [libraries]
 accompanist-permissions = { module = "com.google.accompanist:accompanist-permissions", version.ref = "accompanistPermissions" }
@@ -41,6 +42,7 @@ play-services-location = { module = "com.google.android.gms:play-services-locati
 androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
 androidx-fragment-ktx = { module = "androidx.fragment:fragment-ktx", version.ref = "fragment" }
 timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
+androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

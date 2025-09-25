@@ -31,6 +31,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
@@ -72,7 +73,12 @@ class MainActivity : ComponentActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+
+        enableEdgeToEdge()
+
         super.onCreate(savedInstanceState)
+
+
 
         // Create the model exactly once. If we are not careful below concurrency
         // and races can result in more than one instance being created.
@@ -85,7 +91,6 @@ class MainActivity : ComponentActivity() {
 
         // Tell Android we'll manage insets:
         WindowCompat.setDecorFitsSystemWindows(window, false)
-
 
         uiTopLevel = TopLevelUI(model)
 

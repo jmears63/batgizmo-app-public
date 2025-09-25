@@ -20,7 +20,7 @@ android {
         minSdk = 30
         targetSdk = 36
         versionCode = 15
-        versionName = "1.0.14"
+        versionName = "feature-folderbrowser"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
@@ -96,6 +96,7 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.timber)
+    implementation(libs.androidx.documentfile)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

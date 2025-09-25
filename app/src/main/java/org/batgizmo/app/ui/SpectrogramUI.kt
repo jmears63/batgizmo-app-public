@@ -26,14 +26,11 @@ import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.system.ErrnoException
 import android.system.Os
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +47,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -101,6 +100,7 @@ import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.batgizmo.app.DocumentHelper
 import org.batgizmo.app.FileWriter
 import org.batgizmo.app.FileWriter.TriggerType
 import org.batgizmo.app.HORange
@@ -116,25 +116,13 @@ import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import uk.org.gimell.batgimzoapp.R
 import java.util.Locale
+import kotlin.Boolean
 import kotlin.math.floor
 
 class SpectrogramUI(
     private val model: UIModel
 ) {
     companion object {
-        fun getFileName(context: Context, uri: Uri): String? {
-            val cursor = context.contentResolver.query(uri, null, null, null, null)
-            var fileName: String? = null
-
-            cursor?.use {
-                val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (nameIndex != -1 && it.moveToFirst()) {
-                    fileName = it.getString(nameIndex)  // Extract filename
-                }
-            }
-
-            return fileName
-        }
     }
 
     val localShowGrid = compositionLocalOf<Boolean> { true }
@@ -152,7 +140,9 @@ class SpectrogramUI(
         val slidersButtonChecked: MutableState<Boolean> = mutableStateOf(false),
         val slidersButtonEnabled: MutableState<Boolean> = mutableStateOf(false),
         val showMetadataEnabled: MutableState<Boolean> = mutableStateOf(false),
-        val closeFileEnabled: MutableState<Boolean> = mutableStateOf(false)
+        val closeFileEnabled: MutableState<Boolean> = mutableStateOf(false),
+        val previousFileEnabled: MutableState<Boolean> = mutableStateOf(false),
+        val nextFileEnabled: MutableState<Boolean> = mutableStateOf(false)
     ) {
         fun reset() {
             acquisitionChecked.value = false
@@ -167,6 +157,8 @@ class SpectrogramUI(
             slidersButtonEnabled.value = false
             showMetadataEnabled.value = false
             closeFileEnabled.value = false
+            previousFileEnabled.value = false
+            nextFileEnabled.value = false
         }
     }
 
@@ -228,6 +220,8 @@ class SpectrogramUI(
         uiState.heterodyneRef1kHz, uiState.heterodyneRef2kHz)
 
     private val audioConfig = AudioConfig()
+
+    private val documentHelper = DocumentHelper()
 
 
     /**
@@ -371,25 +365,17 @@ class SpectrogramUI(
 
         val context = LocalContext.current
         val menuExpanded = rememberSaveable { uiState.menuExpanded }
+        val scope = rememberCoroutineScope()
 
-        // Launcher for opening a file:
-        val documentPickerLauncher = rememberLauncherForActivityResult(
-            // We use OpenDocument rather then GetContent is it allows multiple
-            // MIME types:
-            contract = ActivityResultContracts.OpenDocument()
-        ) { uri: Uri? ->
-            menuExpanded.value = false
-            uri?.let {
-                val filename = getFileName(context, uri)
-                Timber.i("Selected file: $filename")
-                if (filename?.lowercase()?.endsWith(".wav") == true) {
-                    model.resetUIMode(AppMode.VIEWER, uri = uri)
-                } else {
-                    uiState.errorMessage.value = "Sorry, only .wav files are supported."
-                    uiState.showErrorDialog.value = true
-                }
+        val documentPickerLauncher = documentHelper.composeDocumentPickerLauncher(
+            onSelection = { uri: Uri ->
+                model.resetUIMode(AppMode.VIEWER, uri = uri)
+            },
+            onError = { msg: String ->
+                uiState.errorMessage.value = msg
+                uiState.showErrorDialog.value = true
             }
-        }
+        )
 
         fun onShowMetadata() {
             uiState.showMetadata.value = true
@@ -573,7 +559,7 @@ class SpectrogramUI(
         settingsVisible: MutableState<Boolean>,
         liveMode: MutableIntState,
         onShowMetadata: () -> Unit,
-        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
+        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
         onExitApp: () -> Unit
     ) {
         // Timber.d("ComposeMiddle called")
@@ -721,7 +707,8 @@ class SpectrogramUI(
             .fillMaxSize()) {
 
             // Layer 1: static things:
-            Column(Modifier.fillMaxSize()
+            Column(Modifier
+                .fillMaxSize()
                 .padding(5.dp)) {
 
                 val textHeightSp = 14.sp // Scale independent.
@@ -930,7 +917,7 @@ class SpectrogramUI(
     @OptIn(ExperimentalMaterial3Api::class)
     private fun ComposeTopBar(
         appMode: MutableIntState,
-        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
+        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
         settingsVisible: MutableState<Boolean>,
         onExitApp: () -> Unit
     ) {
@@ -965,16 +952,18 @@ class SpectrogramUI(
 
     @Composable
     private fun ComposeNavigationIcon(
-        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
+        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
         settingsVisible: MutableState<Boolean>,
-        onExitApp: () -> Unit)
+        onExitApp: () -> Unit
+    )
     {
         // Make sure the menu appears next to the button it relates to:
         var iconButtonCoordinates by remember { mutableStateOf(Offset.Zero) }
         var iconButtonSize by remember { mutableStateOf(IntSize.Zero) }
+        var menuExpanded by remember { uiState.menuExpanded }
 
         IconButton(onClick = {
-            uiState.menuExpanded.value = true
+            menuExpanded = true
             },
             modifier = Modifier
                 .onGloballyPositioned { coordinates ->
@@ -989,8 +978,8 @@ class SpectrogramUI(
         }
 
         DropdownMenu(
-            expanded = uiState.menuExpanded.value,
-            onDismissRequest = { uiState.menuExpanded.value = false }
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false }
         ) {
             DropdownMenuItem(
                 text = { Text("View file...") },
@@ -1003,10 +992,10 @@ class SpectrogramUI(
                     )
                 },
                 leadingIcon = { Icon(
-                    painter = painterResource(id = R.drawable.outline_files_24),
+                    painter = painterResource(id = R.drawable.outline_audio_file_24),
                     contentDescription = "Settings")
-                },
-                )
+                }
+            )
             DropdownMenuItem(
                 text = { Text("Close file") },
                 onClick = {
@@ -1022,7 +1011,7 @@ class SpectrogramUI(
                 text = { Text("Settings") },
                 onClick = {
                     settingsVisible.value = true
-                    uiState.menuExpanded.value = false
+                    menuExpanded = false
                 },
                 leadingIcon = { Icon(
                     imageVector = Icons.Filled.Build,
@@ -1032,7 +1021,7 @@ class SpectrogramUI(
             DropdownMenuItem(
                 text = { Text("Exit") },
                 onClick = {
-                    uiState.menuExpanded.value = false
+                    menuExpanded = false
                     onExitApp()
                 },
                 leadingIcon = { Icon(
@@ -1124,9 +1113,10 @@ class SpectrogramUI(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ComposeLiveButtons(liveMode, appMode)
             Spacer(Modifier.weight(1f))
-            ComposeViewerButtons(onShowMetadata)
+            ComposeButtonsGroup1(liveMode, appMode)
+            Spacer(Modifier.weight(1f))
+            ComposeButtonsGroup2(liveMode, appMode, onShowMetadata)
         }
     }
 
@@ -1136,10 +1126,10 @@ class SpectrogramUI(
         liveMode: MutableIntState,
         appMode: MutableIntState,
         onShowMetadata: () -> Unit,
-        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, Uri?>,
+        documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
         settingsVisible: MutableState<Boolean>,
         onExitApp: () -> Unit
-        ) {
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxHeight()
@@ -1148,12 +1138,16 @@ class SpectrogramUI(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box {   // Box so that the menu is correctly located relative to its button
-                ComposeNavigationIcon(documentPickerLauncher, settingsVisible, onExitApp)
+                ComposeNavigationIcon(
+                    documentPickerLauncher,
+                    settingsVisible,
+                    onExitApp
+                )
             }
             Spacer(Modifier.weight(1f))
-            ComposeLiveButtons(liveMode, appMode)
+            ComposeButtonsGroup1(liveMode, appMode)
             Spacer(Modifier.weight(1f))
-            ComposeViewerButtons(onShowMetadata)
+            ComposeButtonsGroup2(liveMode, appMode, onShowMetadata)
         }
     }
 
@@ -1222,7 +1216,7 @@ class SpectrogramUI(
     }
 
     @Composable
-    fun ComposeLiveButtons(
+    fun ComposeButtonsGroup1(
         liveMode: MutableIntState,
         appMode: MutableIntState
     ) {
@@ -1245,43 +1239,56 @@ class SpectrogramUI(
             }
         )
 
-        MyLatchingButton(
-            buttonState.manualRecordingChecked, buttonState.manualRecordingEnabled,
-            ImageVector.vectorResource(R.drawable.baseline_insert_drive_file_24_filled),
-            "Toggle manual recording",
-            onSelectionChanged = { checked: Boolean ->
-                // Start or stop manual recording:
-                when (checked) {
-                    true -> {
-                        // Mutually exclusive trigger modes:
-                        buttonState.triggeredRecordingChecked.value = false
-                        model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType=TriggerType.MANUAL))
-                    }
+        if (appMode.intValue == AppMode.LIVE.value) {
 
-                    false -> {
-                        model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType=TriggerType.OFF))
+            MyLatchingButton(
+                buttonState.manualRecordingChecked, buttonState.manualRecordingEnabled,
+                ImageVector.vectorResource(R.drawable.baseline_insert_drive_file_24_filled),
+                "Toggle manual recording",
+                onSelectionChanged = { checked: Boolean ->
+                    // Start or stop manual recording:
+                    when (checked) {
+                        true -> {
+                            // Mutually exclusive trigger modes:
+                            buttonState.triggeredRecordingChecked.value = false
+                            model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType = TriggerType.MANUAL))
+                        }
+
+                        false -> {
+                            model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType = TriggerType.OFF))
+                        }
                     }
+                })
+
+            MyLatchingButton(
+                buttonState.triggeredRecordingChecked, buttonState.triggeredRecordingEnabled,
+                ImageVector.vectorResource(R.drawable.baseline_insert_page_break_24_filled),
+                "Toggle triggered recording",
+                onSelectionChanged = { checked: Boolean ->
+                    // Start or stop manual recording:
+                    when (checked) {
+                        true -> {
+                            // Mutually exclusive trigger modes:
+                            buttonState.manualRecordingChecked.value = false
+                            model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType = TriggerType.AUTO))
+                        }
+
+                        false -> {
+                            model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType = TriggerType.OFF))
+                        }
+                    }
+                })
+        }
+        else {
+            MyButton(
+                Icons.Filled.KeyboardArrowUp, "Previous file",
+                buttonState.previousFileEnabled.value)  {
                 }
-            })
-
-        MyLatchingButton(
-            buttonState.triggeredRecordingChecked, buttonState.triggeredRecordingEnabled,
-            ImageVector.vectorResource(R.drawable.baseline_insert_page_break_24_filled),
-            "Toggle triggered recording",
-            onSelectionChanged = { checked: Boolean ->
-                // Start or stop manual recording:
-                when (checked) {
-                    true -> {
-                        // Mutually exclusive trigger modes:
-                        buttonState.manualRecordingChecked.value = false
-                        model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType=TriggerType.AUTO))
-                    }
-
-                    false -> {
-                        model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType=TriggerType.OFF))
-                    }
-                }
-            })
+            MyButton(
+                Icons.Filled.KeyboardArrowDown, "Next file",
+                buttonState.nextFileEnabled.value)  {
+            }
+        }
 
         MyLatchingButton(
             buttonState.audioChecked, buttonState.audioEnabled,
@@ -1320,17 +1327,21 @@ class SpectrogramUI(
     }
 
     @Composable
-    fun ComposeViewerButtons(
+    fun ComposeButtonsGroup2(
+        liveMode: MutableIntState,
+        appMode: MutableIntState,
         onShowMetadata: () -> Unit
     ) {
-        MyButton(
-            Icons.Filled.Info, "Metadata",
-            buttonState.showMetadataEnabled.value, onShowMetadata
-        )
+        if (appMode.value == AppMode.VIEWER.value) {
+            MyButton(
+                Icons.Filled.Info, "Metadata",
+                buttonState.showMetadataEnabled.value, onShowMetadata
+            )
+        }
     }
 
     private fun viewUri(context: Context, viewModel: UIModel, uri: Uri) {
-        val filename = getFileName(context, uri)
+        val filename = documentHelper.getFileName(context, uri)
 
         uiState.processingFlag.value = true
         uiState.rawPageRange.value = null
