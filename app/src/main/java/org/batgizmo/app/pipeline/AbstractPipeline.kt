@@ -38,7 +38,6 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
-import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.ColourMapStep.Companion.dbRangeMax
 import timber.log.Timber
 import kotlin.math.log2
@@ -553,8 +552,10 @@ abstract class AbstractPipeline(
          */
 
         val runtime = Runtime.getRuntime()
-        diagnosticLogger.log { "setupPipeline start: runtime.{maxMemory, totalMemory, freeMemory) = " +
-                "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
+
+        // Noisy log:
+        // diagnosticLogger.log { "setupPipeline start: runtime.{maxMemory, totalMemory, freeMemory) = " +
+        //        "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
 
         try {
             // Calculate everything we need to know to set up the pipeline:
@@ -688,8 +689,9 @@ abstract class AbstractPipeline(
             throw e
         }
         finally {
-            diagnosticLogger.log { "setupPipeline end: runtime.{maxMemory, totalMemory, freeMemory) = " +
-                    "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
+            // Noisy log:
+            // diagnosticLogger.log { "setupPipeline end: runtime.{maxMemory, totalMemory, freeMemory) = " +
+            //        "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
         }
     }
 
