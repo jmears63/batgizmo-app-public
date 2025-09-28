@@ -12,45 +12,126 @@ import timber.log.Timber
 
 class DocumentHelper {
 
-    fun getFileName(context: Context, uri: Uri): String? {
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        var fileName: String? = null
+    data class UriData(val uri: Uri, val previousAvailable: Boolean, val nextAvailable: Boolean)
 
-        cursor?.use {
-            val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (nameIndex != -1 && it.moveToFirst()) {
-                fileName = it.getString(nameIndex)  // Extract filename
+    companion object {
+
+        /**
+         * Get the display name for a file given its Uri.
+         */
+        fun getFileName(context: Context, uri: Uri): String? {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            var fileName: String? = null
+
+            cursor?.use {
+                val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1 && it.moveToFirst()) {
+                    fileName = it.getString(nameIndex)  // Extract filename
+                }
             }
+
+            return fileName
         }
 
-        return fileName
+        /**
+         * Create a document picker that the UI can use to have the user select
+         * one or more documents.
+         */
+        @Composable
+        fun composeDocumentPickerLauncher(
+            documentHelper: DocumentHelper,
+            onSelection: (UriData) -> Unit
+        )
+            : ManagedActivityResultLauncher<Array<String>, List<Uri>> {
+
+            val context = LocalContext.current
+
+            /*
+             * We use OpenMultipleDocuments rather than the folder picker, because the folder picker
+             * doesn't work on MyDrive or USB drives. OpenMultipleDocuments allows them to
+             * be browsed, and as a "select all" feature that does the job of opening
+             * the entire folder.
+             */
+            val launcher = rememberLauncherForActivityResult(
+                // We use OpenDocument rather then GetContent is it allows multiple
+                // MIME types:
+                contract = ActivityResultContracts.OpenMultipleDocuments()
+            ) { uriList: List<Uri> ->
+
+                val initialUriData = documentHelper.initDocumentState(context, uriList)
+
+                initialUriData?.let { it ->
+                    val filename = getFileName(context, it.uri)
+                    Timber.i("Selected file: $filename")
+                    onSelection(it)
+                }
+            }
+
+            return launcher
+        }
     }
 
-    @Composable
-    fun composeDocumentPickerLauncher(onSelection: (Uri) -> Unit, onError: (String) -> Unit)
-        : ManagedActivityResultLauncher<Array<String>, List<Uri>> {
+    private var uriList: List<Uri>? = null
+    private var currentIndex: Int? = null
 
-        val context = LocalContext.current
+    init {
+        reset()
+    }
 
-        val launcher = rememberLauncherForActivityResult(
-            // We use OpenDocument rather then GetContent is it allows multiple
-            // MIME types:
-            contract = ActivityResultContracts.OpenMultipleDocuments()
-        ) { uriList: List<Uri> ->
+    /**
+     * Initialise based on the list of Uris provided,
+     */
+    private fun initDocumentState(context: Context, theList: List<Uri>): UriData? {
+        reset()
 
-            // Close the menu:
-            // Use the first selection, if any:
-            val uri = uriList.firstOrNull()
-            uri?.let { it ->
-                val filename = getFileName(context, it)
-                Timber.i("Selected file: $filename")
-                if (filename?.lowercase()?.endsWith(".wav") == true)
-                    onSelection(it)
-                else
-                    onError("Sorry, only .wav files are supported.")
+        // Shallow copy:
+        uriList = theList.toMutableList()
+        uriList?.let { list ->
+            /*
+                Sort by display filename. No. This is slow for MyDrive, maybe it goes to the
+                internet to resolve each display name? So we rely on the natural order being something
+                sane.
+             */
+            /// uriList = list.sortedWith(compareBy { getFileName(context, it) } )
+        }
+        uriList?.let { list ->
+            if (list.isNotEmpty()) {
+                val i = 0
+                currentIndex = i
+                return UriData(list[i], i > 0, i < list.size - 1)
             }
         }
+        return null
+    }
 
-        return launcher
+    fun reset() {
+        uriList = null
+        currentIndex = null
+    }
+
+    fun getPreviousFile(): UriData? {
+        currentIndex?.let { i ->
+            uriList?.let { list ->
+                if (i > 0) {
+                    val previous = i - 1
+                    currentIndex = previous
+                    return UriData(list[previous], previous > 0, previous < list.size - 1)
+                }
+            }
+        }
+        return null
+    }
+
+    fun getNextFile(): UriData? {
+        currentIndex?.let { i ->
+            uriList?.let { list ->
+                if (i < list.size - 1) {
+                    val next = i + 1
+                    currentIndex = next
+                    return UriData(list[next], next > 0, next < list.size - 1)
+                }
+            }
+        }
+        return null
     }
 }

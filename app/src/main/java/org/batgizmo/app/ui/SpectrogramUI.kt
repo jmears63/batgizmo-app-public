@@ -19,6 +19,27 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+/*
+ * Copyright (c) 2025 John Mears
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 package org.batgizmo.app.ui
 
@@ -221,8 +242,6 @@ class SpectrogramUI(
 
     private val audioConfig = AudioConfig()
 
-    private val documentHelper = DocumentHelper()
-
 
     /**
      * This class maintains state relating to paging, and handles visibility
@@ -367,13 +386,10 @@ class SpectrogramUI(
         val menuExpanded = rememberSaveable { uiState.menuExpanded }
         val scope = rememberCoroutineScope()
 
-        val documentPickerLauncher = documentHelper.composeDocumentPickerLauncher(
-            onSelection = { uri: Uri ->
-                model.resetUIMode(AppMode.VIEWER, uri = uri)
-            },
-            onError = { msg: String ->
-                uiState.errorMessage.value = msg
-                uiState.showErrorDialog.value = true
+        val documentPickerLauncher = DocumentHelper.composeDocumentPickerLauncher(
+            model.documentHelper,
+            onSelection = { uriData: DocumentHelper.UriData ->
+                model.resetUIMode(AppMode.VIEWER, uriData)
             }
         )
 
@@ -999,6 +1015,8 @@ class SpectrogramUI(
             DropdownMenuItem(
                 text = { Text("Close file") },
                 onClick = {
+                    // In case we are currently viewing in multiple file mode:
+                    model.documentHelper.reset()
                     model.resetUIMode(AppMode.LIVE)
                 },
                 leadingIcon = { Icon(
@@ -1221,6 +1239,7 @@ class SpectrogramUI(
         appMode: MutableIntState
     ) {
         val scope = rememberCoroutineScope()
+        val context = LocalContext.current
 
         MyLatchingButton(
             buttonState.acquisitionChecked, buttonState.acquisitionEnabled,
@@ -1280,13 +1299,28 @@ class SpectrogramUI(
                 })
         }
         else {
+            fun gotoFile(uriData: DocumentHelper.UriData) {
+                val filename = DocumentHelper.getFileName(context, uriData.uri)
+                model.closePipeline()
+                model.openFile(uriData.uri, filename ?: uriData.uri.toString())
+                buttonState.previousFileEnabled.value = uriData.previousAvailable
+                buttonState.nextFileEnabled.value = uriData.nextAvailable
+            }
             MyButton(
                 Icons.Filled.KeyboardArrowUp, "Previous file",
                 buttonState.previousFileEnabled.value)  {
+                    val uriData = model.documentHelper.getPreviousFile()
+                    uriData?.let { it ->
+                        gotoFile(it)
+                    }
                 }
             MyButton(
                 Icons.Filled.KeyboardArrowDown, "Next file",
                 buttonState.nextFileEnabled.value)  {
+                val uriData = model.documentHelper.getNextFile()
+                uriData?.let { it ->
+                    gotoFile(it)
+                }
             }
         }
 
@@ -1340,15 +1374,18 @@ class SpectrogramUI(
         }
     }
 
-    private fun viewUri(context: Context, viewModel: UIModel, uri: Uri) {
-        val filename = documentHelper.getFileName(context, uri)
+    private fun viewUri(context: Context, viewModel: UIModel, uriData: DocumentHelper.UriData) {
+        val filename = DocumentHelper.getFileName(context, uriData.uri)
 
         uiState.processingFlag.value = true
         uiState.rawPageRange.value = null
         uiState.pagingState.value = null
 
         // Timber.d("processingFlag set true")
-        viewModel.openFile(uri, filename ?: "(unknown)")
+        viewModel.openFile(uriData.uri, filename ?: "(unknown)")
+
+        buttonState.previousFileEnabled.value = uriData.previousAvailable
+        buttonState.nextFileEnabled.value = uriData.nextAvailable
     }
 
     private fun onViewingFileOpened(
@@ -1517,6 +1554,8 @@ class SpectrogramUI(
 
     private fun closeViewer() {
         model.closePipeline()   // Idempotent.
+        model.documentHelper.reset()
+
         uiState.fileIsOpen.value = false
         uiState.title.value = null
         uiState.menuExpanded.value = false
@@ -1536,7 +1575,7 @@ class SpectrogramUI(
      * Responds to an event to change the UI to a viewer in reset state, whatever state it is in
      * currently.
      */
-    fun resetToViewer(context: Context, previousMode: Int, uri: Uri?) {
+    fun resetToViewer(context: Context, previousMode: Int, uriData: DocumentHelper.UriData?) {
 
         resetUI()
 
@@ -1548,8 +1587,8 @@ class SpectrogramUI(
             closeViewer()
         }
 
-        if (uri != null) {
-            viewUri(context, model, uri)
+        if (uriData != null) {
+            viewUri(context, model, uriData)
         }
 
         // Stop periodic location updates when we are in viewer mode:

@@ -341,7 +341,7 @@ class UIModel(application: Application,
 
     data class AppModeRequest(
         val mode: AppMode,
-        val uri: Uri?,              // Optional file to view in VIEWER mode.
+        val uriData: DocumentHelper.UriData?,              // Optional file to view in VIEWER mode.
         val streaming: Boolean      // True if we should enter LIVE mode with streaming active
     )
 
@@ -373,6 +373,8 @@ class UIModel(application: Application,
         Timber.d("Location update received: ${it.latitude} ${it.longitude}")
         locationMutableFlow.value = it
     }
+
+    val documentHelper = DocumentHelper()
 
     init {
         Timber.d("Creating instance of UIModel")
@@ -1286,11 +1288,11 @@ class UIModel(application: Application,
      */
     fun resetUIMode(
         requestedMode: AppMode = AppMode.LIVE,
-        uri: Uri? = null,
+        uriData: DocumentHelper.UriData? = null,
         streaming: Boolean = false
     ) {
         viewModelScope.launch(CoroutineName("resetUIMode coroutine")) {
-            resetAppModeChannel.send(AppModeRequest(requestedMode, uri, streaming))
+            resetAppModeChannel.send(AppModeRequest(requestedMode, uriData, streaming))
         }
     }
 

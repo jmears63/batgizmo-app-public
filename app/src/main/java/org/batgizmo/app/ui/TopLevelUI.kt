@@ -52,6 +52,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.LifecycleCoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.batgizmo.app.DocumentHelper
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
@@ -239,8 +240,11 @@ class TopLevelUI(private val model: UIModel) {
     fun processViewIntent(context: Context, lifecycleScope: LifecycleCoroutineScope,
                           viewModel: UIModel, uri: Uri) {
         lifecycleScope.launch {
+            // In case we are currently viewing in multiple file mode:
+            model.documentHelper.reset()
             // Main UI thread.
-            model.resetUIMode(AppMode.VIEWER, uri)
+            model.resetUIMode(AppMode.VIEWER,
+                DocumentHelper.UriData(uri, false, false))
         }
     }
 
@@ -259,7 +263,7 @@ class TopLevelUI(private val model: UIModel) {
 
         when (request.mode) {
             AppMode.VIEWER -> {
-                spectrogramUI.resetToViewer(context, previousMode, request.uri)
+                spectrogramUI.resetToViewer(context, previousMode, request.uriData)
             }
             AppMode.LIVE -> {
                 spectrogramUI.resetToLive(context, previousMode, request.streaming)
