@@ -180,6 +180,7 @@ class SpectrogramUI(
         val menuExpanded: MutableState<Boolean> = mutableStateOf(false),
         val showMetadata: MutableState<Boolean> = mutableStateOf(false),
         val showErrorDialog: MutableState<Boolean> = mutableStateOf(false),
+        val resetUIOnErrorDialogDismissed: MutableState<Boolean> = mutableStateOf(false),
         val errorMessage: MutableState<String> = mutableStateOf(""),
         val processingFlag: MutableState<Boolean> = mutableStateOf(false),
         val pagingState: MutableState<PagingStateHandler?> = mutableStateOf(null),
@@ -202,6 +203,7 @@ class SpectrogramUI(
             menuExpanded.value = false
             showMetadata.value = false
             showErrorDialog.value = false
+            resetUIOnErrorDialogDismissed.value = false
             errorMessage.value = ""
             processingFlag.value = false
             pagingState.value = null
@@ -704,7 +706,14 @@ class SpectrogramUI(
 
         if (uiState.showErrorDialog.value) {
             ErrorDialog(
-                onDismiss = { uiState.showErrorDialog.value = false },
+                onDismiss = {
+                    uiState.showErrorDialog.value = false
+                    if (uiState.resetUIOnErrorDialogDismissed.value) {
+                        uiState.resetUIOnErrorDialogDismissed.value = false
+                        // Reset the UI state:
+                        model.resetUIMode()
+                    }
+                },
                 uiState.errorMessage.value
             )
         }
@@ -1380,8 +1389,9 @@ class SpectrogramUI(
             val msg = owfr.errorMessage
             uiState.errorMessage.value = "Unable to open data file.\n\n$msg"
             uiState.showErrorDialog.value = true
+            uiState.resetUIOnErrorDialogDismissed.value = true
 
-            // Clean up. An error results in any file open or partly open to be closed:
+            // Clean up. An error results in a file open or partly open to be closed:
             model.closePipeline()
         }
     }

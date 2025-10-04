@@ -1,5 +1,7 @@
 Version     Date            Description
 
+1.0.15      2025-10-04      Fixed some minor bugs in the way recording is triggered and written to file.
+
 1.0.14      2025-09-23      Fix: respect system level lock orientation setting while permitting inverted portrait.
                             Perform an auto BnC when pausing live acquisition.
 

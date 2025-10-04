@@ -568,10 +568,12 @@ Java_org_batgizmo_app_pipeline_NativeUSB_copyURBBufferData(JNIEnv *env, jobject 
     jint rc = -1;
 
     auto pSource = reinterpret_cast<const data_t *>(source_native_offset);
-    int samples_to_copy = source_samples;
+
+    // Cap this at the target buffer size so there is overwriting or overflow:
+    int samples_to_copy = std::min(source_samples, target_buffer_size);
 
     jshort *pBuffer = env->GetShortArrayElements(target_buffer, nullptr);
-    if (target_buffer) {
+    if (pBuffer) {
         data_t *pTarget = pBuffer + target_buffer_offset;
 
         // We need to copy to the destination target_buffer with wrap, so there may be two parts to the copy.
@@ -579,9 +581,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_copyURBBufferData(JNIEnv *env, jobject 
         const int part1Space = target_buffer_size - target_buffer_offset;
         const int part1Count = samples_to_copy > part1Space ? part1Space : samples_to_copy;
         for (int i = 0; i < part1Count; i++) {
-            *pTarget++ = *pSource;
-            // *(data_t *)pSource = 0;     // TODO remove this.
-            pSource++;
+            *pTarget++ = *pSource++;
         }
         samples_to_copy -= part1Count;
 

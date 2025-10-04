@@ -52,6 +52,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.round
 
 class FileWriter(
     private val scope: CoroutineScope,
@@ -102,23 +103,80 @@ class FileWriter(
     private var channelJob: Job? = null
 
     // private val bufferLengthS = 1f
-    private val maxFileWriteChunkEntries = 9600          // A bit arbitrary - big enough to get batching efficiency.
-    private val maxFileEntries = sampleRate * model.settings.maxFileTimeMs / 1000
-    private val preTriggerEntries = sampleRate * model.settings.preTriggerTimeMs / 1000
-    private val postTriggerEntries = sampleRate * model.settings.postTriggerTimeMs / 1000
-    // Padding buffer size to allow for some latency when written data from trigger:
-    private val bufferLengthEntries =
-        sampleRate * (Settings.PreTriggerTimeOptions.PRETRIGGER_TIME_MAX.value + 500) / 1000
-    private val buffer = ShortArray(bufferLengthEntries)
 
-    private val bufferDataAvailable = Channel<Unit>(capacity = 0)
+    /**
+     * The maximum chunk length we will write to file.
+     * A bit arbitrary - big enough to get batching efficiency.
+     */
+    private val maxFileWriteChunkEntries = 9600
 
-    private var entriesAvailable =
-        0                // Total entries available in the buffer, capped at the buffer size.
-    private var entriesActuallyWrittenToFile = 0
-    private var entriesToBeWrittenToFile: Int? = null
-    private var nextWriteIndex = 0              // Next entry that will be written to buffer.
-    private var nextReadIndex = 0               // Next entry that will be read for writing file.
+
+    /**
+     * The maximum size of a any file we write.
+     */
+    private var maxFileEntries = 0
+
+    /**
+     * The number of entries to include before the trigger when writing to
+     * file, if they are available.
+     */
+    private var preTriggerEntries = 0
+
+    /**
+     * The number of entries to write to file following a trigger.
+     */
+    private var postTriggerEntries = 0
+
+
+    /**
+     * A buffer to use to hold raw data waiting to be written to file.
+     * Allow some padding so that there is time to open the file etc after
+     * a trigger, without losing any data.
+     */
+    private val bufferPaddingTimeMs = 1000
+    private val bufferSizeEntries =
+        sampleRate * (Settings.PreTriggerTimeOptions.PRETRIGGER_TIME_MAX.value + bufferPaddingTimeMs) / 1000
+    private val buffer = ShortArray(bufferSizeEntries)
+
+    /**
+     * Used to signal that new raw data is available in the buffer.
+     * capacity zero => a rendezvous channel.
+     */
+    private val bufferDataAvailable = Channel<Unit>(capacity = 1)
+
+    /**
+     * The number of entries available to be read from the buffer, based on the difference between
+     * entries added and entries removed from it..
+     */
+    private var entriesAvailable = 0
+
+    /**
+     * The number of entries we have written to the the current file so far.
+     */
+    private var entriesActuallyWrittenToCurrentFile = 0
+
+    /**
+     * The total entries written to all files in this sequence.
+     */
+    private var entriesActuallyWrittenToFileSequence = 0
+
+    /**
+     * The number of entries we have been asked to write to file, or null for unlimited.
+     * Also, the number of those entries that are part of the pretrigger.
+     */
+    private var entriesToWriteToFileSequence: Int? = null
+    private var preTriggerEntriesToBeWrittenToFile: Int = 0
+
+    /**
+     * The index that the next new entry should be written to.
+     */
+    private var nextWriteIndex = 0
+
+    /**
+     * The index that the next unread entry should be read from.
+     */
+    private var nextReadIndex = 0
+
     private var guanoDataTime: String? = null
     private var triggerHandlerJob: Job? = null
 
@@ -132,9 +190,11 @@ class FileWriter(
     val batgizmoNamespace = "BatGizmo|App"  // As recommended by David Riggs, riggsd/guano-spec.
 
 
-    // This mutex is used to protect all mutable data in this class *except* for the contents
-    // of buffer. Use of mutex for the indexes we update has a side effect of being
-    // a memory barrier. So as long as reading keeps ahead of writing, we are OK.
+    /**
+     * This mutex is used to protect all mutable data in this class *except* for the contents
+     * of buffer. Use of mutex for the indexes we update has a side effect of being
+     * a memory barrier. So as long as reading keeps ahead of writing, we are OK.
+     */
     private var mutex = Mutex()
 
     private val nativeUSB = NativeUSB()
@@ -143,46 +203,93 @@ class FileWriter(
         return scope.launch(context = Dispatchers.IO) {
             try {
                 // Worker thread.
-                require(bufferLengthEntries > 0)
+                require(bufferSizeEntries > 0)
 
                 Timber.d("createChannelJob coroutine started")
-                // The for statement will check if a cancel is pending, and if so pass control
-                // to the finally block for cleanup and prevent this job becoming a zombie:
-                for (bufferDescriptor in LiveDataBridge.fileWriterChannel) {
-                    // Copy the native data into the buffer with wrap.
 
-                    var sourceSamples = bufferDescriptor.samples
-                    // Paranoia: what if more data is available than we have space for in our
-                    // buffer? Shouldn't happen, but...
-                    if (sourceSamples > bufferLengthEntries) {
-                        sourceSamples = bufferLengthEntries
-                        Timber.e("buffer is not big enough for the data available: ${bufferDescriptor.samples} > $bufferLengthEntries")
+                //  Handy for testing and debugging:
+                val useFakeData = false
+                var fake_value: Short = 0
+
+                /*
+                    Wait for new raw data to be available from the microphone.
+                    The for statement will also check if a cancel is pending, and if so pass control
+                    to the finally block for cleanup and prevent this job becoming a zombie:
+                */
+                for (bufferDescriptor in LiveDataBridge.fileWriterChannel) {
+
+                    // New live data is available.
+
+                    // We will always read as much data into the buffer as we can even if
+                    // we overtake the reader and overwrite, so that valid pre trigger data is always available:
+                    val sourceSamples = bufferDescriptor.samples
+
+                    /*
+                        Copy the newly available data into the next available location in our buffer,
+                        wrapping it as required.
+                        Note: the mutex is not held, concurrent access to the buffer itself is not
+                        synchronized:
+                    */
+                    var copiedCount = 0
+                    if (useFakeData) {
+                        var j = nextWriteIndex
+                        for (i in 0 until sourceSamples) {
+                            buffer[j] = fake_value
+                            j += 1
+                            if (j == bufferSizeEntries)
+                                j = 0
+                            fake_value = (fake_value + 1).toShort()
+                            if (fake_value >= 0x7000)
+                                fake_value = 0
+                        }
+                        copiedCount = sourceSamples
+                    }
+                    else {
+                        copiedCount = nativeUSB.copyURBBufferData(
+                            bufferDescriptor.nativeAddress,
+                            sourceSamples,
+                            buffer,
+                            nextWriteIndex,
+                            bufferSizeEntries
+                        )
                     }
 
-                    // Note: the mutex is not held, concurrent access to the buffer itself is not
-                    // synchronized:
-                    val copiedCount = nativeUSB.copyURBBufferData(
-                        bufferDescriptor.nativeAddress,
-                        sourceSamples,
-                        buffer,
-                        nextWriteIndex,
-                        bufferLengthEntries
-                    )
-                    // Timber.d("New data arrived: $copiedCount entries")
-
                     mutex.withLock {
-                        nextWriteIndex = addAndWrap(nextWriteIndex, copiedCount, bufferLengthEntries)
+                        require(copiedCount in 0 ..sourceSamples) {
+                            "Expected up to $sourceSamples samples to be copied, actually got $copiedCount"
+                        }
+                        // Timber.d("New data arrived: $copiedCount entries")
 
-                        // The number of entries available maxes out at the buffer size:
-                        entriesAvailable = minOf(entriesAvailable + copiedCount, bufferLengthEntries)
+                        require(copiedCount in 0..bufferSizeEntries) {
+                            "nativeUSB.copyURBBufferData returned $copiedCount entries, bufferSizeEntries = $bufferSizeEntries" }
 
+                        // Write the new data to the buffer, wrapping as required:
+                        /// Timber.d("asdf: adding first value = ${buffer[nextWriteIndex]}")
+                        nextWriteIndex = addAndWrap(nextWriteIndex, copiedCount, bufferSizeEntries)
+                        /// Timber.d("asdf: nextWriteIndex = $nextWriteIndex")
+                        // Can't be any more than the buffer size:
+                        entriesAvailable = minOf(entriesAvailable + copiedCount, bufferSizeEntries)
+                        /// Timber.d("asdf: entriesAvailable += copiedCount ($copiedCount) = $entriesAvailable")
 
-                        // Signal to the file writer that more data is available:
+                        // Timber.d("New raw data received: copiedCount = $copiedCount")
+                        require(entriesAvailable in 0..bufferSizeEntries) {
+                            "entriesAvailable = $entriesAvailable, bufferSizeEntries = $bufferSizeEntries"
+                        }
+
+                        /*
+                            Try to signal to the file writer that more data is available. If the
+                            listener isn't listening, just continue. The listener can pick up all
+                            the data the next time around.
+                         */
                         bufferDataAvailable.trySend(Unit)
                     }
                 }
             }
+            catch (e: CancellationException) {
+                // Normal - the coroutine has been cancelled.
+            }
             catch (e: Exception) {
+                Timber.e("exception caught (1): $e")
                 handleException(e)
             }
             finally {
@@ -208,6 +315,7 @@ class FileWriter(
                 doStateMachine()
             }
             catch (e: Exception) {
+                Timber.e("exception caught (2) : $e")
                 handleException(e)
             }
             Timber.i("run coroutine finished")
@@ -380,8 +488,11 @@ class FileWriter(
         // Important: reset this so we don't immediately cancel next time:
         cancelled.set(false)
 
-        entriesToBeWrittenToFile = null
+        entriesToWriteToFileSequence = null
+        preTriggerEntriesToBeWrittenToFile = 0
         nextReadIndex = 0
+        nextWriteIndex = 0
+        entriesAvailable = 0
     }
 
     private suspend fun transitionStartManualTriggered(config: TriggerConfig) {
@@ -395,6 +506,7 @@ class FileWriter(
                     writeFileSequence(this, false, TriggerType.MANUAL)
                 }
                 catch (e: Exception) {
+                    Timber.e("exception caught (3): $e")
                     handleException(e)
                 }
                 Timber.d("transitionStartManualTriggered coroutine finished")
@@ -448,6 +560,7 @@ class FileWriter(
                 fileWriterJob?.cancelAndJoin()
             }
             catch (e: Exception) {
+                Timber.e("exception caught (4): $e")
                 handleException(e)
             }
 
@@ -497,6 +610,7 @@ class FileWriter(
 
         var resetIndexes = true
         var firstFile = true
+        entriesActuallyWrittenToFileSequence = 0
         try {
             // Signal to the UI that we are writing to file:
             signalCurrentlyWriting(true)
@@ -509,13 +623,21 @@ class FileWriter(
                 }
                 resetIndexes = false
 
-
                 // If this is a continuation of a previous file, we will resume from the
                 // exact buffer position that the previous file ended. We need reading to keep
                 // ahead of writing for that work.
-                val continuationFileNeeded = writeStreamToFile(scope, s)
 
-                // Create a pubically accessible .wav file containing data from the temp file:
+                val continuationFileNeeded: Boolean = try {
+                    writeStreamToFile(scope, s)
+                } catch (e: Exception) {
+                    Timber.d("Exception $e")
+                    throw e
+                } catch (e: Error) {
+                    Timber.d("Error $e")
+                    throw e
+                }
+
+                // Create a publicly accessible .wav file containing data from the temp file:
                 mutex.withLock {
                     endFile(if (firstFile) initialFileFields else continuationFileFields)
                 }
@@ -525,11 +647,14 @@ class FileWriter(
             } while (continuationFileNeeded)
         }
         finally {
+            Timber.d("Finally executed")
             signalCurrentlyWriting(false)
         }
     }
 
     private suspend fun startFile(resetIndexes: Boolean, isTriggered: Boolean): FileOutputStream {
+
+        getSettingsSnapshot()
 
         // Get the local time to use as the basis of the file and folder name and the GUANO timestamp
         // field:
@@ -562,16 +687,29 @@ class FileWriter(
             val nowIndex = nextWriteIndex
 
             /*
-             * Figure out where to start writing to file from. That can be in past if pretrigger
+             * Figure out where to start writing to file from in the buffer. That can be in past if pretrigger
              * is configured. The data writing loop will catch up from that point, as long as the data
              * hasn't been overwritten in the buffer.
              * Don't try to read more pretrigger data than is available.
              */
             val preTriggerEntriesAvailable = minOf(preTriggerEntries, entriesAvailable)
+            require(preTriggerEntriesAvailable in 0..preTriggerEntries) {
+                "preTriggerEntriesAvailable = $preTriggerEntriesAvailable, preTriggerEntries = $preTriggerEntries"
+            }
+            // Limit entriesAvailable to the data we intend to write to file, in effect discarding any older data
+            // and avoiding reads from overtaking writes to the buffer:
+            entriesAvailable = preTriggerEntriesAvailable
             nextReadIndex =
-                subtractAndWrap(nowIndex, preTriggerEntriesAvailable, bufferLengthEntries)
+                subtractAndWrap(nowIndex, preTriggerEntriesAvailable, bufferSizeEntries)
+            require(nextReadIndex in 0 until bufferSizeEntries) {
+                "nextReadIndex = $nextReadIndex, bufferSizeEntries = $bufferSizeEntries"
+            }
+            /// Timber.d("asdf: preTriggerEntriesAvailable = $preTriggerEntriesAvailable, nextReadIndex = $nextReadIndex, " +
+            ///        "nowIndex = $nowIndex, entriesAvailable = $entriesAvailable")
 
-            entriesToBeWrittenToFile = if (isTriggered) {
+            // Note some values to be used when retriggering during a recording:
+            preTriggerEntriesToBeWrittenToFile = preTriggerEntriesAvailable
+            entriesToWriteToFileSequence = if (isTriggered) {
                 // Calculate an end index based on the same reference point as the read index:
                 preTriggerEntriesAvailable + postTriggerEntries
             } else {
@@ -580,11 +718,22 @@ class FileWriter(
             }
         }
 
-
         // Track how many entries to write to each file:
-        entriesActuallyWrittenToFile = 0
+        entriesActuallyWrittenToCurrentFile = 0
 
         return s
+    }
+
+    private fun getSettingsSnapshot() {
+        // Using float to avoid integer overflows:
+        maxFileEntries = round(sampleRate.toFloat() * model.settings.maxFileTimeMs / 1000).toInt()
+        preTriggerEntries = round(sampleRate.toFloat() * model.settings.preTriggerTimeMs / 1000).toInt()
+        postTriggerEntries = round(sampleRate.toFloat() * model.settings.postTriggerTimeMs / 1000).toInt()
+
+        // Make sure the maximum is long enough to accommodate the pre trigger. Multiple
+        // files can be written to accommodate the post trigger if required
+        maxFileEntries = maxOf(maxFileEntries, preTriggerEntries)
+        Timber.d("Resultant maxFileEntries = $maxFileEntries")
     }
 
     private fun endFile(additionalGuanoFields: LinkedHashMap<String, String>?) {
@@ -600,7 +749,7 @@ class FileWriter(
                     val guanoData = makeGuanoData(additionalGuanoFields)
 
                     val wavHeader = createWavHeader(
-                        dataEntries = entriesActuallyWrittenToFile,
+                        dataEntries = entriesActuallyWrittenToCurrentFile,
                         sampleRate = sampleRate,
                         bitsPerSample = 16,     // Ugly hard coding for now.
                         guanoData.size
@@ -631,84 +780,117 @@ class FileWriter(
         var continuationFileNeeded = true
 
         do {
-            var entriesAvailableToWrite = 0
-            var entriesToWrite = 0
             var nextReadIndexCopy = 0       // A local copy we can access without the mutex.
-            var finished = false
+            var entriesAvailableCopy = 0
+            var entriesToWriteToCurrentFile = 0
+            var finishedCurrentFile = false
 
             mutex.withLock {
+                // Timber.d("nextWriteIndex = $nextWriteIndex, nextReadIndex = $nextReadIndex, entriesAvailable = $entriesAvailable")
 
-                // If this is a finite length recording, handle retriggers:
-                entriesToBeWrittenToFile?.let { it ->
-                    // See if any trigger events have arrived while we are writing the file; if so,
-                    // handle the retrigger by extending the total number of entries we plan to write:
+                /*
+                    Handle retriggering if required by extending the total entries to be written to
+                    the sequence of files.
+                */
+                entriesToWriteToFileSequence?.let { it ->
                     val result = triggerEventChannel.tryReceive()
                     if (result.isSuccess) {
                         // I don't *think* this is necessary, but just in case we need it to consume the event:
                         val dummy = result.getOrNull()
 
-                        val currentlyRemainingEntries = maxOf(0, it - entriesActuallyWrittenToFile)
-                        entriesToBeWrittenToFile =
-                            it - currentlyRemainingEntries + postTriggerEntries
+                        val remainingPretriggerEntries = maxOf(0, preTriggerEntriesToBeWrittenToFile - entriesActuallyWrittenToFileSequence)
+                        entriesToWriteToFileSequence = entriesActuallyWrittenToFileSequence + remainingPretriggerEntries + postTriggerEntries
 
-                        Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToBeWrittenToFile")
+                        require(entriesToWriteToFileSequence!! >= 0) {
+                            "entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile, " +
+                            "entriesToBeWrittenToFileSequence = $entriesToWriteToFileSequence, " +
+                            "it = $it, entriesActuallyWrittenToFilesInSequence = $it"
+                        }
+
+                        Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToWriteToFileSequence; " +
+                                "entriesActuallyWrittenToFilesInSequence = $entriesActuallyWrittenToFileSequence; remaining pretrigger = $remainingPretriggerEntries")
                     }
                 }
 
+                // Get a consistent snapshot of instance level values, as we will release and re-acquire
+                // the mutex in a moment:
                 nextReadIndexCopy = nextReadIndex
-                entriesAvailableToWrite =
-                    subtractAndWrap(nextWriteIndex, nextReadIndexCopy, bufferLengthEntries)
+                entriesAvailableCopy = entriesAvailable
+                entriesToWriteToCurrentFile = entriesAvailableCopy
+                require(entriesToWriteToCurrentFile >= 0) {
+                    "entriesToWrite = $entriesToWriteToCurrentFile, nextReadIndexCopy = $nextReadIndexCopy"
+                }
 
-                // Limit based on the entries available:
-                entriesToWrite = entriesAvailableToWrite
-
-                // Limit based on the maximum chunk size:
-                entriesToWrite = minOf(entriesToWrite, maxFileWriteChunkEntries)
+                // Limit based on the maximum file write chunk size:
+                entriesToWriteToCurrentFile = minOf(entriesToWriteToCurrentFile, maxFileWriteChunkEntries)
+                require(entriesToWriteToCurrentFile >= 0) {
+                    "(1) entriesToWriteToCurrentFile = $entriesToWriteToCurrentFile, entriesAvailableCopy = $entriesAvailableCopy"
+                }
 
                 // Limit based on the maximum file size:
-                val spaceRemainingInFile = maxFileEntries - entriesActuallyWrittenToFile
-                if (entriesToWrite > spaceRemainingInFile) {
-                    entriesToWrite = spaceRemainingInFile
-                    finished = true
+                val spaceRemainingInCurrentFile = maxFileEntries - entriesActuallyWrittenToCurrentFile
+                if (entriesToWriteToCurrentFile > spaceRemainingInCurrentFile) {
+                    entriesToWriteToCurrentFile = spaceRemainingInCurrentFile
+                    Timber.d("Finishing this file: maximum file size exceeded: entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile, " +
+                            "maxFileEntries = $maxFileEntries")
+                    finishedCurrentFile = true
+                }
+                require(entriesToWriteToCurrentFile >= 0) {
+                    "(2) entriesToWriteToCurrentFile = $entriesToWriteToCurrentFile, spaceRemainingInThisFile = $spaceRemainingInCurrentFile"
                 }
 
-                // Limit based on the number of entries we planned to write:
-                entriesToBeWrittenToFile?.let {
-                    if (entriesActuallyWrittenToFile + entriesToWrite >= it) {
-                        entriesToWrite = it - entriesActuallyWrittenToFile
+                // Limit based on the total number of entries we planned to write in the file sequence:
+                entriesToWriteToFileSequence?.let {
+                    /// Timber.d("asdf: entriesToWriteToFileSequence = $it, entriesActuallyWrittenToFileSequence = $entriesActuallyWrittenToFileSequence, entriesToWriteToCurrentFile=$entriesToWriteToCurrentFile")
+                    if (entriesActuallyWrittenToFileSequence + entriesToWriteToCurrentFile >= it) {
+                        entriesToWriteToCurrentFile = maxOf(0, it - entriesActuallyWrittenToFileSequence)
                         continuationFileNeeded = false
-                        finished = true
+                        finishedCurrentFile = true
+                        Timber.d("Finishing sequence: expected entries for file sequence have been written.")
+                    }
+                    require(entriesToWriteToCurrentFile >= 0) {
+                        "(3) entriesToWriteToCurrentFile = $entriesToWriteToCurrentFile, entriesToWriteToFileSequence = $it, " +
+                        "entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile " +
+                        "entriesToWriteToFileSequence = $entriesToWriteToFileSequence"
                     }
                 }
-
-                /*
-                Log.d(
-                    logTag,
-                    "entriesAvailableToWrite = $entriesAvailableToWrite, maxFileChunkSize = $maxFileChunkSize"
-                )
-                 */
             }
 
             /*
                 Write to file if we are finishing, or there is at least a full chunk available:
                 This avoids large numbers of very small writes.
              */
-            if (finished || entriesAvailableToWrite >= maxFileWriteChunkEntries) {
-                val count = writeDataWithWrap(s, start = nextReadIndexCopy, length = entriesToWrite)
+            if (finishedCurrentFile || entriesAvailableCopy >= maxFileWriteChunkEntries) {
+                /// Timber.d("asdf: Writing chunk of size $entriesToWrite from entry $nextReadIndexCopy, "
+                ///        + "entriesAvailable = $entriesAvailable, first value = ${buffer[nextReadIndexCopy]}")
+                val count = writeDataWithWrap(s, start = nextReadIndexCopy, length = entriesToWriteToCurrentFile)
                 mutex.withLock {
-                    entriesActuallyWrittenToFile += count
-                    nextReadIndex = addAndWrap(nextReadIndex, count, bufferLengthEntries)
+                    entriesAvailable -= count
+                    /// Timber.d("asdf: entriesAvailable -= count ($count): $entriesAvailable")
+                    require(count in 0..entriesToWriteToCurrentFile) {
+                        "count = $count, entriesToWrite = $entriesToWriteToCurrentFile"
+                    }
+                    entriesActuallyWrittenToCurrentFile += count
+                    entriesActuallyWrittenToFileSequence += count
+                    nextReadIndex = addAndWrap(nextReadIndex, count, bufferSizeEntries)
+                    require(nextReadIndex in 0..bufferSizeEntries) {
+                        "nextReadIndex = $nextReadIndex, count=$count, entriesActuallyWrittenToFile=$entriesActuallyWrittenToCurrentFile"
+                    }
                     // Timber.d("Entries written count = $count, nextReadIndex = $nextReadIndex")
                 }
-                if (finished) {
-                    Timber.d("File is full or all data has been written.")
+                if (finishedCurrentFile) {
+                    Timber.d("Finishing file with $entriesActuallyWrittenToCurrentFile entries written.")
                     break   // The file is full.
                 }
-            } else {
+            }
+
+            // Don't block until we have written all available data to file:
+            if (entriesAvailable < maxFileWriteChunkEntries) {
                 try {
                     // Yield until we get a signal that more data is available.
                     // Timber.d("Yielding until more data arrives.")
                     bufferDataAvailable.receive()
+                    //Timber.d("bufferDataAvailable.receive() returned")
                 } catch (e: CancellationException) {
                     Timber.d("File writing job is cancelled.")
                     continuationFileNeeded = false
@@ -716,6 +898,8 @@ class FileWriter(
                 }
             }
         } while (!cancelled.get() && thisScope.isActive)
+
+        Timber.d("Finished file writing loop.")
 
         if (cancelled.get())
             continuationFileNeeded = false
@@ -878,14 +1062,14 @@ class FileWriter(
 
         // The data may be wrapped so we may need to write in two chunks:
         var chunk1Offset = start
-        val chunk1Length = minOf(remainingEntriesToCopy, bufferLengthEntries - chunk1Offset)
+        val chunk1Length = minOf(remainingEntriesToCopy, bufferSizeEntries - chunk1Offset)
         writePcm16LeToStream(s, buffer, chunk1Offset, chunk1Length)
         remainingEntriesToCopy -= chunk1Length
 
         // Copy a second chunk if the data is wrapped:
         if (remainingEntriesToCopy > 0) {
             val chunk2Offset = 0
-            val chunk2Length = minOf(remainingEntriesToCopy, bufferLengthEntries - chunk2Offset)
+            val chunk2Length = minOf(remainingEntriesToCopy, bufferSizeEntries - chunk2Offset)
             writePcm16LeToStream(s, buffer, chunk2Offset, chunk2Length)
             remainingEntriesToCopy -= chunk2Length  // Should be 0 at this point.
         }
@@ -1000,14 +1184,14 @@ class FileWriter(
 
     private fun addAndWrap(value: Int, delta: Int, modulus: Int): Int {
         var result = value + delta
-        if (result >= modulus)
+        while (result >= modulus)
             result -= modulus
         return result
     }
 
     private fun subtractAndWrap(value: Int, delta: Int, modulus: Int): Int {
         var result = value - delta
-        if (result < 0)
+        while (result < 0)
             result += modulus
         return result
     }

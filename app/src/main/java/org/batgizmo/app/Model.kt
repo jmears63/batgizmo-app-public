@@ -90,7 +90,7 @@ object LiveDataBridge {
     // Provide finite capacity for buffering and decoupling.
     // Should probably match the URBS_TO_JUGGLE in the native layer.
     val renderingChannel = Channel<BufferDescriptor>(capacity = 10)
-    val fileWriterChannel = Channel<BufferDescriptor>(capacity = 10)
+    val fileWriterChannel = Channel<BufferDescriptor>(capacity = 100)
 
     /**
      * This method is called from the native layer in thread it uses for data
@@ -105,8 +105,14 @@ object LiveDataBridge {
         // This is the synchronous method for send an event in a channel.
         // It may fail, for example, if the channel is full, which is OK.
 
-        renderingChannel.trySend(BufferDescriptor(nativeAddress, samples))
-        fileWriterChannel.trySend(BufferDescriptor(nativeAddress, samples))
+        val rc1 = renderingChannel.trySend(BufferDescriptor(nativeAddress, samples))
+        if (!rc1.isSuccess) {
+            Timber.e("renderingChannel is full: data buffer discarded")
+        }
+        val rc2 = fileWriterChannel.trySend(BufferDescriptor(nativeAddress, samples))
+        if (!rc2.isSuccess) {
+            Timber.e("fileWriterChannel is full: data buffer discarded")
+        }
     }
 }
 
