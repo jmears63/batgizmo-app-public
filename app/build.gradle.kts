@@ -19,8 +19,8 @@ android {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 30
         targetSdk = 36
-        versionCode = 15
-        versionName = "feature-folderbrowser"
+        versionCode = 16
+        versionName = "1.0.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
@@ -32,11 +32,8 @@ android {
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
 
                 // Optimize both kiss_ftt and USB calculations:
-                /*
                 cppFlags += "-O3"
                 cFlags += "-O3"
-
-                 */
             }
         }
         signingConfig = signingConfigs.getByName("release")
@@ -99,7 +96,6 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.timber)
-    implementation(libs.androidx.documentfile)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
