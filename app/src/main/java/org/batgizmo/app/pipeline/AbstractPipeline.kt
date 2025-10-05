@@ -42,8 +42,10 @@ import org.batgizmo.app.pipeline.ColourMapStep.Companion.dbRangeMax
 import timber.log.Timber
 import kotlin.math.log2
 import kotlin.math.pow
+import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.time.measureTime
 
 abstract class AbstractPipeline(
     val pipelineParametersSnapshot: PipelineParameters,
@@ -82,6 +84,19 @@ abstract class AbstractPipeline(
             frequencyBuckets: Int,
             transformedDataBuffer: FloatArray
         ): FloatArray?
+
+        external fun findNoiseBaseline(
+            xMin: Int, xMax: Int,
+            frequencyBuckets: Int,
+            transformedDataBuffer: FloatArray
+        ): FloatArray?
+
+        external fun applyNoiseBaseline(
+            xMin: Int, xMax: Int,
+            frequencyBuckets: Int,
+            profile: FloatArray,
+            transformedDataBuffer: FloatArray
+        )
 
         /**
          * Calculate the FFT window size and overlap we are going to use, based on user settings
@@ -524,13 +539,75 @@ abstract class AbstractPipeline(
             if (range != null) {
                 val lower = maxOf(ColourMapStep.dbRangeMax.start, range[0])
                 val diff = range[1] - lower
-                val blackRange = diff * 0.25f
+                val blackRange = diff * 0.30f
                 floatRange = FloatRange(lower + blackRange, range[1])
             }
             Timber.d("auto BnC range in visible region is $floatRange")
 
             return floatRange
         }
+    }
+
+    /**
+     * Call this method on a worker thread.
+     *
+     * Calculate the noise profile, resulting in a noise offset per frequency bucket.
+     *
+     * This method does heavy calculations: don't call it in the main thread.
+     */
+    suspend fun calculateNoiseProfile(): FloatArray? {
+        var profile: FloatArray? = null
+        mutex.withLock() {
+            val pd = pipelineData
+            if (pd == null)
+                return null
+
+            val calcs = pd.calcs
+
+            // Use all the data available in the buffer, don't limit it to the visible range:
+            val assignedTimeRange = pipelineData?.transformStep?.dataAssignedRange
+            assignedTimeRange?.let {
+               if (assignedTimeRange.second > assignedTimeRange.first) {
+                   val elapsed1 = measureTime {
+                       profile = findNoiseBaseline(
+                            assignedTimeRange.first, assignedTimeRange.second,
+                            calcs.transformedFrequencyBucketCount,
+                            pd.transformedDataBuffer)
+                   }
+                   Timber.d("Time to find the baseline = $elapsed1")
+
+                   profile?.let { it ->
+                       /*
+                        * Adjust the profile to provide a linear reduction above a certain frequency.
+                        * This subjectively looks natural and it avoids over emphasising spurious detail at
+                        * very high frequencies. The parameters were chosen by trial and error.
+                        * Linear reduction to avoid expensive logs in the loop below.
+                        */
+                       val fCornerHz: Float = 80f * 1000f
+                       val reductionFactor = 10f
+                       val freqCornerBucket = round((fCornerHz) / calcs.transformedFrequencyInterval)
+                           .toInt().coerceIn(1, calcs.transformedFrequencyBucketCount - 1)
+                       for (freqBucket in freqCornerBucket until calcs.transformedFrequencyBucketCount) {
+                           val freqRatio = (freqBucket - freqCornerBucket).toFloat() / freqCornerBucket
+                           val deltaDb = freqRatio * reductionFactor
+                           it[freqBucket] = it[freqBucket] + deltaDb    // *add* the delta as we will subtract the profile.
+                       }
+                   }
+                }
+
+                profile?.let {
+                    val elapsed2 = measureTime {
+                        applyNoiseBaseline(
+                            assignedTimeRange.first, assignedTimeRange.second,
+                            calcs.transformedFrequencyBucketCount,
+                            it, pd.transformedDataBuffer
+                        )
+                    }
+                    Timber.d("=> Time to apply the baseline = $elapsed2")
+                }
+            }
+        }
+        return profile
     }
 
     data class ScreenFactors(val aspectFactor: Float, val pixelsPerSecond: Float)
@@ -692,6 +769,82 @@ abstract class AbstractPipeline(
             // Noisy log:
             // diagnosticLogger.log { "setupPipeline end: runtime.{maxMemory, totalMemory, freeMemory) = " +
             //        "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
+        }
+    }
+
+    /**
+     * Call this method on a worker thread.
+     *
+     * Map the logical visible range to the data in transformed data buffer, and
+     * calculate the minimum and maximum dB values there. We'll use that to set up
+     * auto BnC.
+     *
+     * This method does heavy calculations: don't call it in the main thread.
+     */
+    suspend fun calculateNoiseProfile(visibleXRange: FloatRange, visibleYRange: FloatRange): FloatRange? {
+        mutex.withLock() {
+            val pd = pipelineData
+            if (pd == null)
+                return null
+
+            val calcs = pd.calcs
+
+            // Convert the logical ranges to actual ones:
+            val xIndexRange = Pair(
+                (visibleXRange.start * calcs.transformedTimeBucketCount - 1).toInt()
+                    .coerceIn(0, calcs.transformedTimeBucketCount - 1),
+                (visibleXRange.endInclusive * calcs.transformedTimeBucketCount - 1).toInt()
+                    .coerceIn(0, calcs.transformedTimeBucketCount - 1)
+            )
+            val yIndexRange = Pair(
+                (visibleYRange.start * calcs.transformedFrequencyBucketCount - 1).toInt()
+                    .coerceIn(0, calcs.transformedFrequencyBucketCount - 1),
+                (visibleYRange.endInclusive * calcs.transformedFrequencyBucketCount - 1).toInt()
+                    .coerceIn(0, calcs.transformedFrequencyBucketCount - 1)
+            )
+
+            var range: FloatArray? = null
+
+            // We need the intersection of the visible range and the assigned data range,
+            // to avoid calculating BnC on uninitialized data:
+            val assignedTimeRange = pipelineData?.transformStep?.dataAssignedRange
+            // Timber.d("JM: transformed assignedTimeRange = $assignedTimeRange")
+            if (assignedTimeRange != null) {
+                val clippedXIndexRange = Pair(
+                    maxOf(xIndexRange.first, assignedTimeRange.first),
+                    minOf(xIndexRange.second, assignedTimeRange.second)
+                )
+                // Timber.d("JM: clippedXIndexRange = $clippedXIndexRange")
+                if (clippedXIndexRange.second > clippedXIndexRange.first) {
+                    val rangeFromData = findBnCRange(
+                        clippedXIndexRange.first, clippedXIndexRange.second,
+                        yIndexRange.first, yIndexRange.second,
+                        calcs.transformedFrequencyBucketCount,
+                        pd.transformedDataBuffer
+                    )
+                    if (rangeFromData != null)
+                        range = rangeFromData.copyOf()
+                }
+            }
+
+            // Default BnC range to use if there is no data visible:
+            var floatRange = ColourMapStep.dbRangeMax
+
+            /*
+             * Subjectively, it's nice if the bottom part of the data dB range is black, as it is noise
+             * and nothing of interest. For now we use a fixed percentage of the range. An improvement
+             * would be to find the dB value of highest frequency and use that as threshold.
+             */
+
+            if (range != null) {
+                val lower = maxOf(ColourMapStep.dbRangeMax.start, range[0])
+                val diff = range[1] - lower
+                val blackRange = diff * 0.25f
+                floatRange = FloatRange(lower + blackRange, range[1])
+            }
+            Timber.d("auto BnC range in visible region is $floatRange")
+
+            return floatRange
         }
     }
 

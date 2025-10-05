@@ -1195,6 +1195,9 @@ class UIModel(application: Application,
      * Contains heavy calculations so don't call it from the UI thread.
      */
     private suspend fun internalDoAutoBnC(thePipeline: AbstractPipeline) {
+
+        val profile = thePipeline.calculateNoiseProfile()   // TODO for testing only
+
         val newBnCRange =
             thePipeline.calculateAutoBnC(
                 timeVisibleRangeFlow.value,

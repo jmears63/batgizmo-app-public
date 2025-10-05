@@ -32,8 +32,11 @@ android {
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
 
                 // Optimize both kiss_ftt and USB calculations:
+                /*
                 cppFlags += "-O3"
                 cFlags += "-O3"
+
+                 */
             }
         }
         signingConfig = signingConfigs.getByName("release")

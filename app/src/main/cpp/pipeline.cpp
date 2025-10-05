@@ -22,6 +22,7 @@
 
 #include <jni.h>
 #include <android/bitmap.h>
+#include "TDigest.h"
 
 extern "C" {
 #include "kissfft/kiss_fftr.h"
@@ -533,4 +534,141 @@ Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findBnCRange(JNIE
     jfloat resultValues[2] = {minDB, maxDB};
     env->SetFloatArrayRegion(result, 0, 2, resultValues);
     return result;
+}
+
+#define CHECK_OVERFLOW 1
+
+extern "C"
+JNIEXPORT jfloatArray JNICALL
+Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findNoiseBaseline(JNIEnv *env, jobject thiz,
+                                                                            jint x_min, jint x_max_exclusive,
+                                                                            jint frequency_buckets,
+                                                                            jfloatArray transformed_data_buffer) {
+
+    jfloatArray profile = nullptr;
+    jfloat *transformed_data = nullptr;
+    float *pEstimates = nullptr;
+    jsize transformedDataLength = 0;
+
+    if (x_min + 1 == x_max_exclusive)
+        goto cleanup;
+
+    // Convert Java float array to C++ array
+    transformed_data = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
+    if (transformed_data == nullptr)
+        goto cleanup;
+
+    transformedDataLength = env->GetArrayLength(transformed_data_buffer);
+
+    /*
+     * For each frequency bucket use t-digest to estimate percentiles:
+     *  https://github.com/tdunning/t-digest/
+     */
+
+    pEstimates = (float*) malloc(sizeof(jfloat) * frequency_buckets);
+    if (pEstimates == nullptr)
+        goto cleanup;
+
+    for (int frequencyIndex = 0; frequencyIndex < frequency_buckets; frequencyIndex++) {
+        // compression on the low side to limit memory and CPU usage, accepting lower accuracy.
+        // Though, the difference between 100 and 1000 is only about 20% difference in CPU time taken.
+        const int compression = 100;
+        tdigest::TDigest digest(compression);
+
+        // Decimation to improve performance:
+        int decimationStepSize = 10;
+        // Optimisation for stepping through the transformed_data array:
+        jfloat *ptr = transformed_data + frequencyIndex;
+        int frequencyStepSize = frequency_buckets * decimationStepSize;
+        for (int timeIndex = x_min; timeIndex < x_max_exclusive; timeIndex += decimationStepSize, ptr += frequencyStepSize) {
+#if CHECK_OVERFLOW
+            if ((ptr - transformed_data) >= transformedDataLength) {
+                int i;
+                i = 42;
+            }
+#endif
+            double dB = *ptr;
+
+            // The add() method is inline and batches transparently:
+            digest.add(dB);
+        }
+
+        const float quantile_percent = 20.0;
+        pEstimates[frequencyIndex] =  (float) digest.quantile(quantile_percent / 100.0);
+    }
+
+    // Create a float array to return the result
+    profile = env->NewFloatArray(frequency_buckets);
+    if (profile == nullptr)
+        goto cleanup;
+
+    env->SetFloatArrayRegion(profile, 0, frequency_buckets, pEstimates);
+
+cleanup:    // Oh for a finally block in c++.
+    if (transformed_data)
+        env->ReleaseFloatArrayElements(transformed_data_buffer, transformed_data, JNI_ABORT);
+    if (pEstimates)
+        free(pEstimates);
+
+    return profile;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_applyNoiseBaseline(JNIEnv *env,
+                                                                                  jobject thiz,
+                                                                                  jint x_min,
+                                                                                  jint x_max_exclusive,
+                                                                                  jint frequency_buckets,
+                                                                                  jfloatArray profile,
+                                                                                  jfloatArray transformed_data_buffer) {
+    jfloat *transformed_data = nullptr;
+    jfloat *profile_data = nullptr;
+    jsize transformedDataLength = 0;
+
+    if (x_min + 1 == x_max_exclusive)
+        goto cleanup;
+
+    // Convert Java float array to C++ array
+    transformed_data = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
+    if (transformed_data == nullptr)
+        goto cleanup;
+
+    profile_data = env->GetFloatArrayElements(profile, nullptr);
+    if (profile_data == nullptr)
+        goto cleanup;
+
+    transformedDataLength = env->GetArrayLength(transformed_data_buffer);
+
+    // Apply the profile:
+    for (int frequencyIndex = 0; frequencyIndex < frequency_buckets; frequencyIndex++) {
+        // Smart Alec optimisation for stepping through the transformed_data array:
+        float offset = profile_data[frequencyIndex];
+        jfloat *ptr = transformed_data + frequencyIndex;
+        for (int timeIndex = x_min; timeIndex < x_max_exclusive; timeIndex++, ptr += frequency_buckets) {
+            *ptr -= offset;
+
+#if CHECK_OVERFLOW
+            if ((ptr - transformed_data) >= transformedDataLength) {
+                int i;
+                i = 42;
+            }
+#endif
+        }
+    }
+
+    // Create a float array to return the result
+    profile = env->NewFloatArray(frequency_buckets);
+    if (profile == nullptr)
+        goto cleanup;
+
+cleanup:    // Oh for a finally block in c++.
+    if (transformed_data) {
+        // JNI_ABORT is release without copying back changes.
+        env->ReleaseFloatArrayElements(transformed_data_buffer, transformed_data, JNI_ABORT);
+    }
+    if (profile_data) {
+        // 0 is copy back and release.
+        env->ReleaseFloatArrayElements(profile, profile_data, 0);
+    }
 }
