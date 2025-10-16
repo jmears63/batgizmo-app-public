@@ -210,7 +210,7 @@ class SettingsUI(private val model: UIModel) {
 
             item {
                 MyCheckbox(
-                    "Normalize background", model.settings.autoBaselineEnabled
+                    "Noise correction", model.settings.autoBaselineEnabled
                 ) { value: Boolean ->
                     // Signal the updated settings values:
                     scope.launch {

@@ -1019,7 +1019,7 @@ class SpectrogramUI(
             onDismissRequest = { menuExpanded = false }
         ) {
             DropdownMenuItem(
-                text = { Text("View file...") },
+                text = { Text("View file(s)...") },
                 onClick = {
                     documentPickerLauncher.launch(
                         arrayOf(
