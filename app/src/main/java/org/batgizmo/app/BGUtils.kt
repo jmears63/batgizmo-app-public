@@ -25,5 +25,12 @@ package org.batgizmo.app
 /**
  * A half open integer range.
  */
-typealias HORange = Pair<Int, Int>
+data class HORange(val start: Int, val exclusiveEnd: Int) {
+    companion object {
+        val EMPTY = HORange(0, 1)
+    }
+
+    val length: Int
+        get() = exclusiveEnd - start
+}
 

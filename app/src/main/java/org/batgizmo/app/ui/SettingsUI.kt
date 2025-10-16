@@ -209,6 +209,17 @@ class SettingsUI(private val model: UIModel) {
             }
 
             item {
+                MyCheckbox(
+                    "Normalize background", model.settings.autoBaselineEnabled
+                ) { value: Boolean ->
+                    // Signal the updated settings values:
+                    scope.launch {
+                        model.updateStoredSettings(model.settings.copy(autoBaselineEnabled = value))
+                    }
+                }
+            }
+
+            item {
                 HorizontalDivider(thickness = 2.dp)
                 Text("Rendering")
             }

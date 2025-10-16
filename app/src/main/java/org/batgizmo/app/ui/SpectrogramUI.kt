@@ -276,7 +276,19 @@ class SpectrogramUI(
             val stride =
                 (rawPageLength.toFloat() * (1f - settings.pageOverlapPercent.toFloat() / 100f) + 0.5).toInt()
                     .coerceIn(1, rawPageLength)
-            val totalPages = 1 + (pagingData.rawTotalDataLength - rawPageLength) / stride
+
+            val totalPages =
+                if (pagingData.rawTotalDataLength <= rawPageLength)
+                    1
+                else {
+                    var count = 1                       // Initial full page.
+                    val excess = pagingData.rawTotalDataLength - rawPageLength
+                    val wholeIntermediatePages = excess / stride
+                    count += wholeIntermediatePages     // What it says.
+                    if (excess % stride > 0)
+                        count += 1                      // Final partial page.
+                    count
+                }
 
             return Internals(
                 rawPageLength = rawPageLength,
@@ -323,10 +335,10 @@ class SpectrogramUI(
             }
 
             if (result != null) {
-                Timber.i("Moving to page $newPage starting at ${result.first} length ${result.second - result.first}")
+                Timber.i("Moving to page $newPage starting at ${result.start} length ${result.exclusiveEnd - result.start}")
                 internals.currentPage = newPage
 
-                require(result.second - result.first <= internals.rawPageLength)
+                require(result.exclusiveEnd - result.start <= internals.rawPageLength)
 
                 rawPageRange.value = result
             }
@@ -1218,11 +1230,9 @@ class SpectrogramUI(
                     uiState.liveMode.intValue = LiveMode.PAUSED.value
                     model.pauseLiveStream()
 
-                    // Is the following a good idea? It does an auto BnC whenever
-                    //  acquisition is paused, which may just be making the noise very vivid.
-                    if (model.autoBnCRequiredFlow.value) {
-                        model.doAutoBnC()
-                    }
+                    // Do an auto BnC etc whenever acquisition is paused.
+                    model.doColourMappingAndRender(model.settings.autoBnCEnabledLive,
+                        model.settings.autoBaselineEnabled)
                 }
                 else {
                     // Checked and already streaming, no action.
@@ -1361,10 +1371,6 @@ class SpectrogramUI(
                 // Route them via the audio config dialog:
                 // uiState.audioMode.intValue = AudioMode.CONNECTING.value
                 uiState.showAudioConfig.value = true
-
-                // TODO: Two cases to handle:
-                //  * Not running audio at the moment.
-                //  * Running audio - need to stop and restart it with the new settings.
             }
         )
     }

@@ -66,7 +66,7 @@ class FileViewerPipeline(
     override fun createDataSourceStep(
         pipeline: AbstractPipeline,
         transformStep: TransformStep,
-        rangedRawDataBuffer: RangedRawDataBuffer
+        rangedRawDataBuffer: RangedShortDataBuffer
     ): DataSourceStep {
         return FileSourceStep(transformStep, rangedRawDataBuffer, custodialWavFileReader)
     }

@@ -66,6 +66,7 @@ import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.system.measureTimeMillis
 
 data class OpenWavFileResult(
     val wfi: WavFileReader.WavFileInfo? = null,
@@ -548,20 +549,32 @@ class UIModel(application: Application,
 
                     pipeline = p
                     wavFileInfo.set(wfi)
-                    // This has a side affect of updating the axis ranges in the
-                    // UI:
+                    // This has a side affect of updating the axis ranges in the UI:
                     internalSetSpectrogramVisibleRange(FloatRange(0f, 1f), FloatRange(0f, 1f))
 
-                    // We are opening a file so use the BnC setting for viewer mode:
-                    if (settings.autoBnCEnabledViewer) {
-                        /*
+                    internalDoColourMappingAndRender(
+                        settings.autoBnCEnabledViewer,
+                        settings.autoBaselineEnabled)
+
+                    /*
+                    if (false) {
+
+                        // Do noise baseline calculation if required *before* auto BnC, as it will affect
+                        // the auto BnC range calculated:
+                        p.calculateNoiseBaseline()
+
+                        // We are opening a file so use the BnC setting for viewer mode:
+                        if (settings.autoBnCEnabledViewer) {
+                            /*
                             Do auto BnC now if required by settings. This has to happen
                             *after* the entire pipeline has rendered, so that the entire transformed
                             data is available.
                          */
-                        internalDoAutoBnC(p)
-                    } else
-                        internalRerender()
+                            internalDoAutoBnC(p)
+                        } else
+                            triggerBitblt()
+                    }
+                     */
 
                     // Signal to the UI that we have successfully opened the file and initialized
                     // the pipeline:
@@ -603,6 +616,78 @@ class UIModel(application: Application,
             // blocking with the lock:
             Timber.i("Emitting result from open: $result")
             result?.let { fileOpenedChannel.send(it) }
+        }
+    }
+
+    fun doColourMappingAndRender(
+        autoBnCRequired: Boolean,
+        autoBaselineRequired: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.Default) {
+            mutex.withLock {
+                internalDoColourMappingAndRender(autoBnCRequired, autoBaselineRequired)
+            }
+        }
+    }
+
+    private suspend fun internalDoColourMappingAndRender(
+        autoBnCRequired: Boolean,
+        autoBaselineRequired: Boolean
+    ) {
+        Timber.d("internalDoColourMappingAndRender called: autoBnCRequired = $autoBnCRequired, autoBaselineRequired = $autoBaselineRequired")
+        pipeline?.let { p ->
+            var rerenderRequired = false
+
+            /*
+             * Do noise baseline calculation *before* auto BnC, as it will affect
+             * the auto BnC range calculated.
+             *
+             * We could cache the result of this calculation. However, we would have to recalculate
+             * whenever nfft changes, which is quite often, and whenever the visible region of a
+             * data file is changed, which is also quite often. So the cache would only be somewhat
+             * effective. Instead, we apply fairly aggressive decimation when calculating the noise
+             * baseline to keep it quick.
+             *
+             * Similarly - it wouldn't work well to disable auto baseline but retain the existing
+             * baseline, as it is calculated for a specific nfft.
+             */
+            if (autoBaselineRequired) {
+                val t = measureTimeMillis {
+                    p.calculateNoiseBaseline()
+                }
+                // Timber.d("p.calculateNoiseBaseline() took $t ms")
+                rerenderRequired = true
+            }
+            else {
+                if (p.clearNoiseBaseline())
+                    rerenderRequired = true
+            }
+
+            if (autoBnCRequired) {
+                val newBnCRange =
+                    p.calculateAutoBnC(
+                        timeVisibleRangeFlow.value,
+                        frequencyVisibleRangeFlow.value
+                    )
+
+                if (newBnCRange != null) {
+                    val logicalBnCRange = ColourMapStep.bnCRangeDbToLogical(newBnCRange)
+
+                    Timber.d("doAutoBnC called: newBnCRange = $newBnCRange, logicalBnCRange = $logicalBnCRange")
+                    // Update our single source of truth, notifying the UI as a side effect:
+                    mutableBnCRangeFlow.value = logicalBnCRange
+                }
+
+                rerenderRequired = true
+            }
+
+            if (rerenderRequired) {
+                // Have the pipeline recalculate from the colour map step onwards:
+                p.applyBnC(mutableBnCRangeFlow.value)
+            }
+
+            // Update the bitmap to the display:
+            triggerBitblt()
         }
     }
 
@@ -977,6 +1062,7 @@ class UIModel(application: Application,
 
             if (redraw) {
                 pipeline?.applyBnC(range)
+                triggerBitblt()
             }
         }
     }
@@ -1156,12 +1242,13 @@ class UIModel(application: Application,
                 }
 
                 if (resetVisibleRange)
-                    internalSetSpectrogramVisibleRange(FloatRange(0f, 1f), FloatRange(0f, 1f))
+                    internalSetSpectrogramVisibleRange(
+                        FloatRange(0f, 1f),
+                        FloatRange(0f, 1f))
 
-                if (shouldAutoBnC) {
-                    internalDoAutoBnC(p)
-                } else
-                    internalRerender()
+                internalDoColourMappingAndRender(
+                    shouldAutoBnC,
+                    settings.autoBaselineEnabled)
             }
             catch (e: OutOfMemoryError) {
                 // Eat any the OOM here, as it will already have been displayed to the
@@ -1177,11 +1264,11 @@ class UIModel(application: Application,
      */
     suspend fun rerender() {
         mutex.withLock {
-            internalRerender()
+            triggerBitblt()
         }
     }
 
-    private fun internalRerender() {
+    private fun triggerBitblt() {
         spectrogramBitmapHolder.signalUpdate()
         amplitudeBitmapHolder.signalUpdate()
     }
@@ -1189,7 +1276,9 @@ class UIModel(application: Application,
     fun doAutoBnC() {
         viewModelScope.launch(Dispatchers.Default + CoroutineName("doAutoBnC coroutine")) {
             mutex.withLock {
-                pipeline?.let { internalDoAutoBnC(it) }
+                internalDoColourMappingAndRender(
+                    true,
+                    settings.autoBaselineEnabled)
             }
         }
     }
@@ -1200,19 +1289,19 @@ class UIModel(application: Application,
      *
      * Contains heavy calculations so don't call it from the UI thread.
      */
+    /*
     private suspend fun internalDoAutoBnC(thePipeline: AbstractPipeline) {
-
-        val profile = thePipeline.calculateNoiseProfile()   // TODO for testing only
 
         val newBnCRange =
             thePipeline.calculateAutoBnC(
                 timeVisibleRangeFlow.value,
                 frequencyVisibleRangeFlow.value
             )
+
         if (newBnCRange != null) {
             val logicalBnCRange = ColourMapStep.bnCRangeDbToLogical(newBnCRange)
 
-            Timber.d("doAutoBnC called: $newBnCRange")
+            Timber.d("doAutoBnC called: newBnCRange = $newBnCRange, logicalBnCRange= logicalBnCRange")
             // Update our single source of truth, notifying the UI as a side effect:
             mutableBnCRangeFlow.value = logicalBnCRange
 
@@ -1220,6 +1309,7 @@ class UIModel(application: Application,
             thePipeline.applyBnC(logicalBnCRange)
         }
     }
+     */
 
     /**
      * Return true if either values has changed since the last call that are enabled for auto
@@ -1344,7 +1434,7 @@ class UIModel(application: Application,
                 Re-render for the new visible range. Don't fully update the pipeline until
                 the end of the gesture, for smoothness.
             */
-            internalRerender()
+            triggerBitblt()
         }
     }
 
@@ -1435,7 +1525,7 @@ class UIModel(application: Application,
                Re-render for the new visible range. Don't fully update the pipeline until
                the end of the gesture, for smoothness.
             */
-            internalRerender()
+            triggerBitblt()
         }
     }
 
@@ -1483,7 +1573,7 @@ class UIModel(application: Application,
             if (!liveMode)
                 graph.onVisibleRangeChange(autoBnCRequiredFlow.value)
 
-            internalRerender()
+            triggerBitblt()
         }
     }
 
@@ -1496,7 +1586,7 @@ class UIModel(application: Application,
             if (!liveMode)
                 graph.onVisibleRangeChange(shouldAutoBnC)
 
-            internalRerender()
+            triggerBitblt()
         }
     }
 }

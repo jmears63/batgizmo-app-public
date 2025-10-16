@@ -32,21 +32,19 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.LiveDataBridge
 import org.batgizmo.app.UIModel
 import timber.log.Timber
-import uk.org.gimell.batgimzoapp.BuildConfig
 
 class USBSourceStep(
     private val pipeline: AbstractPipeline,
     private val scope: CoroutineScope,
     private val model: UIModel,
     nextStep: AbstractStep,
-    rangedRawDataBuffer: AbstractPipeline.RangedRawDataBuffer,
+    rangedRawDataBuffer: AbstractPipeline.RangedShortDataBuffer,
     private val spectrogramBitmapHolder: BitmapHolder,
     private val amplitudeBitmapHolder: BitmapHolder
-) : DataSourceStep(nextStep, rangedRawDataBuffer) {
+) : DataSourceStep(nextStep, rangedRawDataBuffer, true) {
 
     init {
-        if (BuildConfig.DEBUG)
-            Timber.d("init called for USBSourceStep")
+        Timber.d("init called for USBSourceStep")
     }
 
     private val nativeUSB = NativeUSB()
@@ -59,7 +57,7 @@ class USBSourceStep(
             try {
                 val safeParams = getSafeParams()
                 val calcs = safeParams.calcs
-                val rawDataSize = rangedRawDataBuffer.buffer.size - AbstractPipeline.CANARY_ENTRIES
+                val rawDataCapacity = rangedRawDataBuffer.buffer.size - AbstractPipeline.CANARY_ENTRIES
 
                 // We need to populate raw data up to this index to be ready to submit the
                 // next slice:
@@ -72,23 +70,32 @@ class USBSourceStep(
                 // the count of values we have from the start of the buffer:
                 var transformedDataBufferOffset = 0
 
+                var totalCopiedCount = 0
+
                 // The for statement will check if a cancel is pending, and if so pass control
                 // to the finally block for cleanup and to prevent this job becoming a zombie:
                 for (bufferDescriptor in LiveDataBridge.renderingChannel) {
-                    if (rawDataSize > 0) {
+                    if (rawDataCapacity > 0) {
                         // Copy the native data into rawDataBuffer with wrap:
                         val copiedCount = nativeUSB.copyURBBufferData(
                             bufferDescriptor.nativeAddress,
                             bufferDescriptor.samples,
                             rangedRawDataBuffer.buffer,
                             rawDataBufferOffset,
-                            rawDataSize
+                            rawDataCapacity
                         )
                         rawDataBufferOffset += copiedCount
 
+                        // Update the raw data buffer with the range of data that has actually been populated. Limit
+                        // the range to the visible range which may be less than the total raw buffer range:
+                        totalCopiedCount += copiedCount
+                        val visibleRawMax = (rawDataCapacity * model.timeVisibleRangeFlow.value.endInclusive).toInt()
+                        totalCopiedCount = minOf(totalCopiedCount, visibleRawMax)
+                        rangedRawDataBuffer.update(HORange(0, totalCopiedCount))
+
                         // Check the canary value:
                         require(
-                            this@USBSourceStep.rangedRawDataBuffer.buffer[rawDataSize]
+                            this@USBSourceStep.rangedRawDataBuffer.buffer[rawDataCapacity]
                                     == AbstractPipeline.CANARY_VALUE
                         )
 
@@ -127,32 +134,17 @@ class USBSourceStep(
                              * as we aren't holding any other locks at this point.
                              */
 
-                            val rawDataSize = rangedRawDataBuffer.buffer.size - AbstractPipeline.CANARY_ENTRIES
+                            // val rawDataSize = rangedRawDataBuffer.buffer.size - AbstractPipeline.CANARY_ENTRIES
 
                             /*
                              * BEWARE: both rawDataBufferOffset and nextSliceEndIndexHO can be beyond the end of the raw data buffer at this point.
                              * So, we clamp to the valid buffer data range:
                              */
-                            val bufferEndReached = nextSliceEndIndexHO >= rawDataSize
+                            val bufferEndReached = nextSliceEndIndexHO >= rawDataCapacity
                             val sliceDataRange = HORange(
                                 maxOf(nextSliceEndIndexHO - calcs.rawSliceEntries,0),
-                                minOf(nextSliceEndIndexHO, rawDataSize)
+                                minOf(nextSliceEndIndexHO, rawDataCapacity)
                             )
-
-                            // Keep track of the contiguous range of raw data that we have populated:
-                            val dar = rangedRawDataBuffer.assignedRange
-                            if (dar == null) {
-                                // This is the first slice we've seen:
-                                rangedRawDataBuffer.assignedRange = sliceDataRange
-                            } else {
-                                // Extend the existing range to include the current range, limiting to the
-                                // size of the raw data buffer for sanity:
-                                rangedRawDataBuffer.assignedRange = HORange(
-                                    minOf(dar.first, sliceDataRange.first),
-                                    maxOf(dar.second, sliceDataRange.second)
-                                )
-                            }
-                            // Timber.d("JM: new raw data _dataAssignedRange = ${rangedRawDataBuffer.assignedRange}")
 
                             pipeline.sliceRender(
                                 sliceDataRange,
@@ -164,11 +156,11 @@ class USBSourceStep(
 
                             // Did we overlap the end of the visible region?
                             val visibleBufferOffsetLimit =
-                                (rawDataSize * model.timeVisibleRangeFlow.value.endInclusive)
+                                (rawDataCapacity * model.timeVisibleRangeFlow.value.endInclusive)
                                     .toInt()
                                     .coerceIn(
                                         calcs.rawSliceEntries,
-                                        rawDataSize
+                                        rawDataCapacity
                                     )
                             val visibleRegionOverflow =
                                 nextSliceEndIndexHO > visibleBufferOffsetLimit
@@ -215,17 +207,17 @@ class USBSourceStep(
         // async native layer access to data that is about to be garbage
         // collected:
         channelJob?.cancelAndJoin()
+
         channelJob = null
     }
 
     override suspend fun resetState() {
 
-        rangedRawDataBuffer.assignedRange = null
+        rangedRawDataBuffer.assignedRange = HORange.EMPTY
 
         // The job that handles new data contains data that we need to reset:
         channelJob?.cancelAndJoin()
         channelJob = createChannelJob()
-
     }
 
     override fun sliceRender(sliceRange: HORange, transformedEntryIndex: Int) {
@@ -234,7 +226,7 @@ class USBSourceStep(
         getSafeParams()
 
         // Pass on the slice range that was actually read:
-        if (sliceRange.second - sliceRange.first > 0)
+        if (sliceRange.exclusiveEnd - sliceRange.start > 0)
             nextStep.sliceRender(sliceRange, transformedEntryIndex)
     }
 }

@@ -246,8 +246,7 @@ abstract class RendererBase(
         private set
 
     fun reset() {
-        if (BuildConfig.DEBUG)
-            Log.d(this::class.simpleName, "reset called")
+        Log.d(this::class.simpleName, "reset called")
 
         this.liveMode = false
 

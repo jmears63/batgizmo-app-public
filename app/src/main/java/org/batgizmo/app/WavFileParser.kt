@@ -273,7 +273,7 @@ class WavFileParser {
             val actualPortionCount = readData(
                 raFile,
                 fmtChunk,
-                Pair(samplesRead, samplesRead + count),
+                HORange(samplesRead, samplesRead + count),
                 dataBuffer
             )
             samplesRead += actualPortionCount

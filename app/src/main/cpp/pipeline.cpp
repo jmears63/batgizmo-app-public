@@ -23,6 +23,7 @@
 #include <jni.h>
 #include <android/bitmap.h>
 #include "TDigest.h"
+#include <android/log.h>
 
 extern "C" {
 #include "kissfft/kiss_fftr.h"
@@ -411,6 +412,7 @@ JNIEXPORT jint JNICALL
 Java_org_batgizmo_app_pipeline_ColourMapStep_00024Companion_doColourMapping(JNIEnv *env, jobject thiz,
                                                                         jint first, jint second,
                                                                         jfloatArray transformed_data_buffer,
+                                                                        jfloatArray noise_baseline_buffer,
                                                                         jint transformed_time_bucket_count,
                                                                         jint transformed_frequency_bucket_count,
                                                                         jobject bitmap,
@@ -423,54 +425,71 @@ Java_org_batgizmo_app_pipeline_ColourMapStep_00024Companion_doColourMapping(JNIE
     if (info.format != ANDROID_BITMAP_FORMAT_RGB_565)
         return -1;
 
+    int rc = -1;
+
     // Lock the bitmap for writing
     uint16_t *rgb565Pixels = nullptr;
-    if (AndroidBitmap_lockPixels(env, bitmap, (void**) &rgb565Pixels) < 0)
-        return - 1;
+    jfloat *transformedData = nullptr;
+    jfloat *noiseBaseline = nullptr;
+    float value = 0;
+    float *inputPtr = nullptr, *baselinePtr = nullptr;
+    uint32_t indexStride = 0;
 
-    jfloat *transformedData = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
+    if (AndroidBitmap_lockPixels(env, bitmap, (void**) &rgb565Pixels) < 0 || rgb565Pixels == nullptr)
+        goto cleanup;
+    transformedData = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
+    if (transformedData == nullptr)
+        goto cleanup;
+    if (noise_baseline_buffer != nullptr) {
+        noiseBaseline = env->GetFloatArrayElements(noise_baseline_buffer, nullptr);
+        if (noiseBaseline == nullptr)
+            goto cleanup;
+    }
 
-    int rc = 0;
-    if (transformedData == nullptr || rgb565Pixels == nullptr) {
-        rc = -1;
-    } else {
-        const uint32_t indexStride = info.stride / sizeof(uint16_t);
+    rc = 0;
 
-        float *inputPtr = transformedData + first * transformed_frequency_bucket_count;
-        for (int timeBucket = first; timeBucket < second; timeBucket++) {
-            for (int frequencyBucket = 0; frequencyBucket < transformed_frequency_bucket_count; frequencyBucket++) {
+    indexStride = info.stride / sizeof(uint16_t);
+    inputPtr = transformedData + first * transformed_frequency_bucket_count;
+    for (int timeBucket = first; timeBucket < second; timeBucket++) {
+        baselinePtr = noiseBaseline;
+        for (int frequencyBucket = 0; frequencyBucket < transformed_frequency_bucket_count; frequencyBucket++) {
+            value = *inputPtr++;
+            if (baselinePtr)
+                value -= *baselinePtr++;
 
-                float value = *inputPtr++;
+            // Apply brightness and contrast:
+            value = (value - offset) * multiplier;
 
-                // Apply brightness and contrast:
-                value = (value - offset) * multiplier;
+            int int_value = static_cast<int>(value);
 
-                int int_value = static_cast<int>(value);
+            // Do the colour map:
+            if (int_value > s_colourMapDataSize - 1)
+                int_value = s_colourMapDataSize - 1;
+            else if (int_value < 0)
+                int_value = 0;
+            int_value = s_colourMapData[int_value];
 
-                // Do the colour map:
-                if (int_value > s_colourMapDataSize - 1)
-                    int_value = s_colourMapDataSize - 1;
-                else if (int_value < 0)
-                    int_value = 0;
-                int_value = s_colourMapData[int_value];
-
-                /**
-                 * I'd love to find a way of having the following code do sequential
-                 * access in both the source and destination locations, but the FFT generates
-                 * data in the opposite sequencing than bitmap buffer requires. I don't
-                 * think there is anything I can do about this. Hopefully both the source and
-                 * destination can be served by cache reasonably efficiently.
-                 */
-                const size_t index = XYToBitmapOffset(timeBucket, frequencyBucket,
-                                                       transformed_frequency_bucket_count, indexStride);
-                rgb565Pixels[index] = static_cast<jshort>(int_value);
-            }
+            /**
+             * I'd love to find a way of having the following code do sequential
+             * access in both the source and destination locations, but the FFT generates
+             * data in the opposite sequencing than bitmap buffer requires. I don't
+             * think there is anything I can do about this. Hopefully both the source and
+             * destination can be served by cache reasonably efficiently.
+             */
+            const size_t index = XYToBitmapOffset(timeBucket, frequencyBucket,
+                                                   transformed_frequency_bucket_count, indexStride);
+            rgb565Pixels[index] = static_cast<jshort>(int_value);
         }
     }
 
+cleanup:
     if (transformedData) {
         // JNI_ABORT means don't copy elements back, just free the memory:
         env->ReleaseFloatArrayElements(transformed_data_buffer, transformedData, JNI_ABORT);
+    }
+    if (noiseBaseline) {
+        // JNI_ABORT means don't copy elements back, just free the memory:
+        env->ReleaseFloatArrayElements(noise_baseline_buffer, noiseBaseline, JNI_ABORT);
     }
     if (rgb565Pixels != nullptr) {
         AndroidBitmap_unlockPixels(env, bitmap);
@@ -481,33 +500,50 @@ Java_org_batgizmo_app_pipeline_ColourMapStep_00024Companion_doColourMapping(JNIE
 
 extern "C"
 JNIEXPORT jfloatArray JNICALL
-Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findBnCRange(JNIEnv *env, jobject thiz,
-                                                                          jint x_min, jint x_max,
-                                                                          jint y_min, jint y_max,
-                                                                          jint frequency_buckets,
-                                                                          jfloatArray transformed_data_buffer) {
+Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_nativeFindBnCRange(JNIEnv *env, jobject thiz,
+                                                                                  jint x_min, jint x_max,
+                                                                                  jint y_min, jint y_max,
+                                                                                  jint frequency_buckets,
+                                                                                  jfloatArray transformed_data,
+                                                                                  jfloatArray noise_baseline_optional
+                                                                          ) {
 
     if (x_min == x_max || y_min == y_max)
         return nullptr;     // No data available.
 
-    // Convert Java float array to C++ array
-    jfloat *data = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
+    jfloat *data = env->GetFloatArrayElements(transformed_data, nullptr);
     if (data == nullptr) {
-        return nullptr;     // Memory allocation failure
+        return nullptr;
+    }
+
+    jfloat *noise_baseline_data = nullptr;
+    if (noise_baseline_optional) {
+        noise_baseline_data = env->GetFloatArrayElements(noise_baseline_optional,
+                                                         nullptr);
+        if (noise_baseline_data == nullptr) {
+            // Free the array we allocated a moment before as it is no longer wanted:
+            env->ReleaseFloatArrayElements(transformed_data, data, JNI_ABORT);
+            return nullptr;
+        }
     }
 
     float minDB = std::numeric_limits<float>::max();
     float maxDB = std::numeric_limits<float>::lowest();
     bool first = true;
 
-    // Loop through the range
+    // TODO consider nesting this loop the other way around as an optimization.
     for (int timeIndex = x_min; timeIndex <= x_max; ++timeIndex) {
-        int offset = timeIndex * frequency_buckets;
+        int data_offset = timeIndex * frequency_buckets;
         // Reflect the Y indices:
         const jint y1 = frequency_buckets - y_max - 1;
         const jint y2 = frequency_buckets - y_min - 1;
+        float *p_baseline_data = noise_baseline_data ? noise_baseline_data + y1 : nullptr;
         for (int frequencyIndex = y1; frequencyIndex <= y2; frequencyIndex++) {
-            float dB = data[offset + frequencyIndex];
+            float dB = data[data_offset + frequencyIndex];
+            if (p_baseline_data) {
+                float offsetDb = *p_baseline_data++;
+                dB -= offsetDb;
+            }
 
             if (first) {
                 minDB = dB;
@@ -523,7 +559,9 @@ Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findBnCRange(JNIE
     }
 
     // Release memory
-    env->ReleaseFloatArrayElements(transformed_data_buffer, data, JNI_ABORT);
+    env->ReleaseFloatArrayElements(transformed_data, data, JNI_ABORT);
+    if (noise_baseline_data)
+        env->ReleaseFloatArrayElements(noise_baseline_optional, noise_baseline_data, JNI_ABORT);
 
     // Create a float array to return the result
     jfloatArray result = env->NewFloatArray(2);
@@ -536,38 +574,48 @@ Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findBnCRange(JNIE
     return result;
 }
 
-#define CHECK_OVERFLOW 1
+#define CHECK_OVERFLOW 0
 
 extern "C"
-JNIEXPORT jfloatArray JNICALL
-Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findNoiseBaseline(JNIEnv *env, jobject thiz,
-                                                                            jint x_min, jint x_max_exclusive,
-                                                                            jint frequency_buckets,
-                                                                            jfloatArray transformed_data_buffer) {
-
-    jfloatArray profile = nullptr;
+JNIEXPORT void JNICALL
+Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_nativeFindNoiseBaseline(JNIEnv *env, jobject thiz,
+                                                                                       jint x_min, jint x_max_exclusive,
+                                                                                       jint frequency_buckets,
+                                                                                       jfloatArray transformed_data_buffer,
+                                                                                       jfloatArray noise_baseline_buffer) {
     jfloat *transformed_data = nullptr;
-    float *pEstimates = nullptr;
+    jfloat *noise_baseline_data = nullptr;
     jsize transformedDataLength = 0;
+    double sum = 0;
+    int count = 0;
+    float average = 0;
+    int decimationStepSize = 0;
 
     if (x_min + 1 == x_max_exclusive)
         goto cleanup;
 
-    // Convert Java float array to C++ array
     transformed_data = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
     if (transformed_data == nullptr)
         goto cleanup;
-
     transformedDataLength = env->GetArrayLength(transformed_data_buffer);
+
+    noise_baseline_data = env->GetFloatArrayElements(noise_baseline_buffer, nullptr);
+    if (noise_baseline_data == nullptr)
+        goto cleanup;
 
     /*
      * For each frequency bucket use t-digest to estimate percentiles:
      *  https://github.com/tdunning/t-digest/
+     *
+     * The time taken to find the noise baseline is a little confusing.
+     * The entire page of data from the data file is processed. However, zooming
+     * in may change the FFT window size. Decreasing the visible time range results
+     * in a smaller window, changing the number of frequency buckets. The net effect
+     * is a decrease in processing time, even though we adjust decimation so
+     * that approximately the same number of time points are processed.
+     *
+     * t-digest scales are O(log n) per insert and per result.
      */
-
-    pEstimates = (float*) malloc(sizeof(jfloat) * frequency_buckets);
-    if (pEstimates == nullptr)
-        goto cleanup;
 
     for (int frequencyIndex = 0; frequencyIndex < frequency_buckets; frequencyIndex++) {
         // compression on the low side to limit memory and CPU usage, accepting lower accuracy.
@@ -576,15 +624,23 @@ Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findNoiseBaseline
         tdigest::TDigest digest(compression);
 
         // Decimation to improve performance:
-        int decimationStepSize = 10;
+        const int targetSamplesToUse = 100;     // Chosen by trial and error.
+        decimationStepSize = (x_max_exclusive - x_min) / targetSamplesToUse;
+        if (decimationStepSize < 1)
+            decimationStepSize = 1;
+        // __android_log_print(ANDROID_LOG_INFO, __FILE__, "Baseline x range = %d - %d, step size: %d", x_min, x_max_exclusive, decimationStepSize);
+
         // Optimisation for stepping through the transformed_data array:
         jfloat *ptr = transformed_data + frequencyIndex;
         int frequencyStepSize = frequency_buckets * decimationStepSize;
-        for (int timeIndex = x_min; timeIndex < x_max_exclusive; timeIndex += decimationStepSize, ptr += frequencyStepSize) {
+        for (int timeIndex = x_min;
+            timeIndex < x_max_exclusive;
+            timeIndex += decimationStepSize, ptr += frequencyStepSize) {
 #if CHECK_OVERFLOW
-            if ((ptr - transformed_data) >= transformedDataLength) {
+            if ((ptr - transformed_d    for (int frequencyIndex = 0; frequencyIndex < frequency_buckets; frequencyIndex++) {
+ata) >= transformedDataLength) {
                 int i;
-                i = 42;
+                i = 42;     // Put a breakpoint here.
             }
 #endif
             double dB = *ptr;
@@ -594,81 +650,30 @@ Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_findNoiseBaseline
         }
 
         const float quantile_percent = 20.0;
-        pEstimates[frequencyIndex] =  (float) digest.quantile(quantile_percent / 100.0);
+        const auto v = (float) digest.quantile(quantile_percent / 100.0);
+        noise_baseline_data[frequencyIndex] = v;
+        sum += v;
+        count++;
     }
 
-    // Create a float array to return the result
-    profile = env->NewFloatArray(frequency_buckets);
-    if (profile == nullptr)
-        goto cleanup;
+    /*
+     * Offset the baseline by the average, so that the average of the baseline is zero.
+     * That means that any manual set BnC range will apply equally whether baseline correction
+     * is enabled or not.
+     */
 
-    env->SetFloatArrayRegion(profile, 0, frequency_buckets, pEstimates);
+    // __android_log_print(ANDROID_LOG_INFO, __FILE__, "Baseline sample count: %d, decimation step: %d", count, decimationStepSize);
+
+    average = (float) (sum / count);
+    for (int frequencyIndex = 0; frequencyIndex < frequency_buckets; frequencyIndex++) {
+        noise_baseline_data[frequencyIndex] -= average;
+    }
 
 cleanup:    // Oh for a finally block in c++.
     if (transformed_data)
         env->ReleaseFloatArrayElements(transformed_data_buffer, transformed_data, JNI_ABORT);
-    if (pEstimates)
-        free(pEstimates);
-
-    return profile;
-}
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_applyNoiseBaseline(JNIEnv *env,
-                                                                                  jobject thiz,
-                                                                                  jint x_min,
-                                                                                  jint x_max_exclusive,
-                                                                                  jint frequency_buckets,
-                                                                                  jfloatArray profile,
-                                                                                  jfloatArray transformed_data_buffer) {
-    jfloat *transformed_data = nullptr;
-    jfloat *profile_data = nullptr;
-    jsize transformedDataLength = 0;
-
-    if (x_min + 1 == x_max_exclusive)
-        goto cleanup;
-
-    // Convert Java float array to C++ array
-    transformed_data = env->GetFloatArrayElements(transformed_data_buffer, nullptr);
-    if (transformed_data == nullptr)
-        goto cleanup;
-
-    profile_data = env->GetFloatArrayElements(profile, nullptr);
-    if (profile_data == nullptr)
-        goto cleanup;
-
-    transformedDataLength = env->GetArrayLength(transformed_data_buffer);
-
-    // Apply the profile:
-    for (int frequencyIndex = 0; frequencyIndex < frequency_buckets; frequencyIndex++) {
-        // Smart Alec optimisation for stepping through the transformed_data array:
-        float offset = profile_data[frequencyIndex];
-        jfloat *ptr = transformed_data + frequencyIndex;
-        for (int timeIndex = x_min; timeIndex < x_max_exclusive; timeIndex++, ptr += frequency_buckets) {
-            *ptr -= offset;
-
-#if CHECK_OVERFLOW
-            if ((ptr - transformed_data) >= transformedDataLength) {
-                int i;
-                i = 42;
-            }
-#endif
-        }
-    }
-
-    // Create a float array to return the result
-    profile = env->NewFloatArray(frequency_buckets);
-    if (profile == nullptr)
-        goto cleanup;
-
-cleanup:    // Oh for a finally block in c++.
-    if (transformed_data) {
-        // JNI_ABORT is release without copying back changes.
-        env->ReleaseFloatArrayElements(transformed_data_buffer, transformed_data, JNI_ABORT);
-    }
-    if (profile_data) {
-        // 0 is copy back and release.
-        env->ReleaseFloatArrayElements(profile, profile_data, 0);
+    if (noise_baseline_data) {
+        // 0 => Copy the data back to the Java array and free the native buffer:
+        env->ReleaseFloatArrayElements(noise_baseline_buffer, noise_baseline_data, 0);
     }
 }

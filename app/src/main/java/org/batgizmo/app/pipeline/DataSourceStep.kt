@@ -25,6 +25,7 @@ package org.batgizmo.app.pipeline
 import android.util.Log
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 
 /**
@@ -36,7 +37,8 @@ import uk.org.gimell.batgimzoapp.BuildConfig
  */
 abstract class DataSourceStep(
     protected val nextStep: AbstractStep,
-    protected val rangedRawDataBuffer: AbstractPipeline.RangedRawDataBuffer
+    protected val rangedRawDataBuffer: AbstractPipeline.RangedShortDataBuffer,
+    private val clipDataRange: Boolean      // Clip the data range for live mode, as not all data may be populated.
 ) : AbstractStep() {
 
     // This data class is immutable so special thread safety support is required.
@@ -88,8 +90,7 @@ abstract class DataSourceStep(
         val calcs = safeParams.calcs
         val sliceSize = calcs.rawSliceEntries
 
-        if (BuildConfig.DEBUG)
-            Log.d(this::class.simpleName, "fullRender start")
+        Timber.d("fullRender start")
 
         /**
          * Round up the number of slices to process, to include any final partial slice. This
@@ -101,6 +102,7 @@ abstract class DataSourceStep(
 
         // We will tell the transform step the starting location to write its result:
         var transformedEntryIndex = 0
+
         val assignedDataRange = rangedRawDataBuffer.assignedRange
         // Timber.d("JM: assignedDataRange = $assignedDataRange")
 
@@ -113,17 +115,16 @@ abstract class DataSourceStep(
             // Usually the last slice will overspill the end of the page:
             relativeEnd = minOf(relativeEnd, calcs.rawPagedDataLength)
 
-            // Clip the data range if required to limit it to the range of
-            // raw data that has actually been populated:
-            val clippedDataRange = if (assignedDataRange != null) {
-                HORange(maxOf(assignedDataRange.first, relativeStart),
-                    minOf(assignedDataRange.second, relativeEnd))
+            val clippedDataRange = if (clipDataRange) {
+                HORange(maxOf(assignedDataRange.start, relativeStart),
+                    minOf(assignedDataRange.exclusiveEnd, relativeEnd))
             }
             else
                 HORange(relativeStart, relativeEnd)
 
+
             // If there is anything left to render, do so:
-            if (clippedDataRange.second > clippedDataRange.first) {
+            if (clippedDataRange.exclusiveEnd > clippedDataRange.start) {
                 // Timber.d("JM: rendering raw data slice $clippedDataRange")
                 sliceRender(clippedDataRange, transformedEntryIndex)
             }

@@ -26,20 +26,22 @@ import android.graphics.Bitmap
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
-import timber.log.Timber
 
 class ColourMapStep(
-    private val transformedDataBuffer: FloatArray,
+    private val rangedTransformedDataBuffer: AbstractPipeline.RangedFloatDataBuffer,
     private val bitmap: Bitmap,
+    private val noiseBaselineHolder: AbstractPipeline.NoiseBaselineHolder,
     private val colourMapSize: Int?,
     private val settings: Settings
 ) : AbstractStep() {
 
     companion object {
+
         private external fun doColourMapping(
             first: Int,
             second: Int,
             transformedDataBuffer: FloatArray,
+            noiseBaselineDb: FloatArray?,
             transformedTimeBucketCount: Int,
             transformedFrequencyBucketCount: Int,
             bitmap: Bitmap,
@@ -66,14 +68,14 @@ class ColourMapStep(
     var params: Params? = null
         set(value) {
             field = value
-            initializeStep()
+            onParamsSet()
         }
 
     /**
      * Called when the params are set - this function does all the one off initialisation
      * that this class needs, ready to processes slices.
      */
-    private fun initializeStep() {
+    private fun onParamsSet() {
     }
 
     /**
@@ -89,7 +91,7 @@ class ColourMapStep(
         val safeParams = getSafeParams()
         val calcs = safeParams.calcs
 
-        val (offset, multiplier) = calculateRange(safeParams.bnCRangeLogical)
+        val (offset, multiplier) = calculate(safeParams.bnCRangeLogical)
 
         /*
          * Note: sliceRange is in transformed time bucket indices. We therefore need to
@@ -98,10 +100,15 @@ class ColourMapStep(
 
         // The bitmap is also accessed by the rendering thread:
         synchronized (bitmap) {
+
+            // Keep track of the contiguous range of raw data that we have populated:
+            rangedTransformedDataBuffer.update(sliceRange)
+
             // Do the actual colour mapping:
             val rc = doColourMapping(
-                sliceRange.first, sliceRange.second,
-                transformedDataBuffer,
+                sliceRange.start, sliceRange.exclusiveEnd,
+                rangedTransformedDataBuffer.buffer,
+                noiseBaselineHolder.noiseBaselineDb,
                 calcs.transformedTimeBucketCount,
                 calcs.transformedFrequencyBucketCount,
                 bitmap,
@@ -117,7 +124,7 @@ class ColourMapStep(
      *
      * The normalized BnC range is 0..1 corresponding to the dbLimits.
      */
-    private fun calculateRange(bnCLogicalRange: FloatRange): Pair<Float, Float> {
+    private fun calculate(bnCLogicalRange: FloatRange): Pair<Float, Float> {
         require(colourMapSize != null) { "the colour map must be loaded before it can be used" }
 
         /**
@@ -155,7 +162,7 @@ class ColourMapStep(
         val safeParams = getSafeParams()
 
         /**
-         * Generate a series of slices to read the entire file window.
+         * Generate a series of slices to read the entire page.
          * The slices are relative to the file window.
          */
         val calcs = safeParams.calcs
@@ -166,14 +173,23 @@ class ColourMapStep(
          * Round up the number of slices to process, to include any final partial slice. This
          * means we don't miss out the end of the data. It also means we need to handle the case
          * that a slice may be shorter than the usual slice length.
+         *
+         * Limit the range we render to the range of assigned data.
          */
-        val numSlices = (calcs.transformedTimeBucketCount / calcs.sliceTransformedTimeBucketCount)
+
+        var numTimeEntries = 0
+        rangedTransformedDataBuffer.assignedRange?.let {
+            // Assumption: the range starts at 0:
+            numTimeEntries = minOf(it.exclusiveEnd, calcs.transformedTimeBucketCount)
+        }
+        val numSlices = (numTimeEntries / calcs.sliceTransformedTimeBucketCount)
             .toInt() + 1
 
         for (i in 0 until numSlices) {
             var end = start + sliceSize
-            // The final slice typically extends beyond the end of the data available:
-            end = minOf(end, calcs.transformedTimeBucketCount)
+
+            // The final slice may extends beyond the end of the data available:
+            end = minOf(end, numTimeEntries)
             if (end > start)
                 sliceRender(HORange(start, end))
 

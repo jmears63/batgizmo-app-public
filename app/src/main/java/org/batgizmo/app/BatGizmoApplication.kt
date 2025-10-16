@@ -81,7 +81,6 @@ class BatGizmoApplication : Application() {
             Timber.plant(ReleaseTree())      // Restricted logging in release
         }
 
-        // TODO: migration the following to timber:
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         val handler = LoggingExceptionHandler(defaultHandler, this)
 

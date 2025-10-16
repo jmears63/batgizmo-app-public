@@ -63,14 +63,10 @@ class LiveUSBPipeline(
     showCursor = true,              // Display a moving cursor.
     onTrigger
 ) {
-    companion object {
-        const val DEFAULTLIVETIMESPAN_S = 3f
-    }
-
     override fun createDataSourceStep(
         pipeline: AbstractPipeline,
         transformStep: TransformStep,
-        rangedRawDataBuffer: RangedRawDataBuffer
+        rangedRawDataBuffer: RangedShortDataBuffer
     ): DataSourceStep {
         return USBSourceStep(
             pipeline,

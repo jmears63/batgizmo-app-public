@@ -24,6 +24,34 @@ package org.batgizmo.app.pipeline
 
 import org.batgizmo.app.HORange
 
+/**
+ * This is a helper class to track the range of time values that data has actually been
+ * written to the buffer for.
+ */
+class RangeHelper () {
+    private var _assignedRange: HORange? = null
+    val assignedRange: HORange?
+        get() = _assignedRange
+
+    fun reset() {
+        _assignedRange = null
+    }
+
+    fun update(sliceRange: HORange) {
+        if (_assignedRange == null)
+            _assignedRange = sliceRange
+        else {
+            _assignedRange?.let {
+                _assignedRange = HORange(
+                    minOf(it.start, sliceRange.start),
+                    maxOf(it.exclusiveEnd, sliceRange.exclusiveEnd)
+                )
+            }
+        }
+    }
+}
+
+
 abstract class AbstractStep {
 
     /**

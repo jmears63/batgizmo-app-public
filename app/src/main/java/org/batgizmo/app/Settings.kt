@@ -41,7 +41,8 @@ data class Settings(
     var defaultLiveTimeSpanS: Int = DefaultLiveTimeSpanOptions.DEFAULTLIVETIMESPAN_3S.value,
     var pageOverlapPercent: Int = PagingOverlapOptions.PAGINGOVERLAP_25.value,                  // *
     var autoBnCEnabledViewer: Boolean = true,
-    var autoBnCEnabledLive: Boolean = false,
+    var autoBnCEnabledLive: Boolean = true,
+    var autoBaselineEnabled: Boolean = false,
     var showParameterOverlay: Boolean = true,
     var leftHandButtons: Boolean = false,
     var enableLogging: Boolean = false,
@@ -189,6 +190,7 @@ data class Settings(
     private val keyShowGrid = booleanPreferencesKey("showGrid")
     private val keyAutoBnCViewer = booleanPreferencesKey("autoBnCViewer")
     private val keyAutoBnCLive = booleanPreferencesKey("autoBnCLive")
+    private val keyAutoBaselineEnabled = booleanPreferencesKey("autoBaselineEnabled")
     private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
     private val keyDefaultLiveTimeSpanS = intPreferencesKey("keyDefaultLiveTimeSpanS")
     private val keyPageOverlapPercent = intPreferencesKey("keyPageOverlapPercent")
@@ -218,6 +220,8 @@ data class Settings(
         prefs[keyShowGrid] = showGrid
         prefs[keyAutoBnCViewer] = autoBnCEnabledViewer
         prefs[keyAutoBnCLive] = autoBnCEnabledLive
+        prefs[keyAutoBaselineEnabled] = autoBaselineEnabled
+        prefs[keyAutoBaselineEnabled] = autoBaselineEnabled
         prefs[keyDefaultLiveTimeSpanS] = defaultLiveTimeSpanS
         prefs[keyPageOverlapPercent] = pageOverlapPercent
         prefs[keyLeftHandedMode] = leftHandButtons
@@ -251,6 +255,8 @@ data class Settings(
             autoBnCEnabledViewer = requireNotNull(prefs[keyAutoBnCViewer])
         if (prefs[keyAutoBnCLive] != null)
             autoBnCEnabledLive = requireNotNull(prefs[keyAutoBnCLive])
+        if (prefs[keyAutoBaselineEnabled] != null)
+            autoBaselineEnabled = requireNotNull(prefs[keyAutoBaselineEnabled])
         if (prefs[keyDefaultLiveTimeSpanS] != null)
             defaultLiveTimeSpanS = requireNotNull(prefs[keyDefaultLiveTimeSpanS])
         if (prefs[keyPageOverlapPercent] != null)

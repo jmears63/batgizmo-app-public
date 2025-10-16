@@ -39,7 +39,7 @@ class TransformStep(
     private val model: UIModel,
     private val nextStep: AbstractStep,
     private val rawDataBuffer: ShortArray,
-    private val transformedDataBuffer: FloatArray,
+    private val transformedDataBuffer: AbstractPipeline.RangedFloatDataBuffer,
     private val amplitudeBitmapHolder: BitmapHolder,
     private val onTrigger: () -> Unit,
     private val showCursor: Boolean
@@ -123,7 +123,7 @@ class TransformStep(
     var params: Params? = null
         set(value) {
             field = value
-            initializeStep()
+            onParamsSet()
         }
 
     // This data class is immutable so no special thread safety is needed.
@@ -157,18 +157,19 @@ class TransformStep(
     // Array to record if the trigger threshold was exceeded:
     private val triggerResultBuffer = IntArray(1)
 
-
     // Range of transformedDataBuffer indexes that have been assigned values, in
     // time indexes (not buffer indexes), exposed read only:
-    private var _dataAssignedRange: HORange? = null
-    val dataAssignedRange: HORange?
-        get() = _dataAssignedRange
+    private val assignedRange = RangeHelper()
+
+    fun getDataAssignedRange(): HORange? {
+        return assignedRange.assignedRange
+    }
 
     /**
      * Called when the params are set - this function does all the one off initialisation
      * that this class needs, ready to processes slices.
      */
-    private fun initializeStep() {
+    private fun onParamsSet() {
         val safeParams = getSafeParams()
         val fftWindow = createHannWindow(safeParams.calcs.fftWindowSize)
         val calcs = safeParams.calcs
@@ -183,7 +184,7 @@ class TransformStep(
             val rc = initFft(calcs.fftWindowSize)
             require(rc != -1) { "initFft failed" }
 
-            _dataAssignedRange = null
+            assignedRange.reset()
         }
 
         stepData = StepData(
@@ -202,7 +203,7 @@ class TransformStep(
     }
 
     override suspend fun resetState() {
-        _dataAssignedRange = null
+        assignedRange.reset()
     }
 
     override fun sliceRender(sliceRange: HORange, transformedEntryIndex: Int) {
@@ -229,10 +230,10 @@ class TransformStep(
          * rather than the maximum as pre calculated.
          */
         val windowCount =
-            if (sliceRange.second - sliceRange.first < calcs.fftWindowSize)
+            if (sliceRange.exclusiveEnd - sliceRange.start < calcs.fftWindowSize)
                 0
             else {
-                ((sliceRange.second - sliceRange.first) - calcs.fftWindowSize) / calcs.fftStride + 1; }
+                ((sliceRange.exclusiveEnd - sliceRange.start) - calcs.fftWindowSize) / calcs.fftStride + 1; }
         require(windowCount <= calcs.sliceTransformedTimeBucketCount) { "Internal error: two many windows to transform" }
 
         if (windowCount > 0) {
@@ -247,7 +248,7 @@ class TransformStep(
              * at the end of the input buffer, which should be less than a window's worth.
              */
             val rc1 = unwrapSlices(
-                rawDataBuffer, calcs.rawPagedDataLength, sliceRange.first,
+                rawDataBuffer, calcs.rawPagedDataLength, sliceRange.start,
                 windowCount, calcs.fftStride,
                 windowData, calcs.fftWindowSize,
                 safeStepData.inputSliceBuffer
@@ -269,7 +270,7 @@ class TransformStep(
 
                 val rc2 = doFft(
                     windowCount, safeStepData.inputSliceBuffer,
-                    transformedDataBuffer,
+                    transformedDataBuffer.buffer,
                     transformedEntryIndex * calcs.transformedFrequencyBucketCount,
                     ColourMapStep.dbRangeMax.start,
                     triggerResultBuffer,
@@ -313,18 +314,11 @@ class TransformStep(
              * cares about.
              */
             val nextSliceRange = HORange(transformedEntryIndex, transformedEntryIndex + windowCount)
-            // Note the range in the transformed buffer that has been assigned values:
-            val dar = _dataAssignedRange
-            if (dar == null)
-                _dataAssignedRange = nextSliceRange
-            else {
-                _dataAssignedRange = HORange(
-                    minOf(dar.first, nextSliceRange.first),
-                    maxOf(dar.second, nextSliceRange.second)
-                )
-            }
+            // Track the range in the transformed buffer that has been assigned values:
+            assignedRange.update(nextSliceRange)
+
             // Timber.d("JM: transformed _dataAssignedRange = $_dataAssignedRange")
-            if (nextSliceRange.second - nextSliceRange.first > 0)
+            if (nextSliceRange.exclusiveEnd - nextSliceRange.start > 0)
                 nextStep.sliceRender(nextSliceRange)
         }
     }

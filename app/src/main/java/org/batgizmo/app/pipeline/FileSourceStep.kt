@@ -26,9 +26,9 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.WavFileReader
 
 class FileSourceStep(nextStep: AbstractStep,
-                     rangedRawDataBuffer: AbstractPipeline.RangedRawDataBuffer,
+                     rangedRawDataBuffer: AbstractPipeline.RangedShortDataBuffer,
                      private val wavFileReader: WavFileReader)
-    : DataSourceStep(nextStep, rangedRawDataBuffer) {
+    : DataSourceStep(nextStep, rangedRawDataBuffer, false) {
 
     /**
      * Make sure underlying handles and resources are closed:
@@ -47,16 +47,16 @@ class FileSourceStep(nextStep: AbstractStep,
         val calcs = safeParams.calcs
 
         // The slice is relative to the page:
-        val absoluteRange = HORange(sliceRange.first + calcs.rawOffsetToPage,
-            minOf(sliceRange.second + calcs.rawOffsetToPage, calcs.rawTotalDataLength))
+        val absoluteRange = HORange(sliceRange.start + calcs.rawOffsetToPage,
+            minOf(sliceRange.exclusiveEnd + calcs.rawOffsetToPage, calcs.rawTotalDataLength))
 
         // Log.d(this::class.simpleName, "push absoluteRange = $absoluteRange")
 
-        val bufferFirst = sliceRange.first
+        val bufferFirst = sliceRange.start
         val samplesRead = wavFileReader.readData(absoluteRange,
             rangedRawDataBuffer.buffer, bufferFirst)
 
-        val actualSliceRange = HORange(sliceRange.first, sliceRange.first + samplesRead)
+        val actualSliceRange = HORange(sliceRange.start, sliceRange.start + samplesRead)
 
         /*
             // For testing, generate a sine wave:
@@ -67,7 +67,11 @@ class FileSourceStep(nextStep: AbstractStep,
         */
 
         // Pass on the slice range that was actually read:
-        if (actualSliceRange.second - actualSliceRange.first > 0)
+        if (actualSliceRange.exclusiveEnd - actualSliceRange.start > 0) {
+            // Keep track of the contiguous range of raw data that we have populated:
+            rangedRawDataBuffer.update(actualSliceRange)
+
             nextStep.sliceRender(actualSliceRange, transformedEntryIndex)
+        }
     }
 }

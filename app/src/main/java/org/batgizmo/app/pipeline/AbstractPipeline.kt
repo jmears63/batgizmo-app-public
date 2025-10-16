@@ -66,7 +66,7 @@ abstract class AbstractPipeline(
     abstract fun createDataSourceStep(
         pipeline: AbstractPipeline,
         transformStep: TransformStep,
-        rangedRawDataBuffer: RangedRawDataBuffer
+        rangedRawDataBuffer: RangedShortDataBuffer
     ): DataSourceStep
 
     data class FftParameters(
@@ -78,24 +78,19 @@ abstract class AbstractPipeline(
         const val CANARY_ENTRIES = 1
         const val CANARY_VALUE = 0xFACE.toShort()
 
-        external fun findBnCRange(
+        external fun nativeFindBnCRange(
             xMin: Int, xMax: Int,
             yMin: Int, yMax: Int,
             frequencyBuckets: Int,
-            transformedDataBuffer: FloatArray
+            transformedDataBuffer: FloatArray,
+            noiseBaselineDb: FloatArray?,
         ): FloatArray?
 
-        external fun findNoiseBaseline(
+        external fun nativeFindNoiseBaseline(
             xMin: Int, xMax: Int,
             frequencyBuckets: Int,
-            transformedDataBuffer: FloatArray
-        ): FloatArray?
-
-        external fun applyNoiseBaseline(
-            xMin: Int, xMax: Int,
-            frequencyBuckets: Int,
-            profile: FloatArray,
-            transformedDataBuffer: FloatArray
+            transformedDataBuffer: FloatArray,
+            noiseBaselineBuffer: FloatArray
         )
 
         /**
@@ -176,16 +171,36 @@ abstract class AbstractPipeline(
         }
     }
 
+    open class RangedDataBufferBase(var assignedRange: HORange = HORange.EMPTY) {
+        fun update(range: HORange) {
+            // Keep track of the contiguous range of raw data that we have populated:
+            val ar = assignedRange
+            // Extend the existing range to include the current range, limiting to the
+            // size of the raw data buffer for sanity:
+            assignedRange = HORange(
+                minOf(ar.start, range.start),
+                maxOf(ar.exclusiveEnd, range.exclusiveEnd)
+            )
+        }
+
+        open fun reset() {
+            assignedRange = HORange.EMPTY
+        }
+    }
+
     /**
      * A raw data buffer and its associated range of indexes which are
-     * have been assigned. A null value means the range is not yet known.
+     * have been assigned. A null value means that no data has yet been written to the
+     * buffer.
      */
-    data class RangedRawDataBuffer(val buffer: ShortArray, var assignedRange: HORange? = null) {
+    class RangedShortDataBuffer(val buffer: ShortArray, assignedRange: HORange = HORange.EMPTY)
+        : RangedDataBufferBase(assignedRange) {
+
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (javaClass != other?.javaClass) return false
 
-            other as RangedRawDataBuffer
+            other as RangedShortDataBuffer
 
             if (!buffer.contentEquals(other.buffer)) return false
             if (assignedRange != other.assignedRange) return false
@@ -199,11 +214,65 @@ abstract class AbstractPipeline(
             return result
         }
 
-        fun reset() {
+        override fun reset() {
+            super.reset()
             buffer.fill(0)
-            buffer[buffer.size - 1] = CANARY_VALUE.toShort()
-            if (assignedRange != null)
-                assignedRange = HORange(0, 0)
+            buffer[buffer.size - 1] = CANARY_VALUE
+        }
+
+    }
+
+    /**
+     * As above - an array that maintains the range of data values that have been assigned.
+     * I avoid using kotlin generics for this as basic data types get boxed into Arrays, adding
+     * overhead and complexity in the native layer.
+     */
+    class RangedFloatDataBuffer(val buffer: FloatArray, assignedRange: HORange = HORange.EMPTY)
+        : RangedDataBufferBase(assignedRange) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+
+            other as RangedFloatDataBuffer
+
+            if (!buffer.contentEquals(other.buffer)) return false
+            if (assignedRange != other.assignedRange) return false
+
+            return true
+        }
+
+        override fun hashCode(): Int {
+            var result = buffer.contentHashCode()
+            result = 31 * result + (assignedRange?.hashCode() ?: 0)
+            return result
+        }
+
+        override fun reset() {
+            super.reset()
+            buffer.fill(dbRangeMax.start)
+            buffer[buffer.size - 1] = CANARY_VALUE.toFloat()
+        }
+    }
+
+    data class NoiseBaselineHolder(var noiseBaselineDb: FloatArray? = null) {
+
+        fun reset() {
+            noiseBaselineDb = null
+        }
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+
+            other as NoiseBaselineHolder
+
+            if (!noiseBaselineDb.contentEquals(other.noiseBaselineDb)) return false
+
+            return true
+        }
+
+        override fun hashCode(): Int {
+            return noiseBaselineDb?.contentHashCode() ?: 0
         }
     }
 
@@ -212,8 +281,9 @@ abstract class AbstractPipeline(
         val dataSourceStep: DataSourceStep,
         val transformStep: TransformStep,
         val colourMapStep: ColourMapStep,
-        val rangedRawDataBuffer: RangedRawDataBuffer,
-        val transformedDataBuffer: FloatArray,
+        val rangedRawDataBuffer: RangedShortDataBuffer,
+        val noiseBaselineHolder: NoiseBaselineHolder,
+        val transformedDataBuffer: RangedFloatDataBuffer
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -226,7 +296,8 @@ abstract class AbstractPipeline(
             if (transformStep != other.transformStep) return false
             if (colourMapStep != other.colourMapStep) return false
             if (rangedRawDataBuffer != other.rangedRawDataBuffer) return false
-            if (!transformedDataBuffer.contentEquals(other.transformedDataBuffer)) return false
+            if (noiseBaselineHolder != other.noiseBaselineHolder) return false
+            if (transformedDataBuffer != other.transformedDataBuffer) return false
 
             return true
         }
@@ -237,7 +308,8 @@ abstract class AbstractPipeline(
             result = 31 * result + transformStep.hashCode()
             result = 31 * result + colourMapStep.hashCode()
             result = 31 * result + rangedRawDataBuffer.hashCode()
-            result = 31 * result + transformedDataBuffer.contentHashCode()
+            result = 31 * result + noiseBaselineHolder.hashCode()
+            result = 31 * result + transformedDataBuffer.hashCode()
             return result
         }
     }
@@ -265,7 +337,7 @@ abstract class AbstractPipeline(
         All public methods must therefore contain a synchronized block for safe data access.
     */
     protected var pipelineData: PipelineData? = null
-    private var cachedRawDataBuffer: RangedRawDataBuffer? = null
+    private var cachedRawDataBuffer: RangedShortDataBuffer? = null
 
     // Synchronize access to data members:
     protected val mutex = Mutex()
@@ -356,11 +428,14 @@ abstract class AbstractPipeline(
      * Override this to do any reset that might need doing at the pipeline level.
      */
     protected open suspend fun resetPipelineState() {
-        val pld = pipelineData
-        if (pld != null) {
-            pld.rangedRawDataBuffer.reset()
-            // Reset to the value that corresponds to the start of the colour map:
-            pld.transformedDataBuffer.fill(dbRangeMax.start)
+
+        Timber.d("baseline: resetPipelineState called")
+
+        val pd = pipelineData
+        if (pd != null) {
+            pd.rangedRawDataBuffer.reset()
+            pd.transformedDataBuffer.reset()
+            pd.noiseBaselineHolder.reset()
         }
 
         synchronized(spectrogramBitmapHolder) {
@@ -453,8 +528,8 @@ abstract class AbstractPipeline(
      */
     suspend fun applyBnC(range: FloatRange) {
         mutex.withLock {
-            val mapStep = pipelineData?.colourMapStep
-            mapStep?.let {
+            val cms = pipelineData?.colourMapStep
+            cms?.let {
                 val params = it.params
                 if (params != null) {
                     Timber.d("applyBnC: $range is being set")
@@ -462,11 +537,7 @@ abstract class AbstractPipeline(
                         ColourMapStep.Params(params.calcs, bnCRangeLogical = range)
                     it.params = newParams
 
-                    pipelineData?.let {
-                        it.colourMapStep.fullRender()
-                        spectrogramBitmapHolder.signalUpdate()
-                        amplitudeBitmapHolder.signalUpdate()
-                    }
+                    pipelineData?.colourMapStep?.fullRender()
                 }
             }
         }
@@ -483,6 +554,7 @@ abstract class AbstractPipeline(
      */
     suspend fun calculateAutoBnC(visibleXRange: FloatRange, visibleYRange: FloatRange): FloatRange? {
         mutex.withLock() {
+            Timber.d("calculateAutoBnC called")
             val pd = pipelineData
             if (pd == null)
                 return null
@@ -507,23 +579,27 @@ abstract class AbstractPipeline(
 
             // We need the intersection of the visible range and the assigned data range,
             // to avoid calculating BnC on uninitialized data:
-            val assignedTimeRange = pipelineData?.transformStep?.dataAssignedRange
+            val assignedTimeRange = pipelineData?.transformStep?.getDataAssignedRange()
             // Timber.d("JM: transformed assignedTimeRange = $assignedTimeRange")
             if (assignedTimeRange != null) {
                 val clippedXIndexRange = Pair(
-                    maxOf(xIndexRange.first, assignedTimeRange.first),
-                    minOf(xIndexRange.second, assignedTimeRange.second)
+                    maxOf(xIndexRange.first, assignedTimeRange.start),
+                    minOf(xIndexRange.second, assignedTimeRange.exclusiveEnd)
                 )
                 // Timber.d("JM: clippedXIndexRange = $clippedXIndexRange")
                 if (clippedXIndexRange.second > clippedXIndexRange.first) {
-                    val rangeFromData = findBnCRange(
+                    val rangeFromData = nativeFindBnCRange(
                         clippedXIndexRange.first, clippedXIndexRange.second,
                         yIndexRange.first, yIndexRange.second,
                         calcs.transformedFrequencyBucketCount,
-                        pd.transformedDataBuffer
+                        pd.transformedDataBuffer.buffer,
+                        pd.noiseBaselineHolder.noiseBaselineDb
                     )
-                    if (rangeFromData != null)
+                    if (rangeFromData != null) {
+                        Timber.d("AutoBnC rangeFromData = ${rangeFromData[0]}..${rangeFromData[1]}, " +
+                                "noise baseline is ${if (pd.noiseBaselineHolder.noiseBaselineDb != null) "present" else "absent"} ")
                         range = rangeFromData.copyOf()
+                    }
                 }
             }
 
@@ -531,7 +607,7 @@ abstract class AbstractPipeline(
             var floatRange = ColourMapStep.dbRangeMax
 
             /*
-             * Subjectively, it's nice if the bottom part of the data dB range is black, as it is noise
+             * Subjectively, it's nice if the bottom part of the data dB range is black, as it is usually noise
              * and nothing of interest. For now we use a fixed percentage of the range. An improvement
              * would be to find the dB value of highest frequency and use that as threshold.
              */
@@ -539,75 +615,78 @@ abstract class AbstractPipeline(
             if (range != null) {
                 val lower = maxOf(ColourMapStep.dbRangeMax.start, range[0])
                 val diff = range[1] - lower
-                val blackRange = diff * 0.30f
+                val blackRange = diff * 0.20f
                 floatRange = FloatRange(lower + blackRange, range[1])
             }
-            Timber.d("auto BnC range in visible region is $floatRange")
+            Timber.d("auto BnC range in visible region (1) is $floatRange")
 
             return floatRange
         }
     }
 
     /**
-     * Call this method on a worker thread.
+     * Call this expensive method on a worker thread.
      *
-     * Calculate the noise profile, resulting in a noise offset per frequency bucket.
+     * Calculate the noise profile if the buffer has been allocated to contain it
+     * , resulting in a noise offset per frequency bucket.
      *
      * This method does heavy calculations: don't call it in the main thread.
      */
-    suspend fun calculateNoiseProfile(): FloatArray? {
-        var profile: FloatArray? = null
+    suspend fun calculateNoiseBaseline() {
         mutex.withLock() {
+            // Timber.d("calculateNoiseBaseline called")
             val pd = pipelineData
             if (pd == null)
-                return null
+                return
 
             val calcs = pd.calcs
 
+            val baselineBuffer = FloatArray(calcs.transformedFrequencyBucketCount)
+
+            // Only calculate the noise baseline if it is required, ie if the buffer is not null:
             // Use all the data available in the buffer, don't limit it to the visible range:
-            val assignedTimeRange = pipelineData?.transformStep?.dataAssignedRange
+            val assignedTimeRange = pipelineData?.transformStep?.getDataAssignedRange()
             assignedTimeRange?.let {
-               if (assignedTimeRange.second > assignedTimeRange.first) {
-                   val elapsed1 = measureTime {
-                       profile = findNoiseBaseline(
-                            assignedTimeRange.first, assignedTimeRange.second,
+                if (assignedTimeRange.exclusiveEnd > assignedTimeRange.start) {
+                    // val elapsed = measureTime {
+                        nativeFindNoiseBaseline(
+                            assignedTimeRange.start, assignedTimeRange.exclusiveEnd,
                             calcs.transformedFrequencyBucketCount,
-                            pd.transformedDataBuffer)
-                   }
-                   Timber.d("Time to find the baseline = $elapsed1")
-
-                   profile?.let { it ->
-                       /*
-                        * Adjust the profile to provide a linear reduction above a certain frequency.
-                        * This subjectively looks natural and it avoids over emphasising spurious detail at
-                        * very high frequencies. The parameters were chosen by trial and error.
-                        * Linear reduction to avoid expensive logs in the loop below.
-                        */
-                       val fCornerHz: Float = 80f * 1000f
-                       val reductionFactor = 10f
-                       val freqCornerBucket = round((fCornerHz) / calcs.transformedFrequencyInterval)
-                           .toInt().coerceIn(1, calcs.transformedFrequencyBucketCount - 1)
-                       for (freqBucket in freqCornerBucket until calcs.transformedFrequencyBucketCount) {
-                           val freqRatio = (freqBucket - freqCornerBucket).toFloat() / freqCornerBucket
-                           val deltaDb = freqRatio * reductionFactor
-                           it[freqBucket] = it[freqBucket] + deltaDb    // *add* the delta as we will subtract the profile.
-                       }
-                   }
-                }
-
-                profile?.let {
-                    val elapsed2 = measureTime {
-                        applyNoiseBaseline(
-                            assignedTimeRange.first, assignedTimeRange.second,
-                            calcs.transformedFrequencyBucketCount,
-                            it, pd.transformedDataBuffer
+                            pd.transformedDataBuffer.buffer,
+                            baselineBuffer
                         )
+                    // }
+                    // Timber.d("Time taken to find the noise baseline = $elapsed")
+
+                    /*
+                     * Adjust the profile to provide a linear reduction above a certain frequency.
+                     * This subjectively looks natural and it avoids over emphasising spurious detail at
+                     * very high frequencies. The parameters were chosen by trial and error.
+                     * Linear reduction to avoid expensive logs in the loop below.
+                    */
+                    val fCornerHz: Float = 80f * 1000f
+                    val reductionFactor = 10f
+                    val freqCornerBucket =
+                        round((fCornerHz) / calcs.transformedFrequencyInterval)
+                            .toInt().coerceIn(1, calcs.transformedFrequencyBucketCount - 1)
+                    for (freqBucket in freqCornerBucket until calcs.transformedFrequencyBucketCount) {
+                        val freqRatio =
+                            (freqBucket - freqCornerBucket).toFloat() / freqCornerBucket
+                        val deltaDb = freqRatio * reductionFactor
+                        // *add* the delta as we will subtract the profile:
+                        baselineBuffer[freqBucket] = baselineBuffer[freqBucket] + deltaDb
                     }
-                    Timber.d("=> Time to apply the baseline = $elapsed2")
                 }
+
+                pd.noiseBaselineHolder.noiseBaselineDb = baselineBuffer
             }
         }
-        return profile
+    }
+
+    fun clearNoiseBaseline(): Boolean {
+        val changed = (pipelineData?.noiseBaselineHolder?.noiseBaselineDb != null)
+        pipelineData?.noiseBaselineHolder?.noiseBaselineDb = null
+        return changed
     }
 
     data class ScreenFactors(val aspectFactor: Float, val pixelsPerSecond: Float)
@@ -661,7 +740,7 @@ abstract class AbstractPipeline(
              */
 
             // Buffer for raw data read from the data file:
-            var rangedRawDataBuffer: RangedRawDataBuffer? = null
+            var rangedRawDataBuffer: RangedShortDataBuffer? = null
             val sizeRequired = calcs.rawPagedDataLength + CANARY_ENTRIES
             val crwb = cachedRawDataBuffer
             if (preserveRawDataBuffer && crwb != null && crwb.buffer.size == sizeRequired) {
@@ -670,7 +749,7 @@ abstract class AbstractPipeline(
             }
             else {
                 Timber.i("Attempting to allocate ShortArray($sizeRequired), ${Short.SIZE_BYTES * sizeRequired/1000} KB")
-                rangedRawDataBuffer = RangedRawDataBuffer(ShortArray(sizeRequired))
+                rangedRawDataBuffer = RangedShortDataBuffer(ShortArray(sizeRequired))
             }
             require(rangedRawDataBuffer != null) { "Internal error: rawDataBuffer should not be null" }
 
@@ -682,12 +761,20 @@ abstract class AbstractPipeline(
                 calcs.transformedTimeBucketCount * calcs.transformedFrequencyBucketCount
 
             // Buffer for transformed data generated by the SFFT transform step.
-            // We flatten the data into a one dimensional array in the way youf
+            // We flatten the data into a one dimensional array in the way you
             // would guess:
-            Timber.i("Attempting to allocate FloatArray($transformedDataBufferSize), ${Float.SIZE_BYTES * transformedDataBufferSize/1000} KB")
+            Timber.i("Attempting to allocate FloatArray($transformedDataBufferSize), " +
+                    "${Float.SIZE_BYTES * transformedDataBufferSize/1000} KB")
+            /*
             val transformedDataBuffer = FloatArray(transformedDataBufferSize)
             // Initialize to the value of the lowest end of the colour map:
-            transformedDataBuffer.fill(dbRangeMax.start)
+            transformedDataBuffer.fill(dbRangeMax.start)ShortArray(sizeRequired)
+             */
+            val transformedDataBuffer = RangedFloatDataBuffer(
+                FloatArray(transformedDataBufferSize + 1))
+            // Initialize to the value of the lowest end of the colour map:
+            transformedDataBuffer.buffer.fill(dbRangeMax.start)
+            transformedDataBuffer.buffer[transformedDataBuffer.buffer.size - 1] = CANARY_VALUE.toFloat()
 
             /**
              * Bitmap to hold the final transformed and colour mapped data, and place
@@ -720,14 +807,20 @@ abstract class AbstractPipeline(
              * its subsequent step:
              */
 
+            // The baseline holder is empty initially until we get some actual data and
+            // calculate the noise baseline, later:
+            val noiseBaselineHolder = NoiseBaselineHolder()
+            // Timber.d("abcd: noiseBaselineHolder = NoiseBaselineHolder()")
+
             // Create a step to map the transformed data (spectral intensities) to colours:
             val colourMapStep =
-                ColourMapStep(transformedDataBuffer, spectrogramBitmap, model.colourMapSize, model.settings)
+                ColourMapStep(transformedDataBuffer, spectrogramBitmap, noiseBaselineHolder,
+                    model.colourMapSize, model.settings)
             // Use the existing BnC range, so this is preserved when a new file is loaded:
             colourMapStep.params =
                 ColourMapStep.Params(calcs = calcs, bnCRangeLogical = model.bnCRangeFlow.value)
 
-            // Create a step to populate the raw data buffer from the data file:
+            // Create a step to transform the raw data to the frequency domain:
             val transformStep = TransformStep(model,
                 colourMapStep, rangedRawDataBuffer.buffer,
                 transformedDataBuffer,
@@ -737,8 +830,7 @@ abstract class AbstractPipeline(
             )
             val p = TransformStep.Params(calcs = calcs)
             Timber.d(
-                "assigning transformStep.params with ${p.calcs.fftWindowSize}"
-            )
+                "assigning transformStep.params with ${p.calcs.fftWindowSize}"            )
             transformStep.params = p
 
             // Create a step to populate the raw data buffer from the data file:
@@ -757,7 +849,8 @@ abstract class AbstractPipeline(
                 dataSourceStep = dataSourceStep,
                 transformedDataBuffer = transformedDataBuffer,
                 transformStep = transformStep,
-                colourMapStep = colourMapStep
+                colourMapStep = colourMapStep,
+                noiseBaselineHolder = noiseBaselineHolder
             )
             pipelineData = pld
             return pld
@@ -769,82 +862,6 @@ abstract class AbstractPipeline(
             // Noisy log:
             // diagnosticLogger.log { "setupPipeline end: runtime.{maxMemory, totalMemory, freeMemory) = " +
             //        "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB" }
-        }
-    }
-
-    /**
-     * Call this method on a worker thread.
-     *
-     * Map the logical visible range to the data in transformed data buffer, and
-     * calculate the minimum and maximum dB values there. We'll use that to set up
-     * auto BnC.
-     *
-     * This method does heavy calculations: don't call it in the main thread.
-     */
-    suspend fun calculateNoiseProfile(visibleXRange: FloatRange, visibleYRange: FloatRange): FloatRange? {
-        mutex.withLock() {
-            val pd = pipelineData
-            if (pd == null)
-                return null
-
-            val calcs = pd.calcs
-
-            // Convert the logical ranges to actual ones:
-            val xIndexRange = Pair(
-                (visibleXRange.start * calcs.transformedTimeBucketCount - 1).toInt()
-                    .coerceIn(0, calcs.transformedTimeBucketCount - 1),
-                (visibleXRange.endInclusive * calcs.transformedTimeBucketCount - 1).toInt()
-                    .coerceIn(0, calcs.transformedTimeBucketCount - 1)
-            )
-            val yIndexRange = Pair(
-                (visibleYRange.start * calcs.transformedFrequencyBucketCount - 1).toInt()
-                    .coerceIn(0, calcs.transformedFrequencyBucketCount - 1),
-                (visibleYRange.endInclusive * calcs.transformedFrequencyBucketCount - 1).toInt()
-                    .coerceIn(0, calcs.transformedFrequencyBucketCount - 1)
-            )
-
-            var range: FloatArray? = null
-
-            // We need the intersection of the visible range and the assigned data range,
-            // to avoid calculating BnC on uninitialized data:
-            val assignedTimeRange = pipelineData?.transformStep?.dataAssignedRange
-            // Timber.d("JM: transformed assignedTimeRange = $assignedTimeRange")
-            if (assignedTimeRange != null) {
-                val clippedXIndexRange = Pair(
-                    maxOf(xIndexRange.first, assignedTimeRange.first),
-                    minOf(xIndexRange.second, assignedTimeRange.second)
-                )
-                // Timber.d("JM: clippedXIndexRange = $clippedXIndexRange")
-                if (clippedXIndexRange.second > clippedXIndexRange.first) {
-                    val rangeFromData = findBnCRange(
-                        clippedXIndexRange.first, clippedXIndexRange.second,
-                        yIndexRange.first, yIndexRange.second,
-                        calcs.transformedFrequencyBucketCount,
-                        pd.transformedDataBuffer
-                    )
-                    if (rangeFromData != null)
-                        range = rangeFromData.copyOf()
-                }
-            }
-
-            // Default BnC range to use if there is no data visible:
-            var floatRange = ColourMapStep.dbRangeMax
-
-            /*
-             * Subjectively, it's nice if the bottom part of the data dB range is black, as it is noise
-             * and nothing of interest. For now we use a fixed percentage of the range. An improvement
-             * would be to find the dB value of highest frequency and use that as threshold.
-             */
-
-            if (range != null) {
-                val lower = maxOf(ColourMapStep.dbRangeMax.start, range[0])
-                val diff = range[1] - lower
-                val blackRange = diff * 0.25f
-                floatRange = FloatRange(lower + blackRange, range[1])
-            }
-            Timber.d("auto BnC range in visible region is $floatRange")
-
-            return floatRange
         }
     }
 
@@ -886,7 +903,7 @@ abstract class AbstractPipeline(
         // settings:
         val rawSamplesPerPage = (pipelineParameters.dataPageTimeSpanS * sampleRate).toInt()
         val rawPageRange = theRawPageRange ?: HORange(0, minOf(sampleCount, rawSamplesPerPage))
-        val rawPageDataCount = rawPageRange.second - rawPageRange.first
+        val rawPageDataCount = rawPageRange.exclusiveEnd - rawPageRange.start
 
         // Use calculated FFT parameters values rather values from settings:
         val nFft = fftParameters.windowSamples
@@ -949,7 +966,7 @@ abstract class AbstractPipeline(
         return CalculatedParams(
             rawTotalDataLength = sampleCount,
             rawPagedDataLength = rawPageDataCount,
-            rawOffsetToPage = rawPageRange.first,
+            rawOffsetToPage = rawPageRange.start,
             rawSampleRate = sampleRate,
             rawTimeInterval = rawTimeInterval,
             fftWindowSize = nFft,

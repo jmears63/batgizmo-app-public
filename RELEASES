@@ -1,6 +1,8 @@
 Version     Date            Description
 
                             Added support for selecting multiple files and scrolling through them.
+                            Added support for automatic background correction.
+                            Fixed a minor bug with paged viewing of large files.
 
 1.0.14      2025-09-23      Fix: respect system level lock orientation setting while permitting inverted portrait.
                             Perform an auto BnC when pausing live acquisition.
