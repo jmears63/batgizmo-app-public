@@ -117,7 +117,7 @@ class TopLevelUI(private val model: UIModel) {
             // Main UI thread.
 
             // Register a method to handle changes to the app mode. The following
-            // method doesn't return, but it does release to other co routines.
+            // method doesn't return, but it does release to other coroutines.
             model.resetAppModeFlow.collectLatest { mode ->
                 onResetAppMode(context, mode)
             }

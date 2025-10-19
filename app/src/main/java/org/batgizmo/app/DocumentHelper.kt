@@ -56,13 +56,17 @@ class DocumentHelper {
                 // We use OpenDocument rather then GetContent is it allows multiple
                 // MIME types:
                 contract = ActivityResultContracts.OpenMultipleDocuments()
-            ) { uriList: List<Uri> ->
+            ) { list: List<Uri> ->
 
-                val initialUriData = documentHelper.initDocumentState(context, uriList)
+                // Timber.d("rememberLauncherForActivityResult callback invoked: list.size = ${list.size}")
+
+                val initialUriData = documentHelper.initDocumentState(context, list)
 
                 initialUriData?.let { it ->
                     val filename = getFileName(context, it.uri)
                     Timber.i("Selected file: $filename")
+
+                    // The following callback calls resetUIMode():
                     onSelection(it)
                 }
             }
@@ -86,18 +90,14 @@ class DocumentHelper {
 
         // Shallow copy:
         uriList = theList.toMutableList()
-        uriList?.let { list ->
-            /*
-                Sort by display filename. No. This is slow for MyDrive, maybe it goes to the
-                internet to resolve each display name? So we rely on the natural order being something
-                sane.
-             */
-            /// uriList = list.sortedWith(compareBy { getFileName(context, it) } )
-        }
+
+        // Timber.d("rememberLauncherForActivityResult callback invoked: uriList.size = ${uriList?.size ?: "null"}")
+
         uriList?.let { list ->
             if (list.isNotEmpty()) {
                 val i = 0
                 currentIndex = i
+                // Timber.d("Setting currentIndex in initDocumentState() = $currentIndex")
                 return UriData(list[i], i > 0, i < list.size - 1)
             }
         }
@@ -107,6 +107,7 @@ class DocumentHelper {
     fun reset() {
         uriList = null
         currentIndex = null
+        // Timber.d("Setting currentIndex in reset() = $currentIndex")
     }
 
     fun getPreviousFile(): UriData? {
@@ -115,6 +116,7 @@ class DocumentHelper {
                 if (i > 0) {
                     val previous = i - 1
                     currentIndex = previous
+                    // Timber.d("Setting currentIndex in getPreviousFile() = $currentIndex")
                     return UriData(list[previous], previous > 0, previous < list.size - 1)
                 }
             }
@@ -128,6 +130,7 @@ class DocumentHelper {
                 if (i < list.size - 1) {
                     val next = i + 1
                     currentIndex = next
+                    // Timber.d("Setting currentIndex in getNextFile() = $currentIndex")
                     return UriData(list[next], next > 0, next < list.size - 1)
                 }
             }

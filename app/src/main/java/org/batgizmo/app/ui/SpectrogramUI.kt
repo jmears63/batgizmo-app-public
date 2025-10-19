@@ -137,7 +137,6 @@ import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import uk.org.gimell.batgimzoapp.R
 import java.util.Locale
-import kotlin.Boolean
 import kotlin.math.floor
 
 class SpectrogramUI(
@@ -1037,8 +1036,10 @@ class SpectrogramUI(
                 text = { Text("Close file") },
                 onClick = {
                     // In case we are currently viewing in multiple file mode:
-                    model.documentHelper.reset()
-                    model.resetUIMode(AppMode.LIVE)
+                    model.run {
+                        documentHelper.reset()
+                        resetUIMode(AppMode.LIVE)
+                    }
                 },
                 leadingIcon = { Icon(
                     imageVector = Icons.Filled.Close,
@@ -1087,8 +1088,7 @@ class SpectrogramUI(
         overlayComposer: @Composable (Modifier) -> Unit,
         windowSizeClass: WindowSizeClass = currentWindowAdaptiveInfo().windowSizeClass,
     ) {
-        if (BuildConfig.DEBUG)
-            Timber.d("SpectrogramPaneSet called")
+        // Timber.d("SpectrogramPaneSet called")
 
         var showAmplitudePane = true
         if (amplitudePaneVisibility == Settings.VisibilityOptions.NEVER.value)
@@ -1569,8 +1569,8 @@ class SpectrogramUI(
     }
 
     private fun closeViewer() {
+        // Timber.d("closeViewer called")
         model.closePipeline()   // Idempotent.
-        model.documentHelper.reset()
 
         uiState.fileIsOpen.value = false
         uiState.title.value = null
