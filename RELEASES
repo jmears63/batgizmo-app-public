@@ -1,5 +1,7 @@
 Version     Date            Description
 
+1.1.2       2025-10-20      Re-release of 1.1.1.
+
 1.1.1       2025-10-19      Bug fix: next/previous were unresponsive in some situation.
 
 1.1.0       2025-10-16      Added support for selecting multiple files and scrolling through them.
