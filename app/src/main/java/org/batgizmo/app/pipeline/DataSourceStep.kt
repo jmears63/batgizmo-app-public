@@ -22,11 +22,9 @@
 
 package org.batgizmo.app.pipeline
 
-import android.util.Log
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
 import timber.log.Timber
-import uk.org.gimell.batgimzoapp.BuildConfig
 
 /**
  * The file viewer reads enough data from from the input file to fully populate the
@@ -67,12 +65,11 @@ abstract class DataSourceStep(
         val safeParams = getSafeParams()
         val calcs = safeParams.calcs
 
-        if (BuildConfig.DEBUG)
-            Log.d(this::class.simpleName, "getMaxAxisRanges calcs.rawOffsetToPage = ${calcs.rawOffsetToPage}")
+        // Timber.d(this::class.simpleName, "getMaxAxisRanges calcs.rawOffsetToPage = ${calcs.rawOffsetToPage}")
 
         val halfFftWindow = calcs.fftWindowSize / 2
-        var xAxisMin = (calcs.rawOffsetToPage + halfFftWindow) * calcs.rawTimeInterval
-        var xAxisMax = (calcs.rawOffsetToPage + calcs.rawPagedDataLength - halfFftWindow) * calcs.rawTimeInterval
+        val xAxisMin = (calcs.rawOffsetToPage + halfFftWindow) * calcs.rawTimeInterval
+        val xAxisMax = (calcs.rawOffsetToPage + calcs.rawPagedDataLength - halfFftWindow) * calcs.rawTimeInterval
 
         val yAxisMin = 0f
         val yAxisMax = calcs.transformedFrequencyInterval * calcs.transformedFrequencyBucketCount

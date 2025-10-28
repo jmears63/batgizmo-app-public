@@ -1321,8 +1321,7 @@ class SpectrogramUI(
             fun gotoFile(uriData: DocumentHelper.UriData) {
                 val filename = DocumentHelper.getFileName(context, uriData.uri)
                 model.closePipeline()
-                uiState.pagingState.value?.reset(model.settings)
-                model.openFile(uriData.uri, filename ?: uriData.uri.toString())
+                openFile(uriData.uri, filename ?: uriData.uri.toString())
                 buttonState.previousFileEnabled.value = uriData.previousAvailable
                 buttonState.nextFileEnabled.value = uriData.nextAvailable
             }
@@ -1393,15 +1392,17 @@ class SpectrogramUI(
     private fun viewUri(context: Context, viewModel: UIModel, uriData: DocumentHelper.UriData) {
         val filename = DocumentHelper.getFileName(context, uriData.uri)
 
-        uiState.processingFlag.value = true
-        uiState.rawPageRange.value = null
-        uiState.pagingState.value = null
-
-        // Timber.d("processingFlag set true")
-        viewModel.openFile(uriData.uri, filename ?: "(unknown)")
+        openFile(uriData.uri, filename ?: "(unknown)")
 
         buttonState.previousFileEnabled.value = uriData.previousAvailable
         buttonState.nextFileEnabled.value = uriData.nextAvailable
+    }
+
+    private fun openFile(uri: Uri, filename: String) {
+        uiState.processingFlag.value = true
+        uiState.rawPageRange.value = null
+        uiState.pagingState.value = null
+        model.openFile(uri, filename)
     }
 
     private fun onViewingFileOpened(
