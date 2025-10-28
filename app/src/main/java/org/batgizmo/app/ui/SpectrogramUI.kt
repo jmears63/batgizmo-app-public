@@ -1321,6 +1321,7 @@ class SpectrogramUI(
             fun gotoFile(uriData: DocumentHelper.UriData) {
                 val filename = DocumentHelper.getFileName(context, uriData.uri)
                 model.closePipeline()
+                uiState.pagingState.value?.reset(model.settings)
                 model.openFile(uriData.uri, filename ?: uriData.uri.toString())
                 buttonState.previousFileEnabled.value = uriData.previousAvailable
                 buttonState.nextFileEnabled.value = uriData.nextAvailable

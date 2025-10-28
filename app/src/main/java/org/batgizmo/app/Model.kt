@@ -556,26 +556,6 @@ class UIModel(application: Application,
                         settings.autoBnCEnabledViewer,
                         settings.autoBaselineEnabled)
 
-                    /*
-                    if (false) {
-
-                        // Do noise baseline calculation if required *before* auto BnC, as it will affect
-                        // the auto BnC range calculated:
-                        p.calculateNoiseBaseline()
-
-                        // We are opening a file so use the BnC setting for viewer mode:
-                        if (settings.autoBnCEnabledViewer) {
-                            /*
-                            Do auto BnC now if required by settings. This has to happen
-                            *after* the entire pipeline has rendered, so that the entire transformed
-                            data is available.
-                         */
-                            internalDoAutoBnC(p)
-                        } else
-                            triggerBitblt()
-                    }
-                     */
-
                     // Signal to the UI that we have successfully opened the file and initialized
                     // the pipeline:
                     val pagingData = pipeline?.getPagingData()
