@@ -1542,7 +1542,7 @@ class SpectrogramUI(
             "Unknown errno"
         }
 
-        uiState.errorMessage.value = "USB microphone communication error - please check the connection.\n\n" +
+        uiState.errorMessage.value = "USB microphone communication error - please check that it is correctly plugged in.\n\n" +
                 "errno = ${result.errno}: $errnoText"
         uiState.showErrorDialog.value = true
     }

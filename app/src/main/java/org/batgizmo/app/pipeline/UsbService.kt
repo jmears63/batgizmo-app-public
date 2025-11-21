@@ -277,16 +277,13 @@ class UsbService(private val context: Context,
                 // Select the first item if present, and request permission to access it:
                 val device = usbManager.deviceList.values.firstOrNull()
                 if (device == null) {
-                    Log.i(this::class.simpleName, "No USB device found")
-                    throw RuntimeException("No USB device found")
+                    Timber.i("No USB device found")
+                    throw RuntimeException("No USB microphone found. Please plug one in to the phone.")
                 }
 
                 val hp = usbManager.hasPermission(device)   // Already got permission?
                 if (hp) {
-                    Log.i(
-                        this::class.simpleName,
-                        "Device ${device.deviceName} already has permission"
-                    )
+                    Timber.i("Device ${device.deviceName} already has permission")
                     processDevice(device)
                 } else {
                     // A hacky way to communicate with the intent handle callback code:
@@ -298,10 +295,7 @@ class UsbService(private val context: Context,
 
                     // This following line requests the user interactively for permission, and
                     // if they grant it, calls processDevice:
-                    Log.i(
-                        this::class.simpleName,
-                        "Requesting permission for device ${device.deviceName}"
-                    )
+                    Timber.i("Requesting permission for device ${device.deviceName}")
                     usbManager.requestPermission(device, permissionIntent)
                 }
             }
@@ -566,11 +560,11 @@ class UsbService(private val context: Context,
                 // Log details:
                 val stackTraceElement = e.stackTrace.firstOrNull()
                 val message = if (stackTraceElement != null) {
-                    "Error: ${e.localizedMessage ?: "Unknown error"}\n" +
+                    "${e.localizedMessage ?: "Unknown error"}\n\n" +
                             "Module: ${stackTraceElement.fileName}\n" +
                             "Line: ${stackTraceElement.lineNumber}"
                 } else {
-                    "Error: ${e.localizedMessage ?: "Unknown error"}"
+                    e.localizedMessage ?: "Unknown error"
                 }
 
                 Log.w(

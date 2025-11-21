@@ -568,11 +568,11 @@ class UIModel(application: Application,
                     // Log details:
                     val stackTraceElement = e.stackTrace.firstOrNull()
                     val message = if (stackTraceElement != null) {
-                        "Error: ${e.localizedMessage ?: "Unknown error"}\n" +
+                        "${e.localizedMessage ?: "Unknown error"}\n\n" +
                                 "Module: ${stackTraceElement.fileName}\n" +
                                 "Line: ${stackTraceElement.lineNumber}"
                     } else {
-                        "Error: ${e.localizedMessage ?: "Unknown error"}"
+                        "${e.localizedMessage ?: "Unknown error"}"
                     }
 
                     Timber.w("Exception when opening wav file. $message")
@@ -778,11 +778,11 @@ class UIModel(application: Application,
                     // Log details:
                     val stackTraceElement = e.stackTrace.firstOrNull()
                     val message = if (stackTraceElement != null) {
-                        "Error: ${e.localizedMessage ?: "Unknown error"}\n" +
+                        "${e.localizedMessage ?: "Unknown error"}\n\n" +
                                 "Module: ${stackTraceElement.fileName}\n" +
                                 "Line: ${stackTraceElement.lineNumber}"
                     } else {
-                        "Error: ${e.localizedMessage ?: "Unknown error"}"
+                        e.localizedMessage ?: "Unknown error"
                     }
 
                     Timber.w("Exception during live connect: $message")
