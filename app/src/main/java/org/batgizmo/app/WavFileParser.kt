@@ -269,7 +269,9 @@ class WavFileParser {
         val dataBuffer = ShortArray(portionSize * fmtChunk.numChannels)
 
         while (samplesRead < expectedSampleCount) {
-            val count = minOf(expectedSampleCount - samplesRead, portionSize)
+            var count = minOf(expectedSampleCount - samplesRead, portionSize)
+            // There is an exception report resulting from this being negative, somehow:
+            count = maxOf(count, 0)
             val actualPortionCount = readData(
                 raFile,
                 fmtChunk,
