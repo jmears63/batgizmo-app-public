@@ -25,7 +25,6 @@ package org.batgizmo.app.pipeline
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
-import android.util.Log
 import android.view.SurfaceHolder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
@@ -252,10 +251,7 @@ class SpectrogramRenderer(
                                     // Start a timer that we will use to tell if it is a long touch:
                                     longPressJob = scope.launch {
                                         delay(longPressDurationMs)
-                                        Log.i(
-                                            this::class.simpleName,
-                                            "getGestureModifier long press detected"
-                                        )
+                                        Timber.i("getGestureModifier long press detected")
                                         onLongPress(scope, p.position, size)
                                         // Remain in state START.
                                     }
@@ -332,10 +328,7 @@ class SpectrogramRenderer(
                                     startCentroid?.let { start ->
                                         val displacement = p.position - p.previousPosition
                                         if (BuildConfig.DEBUG)
-                                            Log.d(
-                                                this::class.simpleName,
-                                                "getGestureModifier panning to $displacement"
-                                            )
+                                            Timber.d("getGestureModifier panning to $displacement")
                                         onPan(scope, displacement, size)
                                     }
                                 } else {
@@ -379,10 +372,7 @@ class SpectrogramRenderer(
 
                     if (nextState != state) {
                         if (BuildConfig.DEBUG)
-                            Log.d(
-                                this::class.simpleName,
-                                "Gesture state change from $state to $nextState"
-                            )
+                            Timber.d("Gesture state change from $state to $nextState")
                     }
 
                     state = nextState

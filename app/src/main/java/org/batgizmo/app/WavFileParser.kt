@@ -22,7 +22,7 @@
 
 package org.batgizmo.app
 
-import android.util.Log
+import timber.log.Timber
 import java.io.EOFException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -94,14 +94,14 @@ class WavFileParser {
             val subChunkId = readTextBytes(raFile, filename, 4, "SubchunkID")
             if (subChunkId == "fmt ") {        // Note: the space is important.
                 if (fmtChunk != null) {
-                    Log.i(this::class.simpleName, "Ignoring extra fmt chunk")
+                    Timber.i("Ignoring extra fmt chunk")
                     skipChunk(raFile, filename)
                 }
                 else
                     fmtChunk = readFormatChunk(raFile, filename)
             } else if (subChunkId == "data") {
                 if (dataChunk != null) {
-                    Log.i(this::class.simpleName, "Ignoring extra data chunk")
+                    Timber.i("Ignoring extra data chunk")
                     skipChunk(raFile, filename)
                 }
                 else {
@@ -113,14 +113,14 @@ class WavFileParser {
                 }
             } else if (subChunkId == "guan") {
                 if (guanoChunk != null) {
-                    Log.i(this::class.simpleName, "Ignoring extra guano chunk.")
+                    Timber.i("Ignoring extra guano chunk.")
                     skipChunk(raFile, filename)
                 }
                 else {
                     guanoChunk = readGuanoChunk(raFile, filename)
                 }
             } else {
-                Log.i(this::class.simpleName, "Ignoring unknown wav file chunk $subChunkId.")
+                Timber.i("Ignoring unknown wav file chunk $subChunkId.")
                 skipChunk(raFile, filename)
             }
         }
@@ -428,7 +428,7 @@ class WavFileParser {
 
         val excessData = chunkSize - requiredChunkSize
         if (excessData > 0) {
-            Log.i(this::class.simpleName, "Discarding $excessData excess bytes from the end of fmt")
+            Timber.i(this::class.simpleName, "Discarding $excessData excess bytes from the end of fmt")
             raFile.skipBytes(excessData)
         }
 

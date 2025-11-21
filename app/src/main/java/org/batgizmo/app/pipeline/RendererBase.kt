@@ -26,7 +26,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
-import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.compose.runtime.Composable
@@ -229,7 +228,7 @@ abstract class SHCallback(
             it.terminateThread()   // Signal a clean shutdown of the thread.
             it.join()              // Wait for thread to finish,
             if (BuildConfig.DEBUG)
-                Log.d(this::class.simpleName, "DrawThread complete")
+                Timber.d("DrawThread complete")
         }
     }
 }
@@ -246,7 +245,7 @@ abstract class RendererBase(
         private set
 
     fun reset() {
-        Log.d(this::class.simpleName, "reset called")
+        Timber.d("reset called")
 
         this.liveMode = false
 
@@ -271,10 +270,7 @@ abstract class RendererBase(
                     // Check if the size truly changed. This lambda gets called multiple times
                     // with the same size:ge
                     if (BuildConfig.DEBUG)
-                        Log.d(
-                            this::class.simpleName,
-                            "AndroidView size changed: $size"
-                        )
+                        Timber.d("AndroidView size changed: $size")
 
                     // Note the size for future use:
                     sizeDp = with(density) {

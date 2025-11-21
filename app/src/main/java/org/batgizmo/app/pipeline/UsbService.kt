@@ -38,7 +38,6 @@ import android.media.AudioManager.GET_DEVICES_OUTPUTS
 import android.os.Build
 import android.os.Parcelable
 import android.util.Base64
-import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import com.android.server.usb.descriptors.Usb10ASFormatI
@@ -196,10 +195,7 @@ class UsbService(private val context: Context,
             if (intent.action == usbPermissionName) {
                 scope.launch(context = Dispatchers.Default) {
                     mutex.withLock {
-                        Log.i(
-                            this::class.simpleName,
-                            "Broadcast receiver called for ${intent.action}"
-                        )
+                        Timber.i("Broadcast receiver called for ${intent.action}")
 
                         /*
                         I don't know why, but the intent we received doesn't contain any extras,
@@ -216,10 +212,7 @@ class UsbService(private val context: Context,
 
                         val granted = usbManager.hasPermission(device)
                         val grantedString = if (granted) "granted" else "NOT granted"
-                        Log.i(
-                            this::class.simpleName,
-                            "${device.productName} permission $usbPermissionName: $grantedString"
-                        )
+                        Timber.i("${device.productName} permission $usbPermissionName: $grantedString")
                         if (granted) {
                             processDevice(device)
                         } else {
@@ -246,7 +239,7 @@ class UsbService(private val context: Context,
 
         // Set ourselves up to receive intents resulting from requests to grant permission
         // to a USB device:
-        Log.i(this::class.simpleName, "Registering receiver for permission $usbPermissionName")
+        Timber.i("Registering receiver for permission $usbPermissionName")
         context.registerReceiver(
             usbReceiver,
             filter,
@@ -409,7 +402,7 @@ class UsbService(private val context: Context,
         // In case it is already connected:
         internalDisconnect()
 
-        Log.i(this::class.simpleName, "connectToEndpoint: Attempting to connect to endpoint $endpointData")
+        Timber.i("connectToEndpoint: Attempting to connect to endpoint $endpointData")
 
         val device = endpointData.usbDevice
         connection = usbManager.openDevice(device)
@@ -429,7 +422,7 @@ class UsbService(private val context: Context,
             }
 
             if (usbInterface != null) {
-                Log.i(this::class.simpleName, "Connected to endpoint ${endpointData.endpointAddress} on device ${device.deviceName} " +
+                Timber.i("Connected to endpoint ${endpointData.endpointAddress} on device ${device.deviceName} " +
                         "(${sanitizeUsbText(device.manufacturerName)} ${sanitizeUsbText(device.productName)})")
                 isConnected = true
 
@@ -486,7 +479,7 @@ class UsbService(private val context: Context,
         require(result == uac2CurNumBytes) { "Unable to read the sample rate from a UAC2 USB device." }
 
         val sampleRate = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).int
-        Log.i("USB", "UAC2 sample rate is $sampleRate Hz")
+        Timber.i("UAC2 sample rate is $sampleRate Hz")
 
         return sampleRate
     }
@@ -567,14 +560,8 @@ class UsbService(private val context: Context,
                     e.localizedMessage ?: "Unknown error"
                 }
 
-                Log.w(
-                    this::class.simpleName,
-                    "Exception when connecting to USB device: $message"
-                )
-                Log.d(
-                    this::class.simpleName,
-                    "Exception when connecting to USB device: ${e.stackTrace.asList()}"
-                )
+                Timber.w("Exception when connecting to USB device: $message")
+                Timber.d("Exception when connecting to USB device: ${e.stackTrace.asList()}")
                 diagnosticLogger.log {
                     "Exception when connecting to USB device: $message"
                 }
@@ -959,7 +946,7 @@ class UsbService(private val context: Context,
 
             ok = conn.setInterface(usbInterface)      // Sets interface id and alt number.
             if (!ok) {
-                Log.e(this::class.simpleName, "setInterface failed: $usbInterface")
+                Timber.e("setInterface failed: $usbInterface")
             } else {
                 require(endpointData.uac1SampleRate != null || endpointData.uac2ClockId != null) {
                     "The USB device must be either UAC1, or UAC2 with a fixed readable sampling rate."
@@ -1076,7 +1063,7 @@ class UsbService(private val context: Context,
             actualSampleRate = buffer[0].toUByte().toInt() + buffer[1].toUByte().toInt() * 256 + buffer[2].toUByte().toInt() * 256 * 256
         }
 
-        Log.i(this::class.simpleName, "Actual sampling rate is $actualSampleRate Hz")
+        Timber.i("Actual sampling rate is $actualSampleRate Hz")
 
         return actualSampleRate
 
@@ -1091,7 +1078,7 @@ class UsbService(private val context: Context,
 
         val devices = audioManager.getDevices(GET_DEVICES_OUTPUTS)
         for (device in devices) {
-            Log.i(this::class.simpleName, "Output device id ${device.id}: ${device.productName}")
+            Timber.i("Output device id ${device.id}: ${device.productName}")
         }
         return devices
     }
@@ -1113,7 +1100,7 @@ class UsbService(private val context: Context,
                 streamingThread = null
             }
 
-            Log.i(this::class.simpleName, "disconnecting")
+            Timber.i("disconnecting")
             connection?.close()
             connection = null
         }
@@ -1128,7 +1115,7 @@ class UsbService(private val context: Context,
     suspend fun startRecording(fd: Int) {
         mutex.withLock {
             if (isConnected && ldRecordingState.value == RecordingState.OFF) {
-                Log.i(this::class.simpleName, "startRecording: $fd")
+                Timber.i("startRecording: $fd")
                 if (nativeUsb.startRecordingFd(fd))
                     ldRecordingState.value = RecordingState.ON
             }
@@ -1137,7 +1124,7 @@ class UsbService(private val context: Context,
 
     private fun internalStopRecording() {
         if (ldRecordingState.value == RecordingState.ON) {
-            Log.i(this::class.simpleName, "stopRecording")
+            Timber.i("stopRecording")
             nativeUsb.stopRecording()
             ldRecordingState.value = RecordingState.OFF
         }
@@ -1153,7 +1140,7 @@ class UsbService(private val context: Context,
         mutex.withLock {
             if (isConnected) {
                 // It's OK to proceed if audio is already running - that's how we change the audio mode.
-                Log.i(this::class.simpleName, "startAudio: heterodynekHz = $heterodyne1kHz")
+                Timber.i("startAudio: heterodynekHz = $heterodyne1kHz")
                 val AAUDIO_UNSPECIFIED = 0  // As defined in aaudio and the native layer.
                 // Unspecified audio device means that Android chooses one for us, which is
                 // typically the right choice:
@@ -1167,7 +1154,7 @@ class UsbService(private val context: Context,
     }
 
     private fun internalStopAudio() {
-        Log.i(this::class.simpleName, "internalStopAudio")
+        Timber.i("internalStopAudio")
         nativeUsb.stopAudio()
     }
 

@@ -24,7 +24,6 @@ package org.batgizmo.app.ui
 
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -45,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import org.batgizmo.app.FileWriter
 import org.batgizmo.app.UIModel
+import timber.log.Timber
 import uk.org.gimell.batgimzoapp.R
 import java.util.Locale
 
@@ -105,10 +105,7 @@ fun FileMetadata(context: Context, model: UIModel, onDismiss: () -> Unit) {
                                                 .map { it.toDouble() }
                                             openMap(context, longitude, latitude)
                                         } catch (e: Exception) {
-                                            Log.e(
-                                                this::class.simpleName,
-                                                "unable to parse location string $value"
-                                            )
+                                            Timber.e("unable to parse location string $value")
                                         }
                                     }
                                 }
