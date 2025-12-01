@@ -81,9 +81,9 @@ class HeterodyneCursors(
                             (yAxisState.value.start - yAxisState.value.endInclusive)
                 }
 
-                // Initialize the icon position to the marker line position:
-                LaunchedEffect(Unit, yAxisState.value) {
-                    // Sync the icon position to the marker line on
+                // Initialize the icon offset to the marker line offset:
+                LaunchedEffect(yAxisState.value, y1Px, y2Px) {
+                    // Sync the icon offset to the marker line on
                     // newly composing these elements and whenever the Y scale changes:
                     y1Px?.let { offsetY1.floatValue = it }
                     y2Px?.let { offsetY2.floatValue = it }
