@@ -39,9 +39,7 @@
 #include <assert.h>
 #include <memory.h>
 #include <sys/poll.h>
-
-extern "C" {
-}
+#include <atomic>
 
 #define MAX_CHANNELS 2
 
@@ -59,8 +57,6 @@ extern "C" {
 #define MAX_DATA_POINTS_PER_URB (MAX_SAMPLES_PER_FRAME * MAX_CHANNELS * PACKETS_PER_URB)
 
 #define TARGET_AUDIO_OUT_RATE 48000     // Usually this is native for Android devices.
-
-#define STREAM_TO_WAV 0
 
 //#define FAKE_DATA 1
 
@@ -108,7 +104,11 @@ static int16_t s_reference_data[MAX_REFERENCE_LEN + CANARY_COUNT];
 static int s_reference_len = 0;
 static volatile int s_reference1_index = 0, s_reference2_index = 0;
 static int s_heterodyne1_kHz = 0, s_heterodyne2_kHz = 0;
-static int s_audio_boost_shift = 0;
+
+// Define the audio boost factor which is scaled to increase its resolution:
+#define BOOST_FACTOR_SCALING_SHIFT 8
+static int s_scaled_audio_boost_factor = 1 << BOOST_FACTOR_SCALING_SHIFT;
+
 
 // Adjust this so that there is no heterodyned audio output visible over
 // about 10 kHz:
@@ -126,10 +126,15 @@ static void downsampling_filter_reset() {
     memset(&s_downsampling_filter_state, 0, sizeof(s_downsampling_filter_state));
 }
 
-static bool start_audio_output(jint output_device_id);
-static void stop_audio_output();
+static bool start_audio_output(jint output_device_id, void* context = nullptr);
+static void stop_audio_output(JNIEnv *env);
 static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jint num_channels);
-static void stop_recording();
+static jboolean initialise_audio_data(jint heterodyne1_kHz,
+                                             jint heterodyne2_kHz,
+                                             float audio_boost_factor,
+                                             int samples_per_frame);
+static void calc_audio_out_parameters(jint sample_rate);
+
 
 /*
  * Workaround for usbdevfs_iso_packet_desc having size 0 in usbdevfs_urb:
@@ -139,6 +144,12 @@ struct my_usbdevfs_urb {
     struct usbdevfs_iso_packet_desc packet_desc[PACKETS_PER_URB];
 };
 
+static JavaVM* s_pJVM;
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    s_pJVM = vm;
+    return JNI_VERSION_1_6;
+}
 
 /***********************************************************************************/
 /* Basic data stream from USB.                                                     */
@@ -277,50 +288,8 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
     s_num_channels = num_channels;
     s_sample_rate = sample_rate;
 
-    // Important: often the sample rate will be a multiple of 48kHz, but in rare
-    // cases it might not be.
-    // Find a downsampling rate the gets us close to 48 kHz audio rate:
-    s_decimation_factor = lround((double) sample_rate / TARGET_AUDIO_OUT_RATE);
-    if (s_decimation_factor == 0)
-        s_decimation_factor = 1;
-    // The actual audio out rate may be different from the nominal target value:
-    s_audio_out_rate = sample_rate / s_decimation_factor;   // What if this is fractional?
-    s_downsampling_iir_coefficient = calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ, sample_rate);
-    __android_log_print(ANDROID_LOG_INFO, __FILE__, "Audio parameters: s_audio_out_rate = %d, s_decimation_factor = %d",
-                        s_audio_out_rate, s_decimation_factor);
+    calc_audio_out_parameters(sample_rate);
 
-#if 0   // This doesn't seem to be needed if we have claimed all interfaces on the device.
-    // Wrench control away from anyone else who may have it. Android itself
-    // takes control of microphones in the range of normal sampling rates, though not
-    // high sampling rates ones used for bats. That might of course change.
-    usbdevfs_ioctl command;
-    command.ifno = 2;   // The HID interface is 2.
-    command.ioctl_code = USBDEVFS_DISCONNECT;
-    command.data = NULL;
-    ret = ioctl(fd_usb, USBDEVFS_IOCTL, &command);
-    __android_log_print(ANDROID_LOG_INFO, __FILE__, "USBDEVFS_DISCONNECT: %d %d", ret, errno);
-#endif
-
-#if 0   // This is moved into the kotlin code.
-    // ****** Set config ******
-
-    // Fails with 14, EFAULT. Perhaps the driver doesn't support this? Nothing happens on the wire.
-    ret = ioctl(fd_usb, USBDEVFS_SETCONFIGURATION, configId);
-    __android_log_print(ANDROID_LOG_INFO,ha __FILE__, "USBDEVFS_SETCONFIGURATION: %d %d", ret, errno);
-
-    // ****** Set interface ******
-
-    struct usbdevfs_setinterface setif;
-    setif.altsetting = alternateSetting;
-    setif.interface = ifaceId;
-
-    ret = ioctl(fd_usb, USBDEVFS_SETINTERFACE, &setif);
-    __android_log_print(ANDROID_LOG_INFO, __FILE__, "USBDEVFS_SETINTERFACE: %d %d", ret, errno);
-
-    // ****** Claim interface ******
-    ret = ioctl(fd_usb, USBDEVFS_CLAIMINTERFACE, ifaceId);
-    __android_log_print(ANDROID_LOG_INFO, __FILE__,"USBDEVFS_CLAIMINTERFACE: %d %d", ret, errno);
-#endif
 
     // ****** Stream some data ******
 
@@ -462,12 +431,6 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
                         }
                     }
                 }
-
-#if STREAM_TO_WAV
-                if (s_fd_file >= 0) {
-                    wav_writesomedata(s_fd_file, pData, nominal_bytes_per_frame);
-                }
-#endif
             }
         } while((ret < 0) && (errno == EINTR) && (!s_cancel_pending));
         if (ret != 0) {
@@ -498,8 +461,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_stream(JNIEnv* env, jobject thiz,
     }
 
     // These do nothing if the activity wasn't in progress:
-    stop_audio_output();
-    stop_recording();
+    stop_audio_output(env);
 
     if (bridgeClass != nullptr)
         env->DeleteLocalRef(bridgeClass);   // This also cleans up onDataBufferReadyMethod.
@@ -607,81 +569,250 @@ Java_org_batgizmo_app_pipeline_NativeUSB_copyURBBufferData(JNIEnv *env, jobject 
 }
 
 /***********************************************************************************/
-/* Support for recording data to file.                                             */
+/* Support for forwarding streamed data to audio output via AAudio.                */
 /***********************************************************************************/
 
-static void stop_recording() {
-    pthread_mutex_lock(&s_mutex);
-    if (s_fd_file >= 0) {
-#if STREAM_TO_WAV
-        wav_finish(s_fd_file);
-#endif
-        close(s_fd_file);
-        s_fd_file = -1;
+typedef struct {
+    jobject global_ref_to_buffer;
+    int32_t visible_length;
+    int32_t visible_start;
+    int32_t current_position;
+    jobject global_callback;
+    int32_t decimation_counter;
+} PlaybackContext;
+
+static PlaybackContext playback_context = {
+        .global_ref_to_buffer = nullptr,
+        .visible_length = 0,
+        .visible_start = 0,
+        .current_position = 0,
+        .global_callback = nullptr,
+        .decimation_counter = 0
+};
+
+static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
+    int16_t *downsampled_buffer, int32_t &decimation_counter);
+
+static bool s_looped_playback = false;
+
+static int32_t scale_boost_factor(float boost_factor) {
+    const jfloat sanity_max = 2 << 16;
+    if (boost_factor > sanity_max)
+        boost_factor = sanity_max;
+    return (int32_t) (boost_factor * (2 << BOOST_FACTOR_SCALING_SHIFT));
+}
+
+static void calc_audio_out_parameters(jint sample_rate) {
+
+    // Important: often the sample rate will be a multiple of 48kHz, but in rare
+    // cases it might not be.
+    // Find a downsampling rate the gets us close to 48 kHz audio rate:
+    s_decimation_factor = lround((double) sample_rate / TARGET_AUDIO_OUT_RATE);
+    if (s_decimation_factor == 0)
+        s_decimation_factor = 1;
+
+
+    // The actual audio out rate may be different from the nominal target value:
+    s_audio_out_rate = sample_rate / s_decimation_factor;   // What if this is fractional?
+    s_downsampling_iir_coefficient = calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ,
+                                                               sample_rate);
+    __android_log_print(ANDROID_LOG_INFO, __FILE__,
+                        "Audio parameters: s_audio_out_rate = %d, s_decimation_factor = %d",
+                        s_audio_out_rate, s_decimation_factor);
+}
+
+static void signal_progress(PlaybackContext* ctx, JNIEnv* env, int32_t current_position) {
+
+    if (!ctx->global_callback)
+        return;
+
+    jclass funcClass = env->GetObjectClass(ctx->global_callback);
+    jmethodID invokeMethod = env->GetMethodID(funcClass, "invoke", "(I)V");
+    if (invokeMethod) {
+        env->CallVoidMethod(ctx->global_callback, invokeMethod, current_position);
     }
-    pthread_mutex_unlock(&s_mutex);
+    env->DeleteLocalRef(funcClass);
 }
 
-/**
- * This function takes ownership of the fd passed in, and closes it in due course.
- * @param fd
- */
-static bool start_recording(int fd) {
+static inline int32_t copy_audio_data(int32_t frames_requested,
+                                      int32_t &frames_consumed,
+                                      int32_t &frames_written,
+                                      PlaybackContext *ctx,
+                                      jshort* buffer, jshort* out) {
+
+    int32_t frames_available = ctx->visible_length - (ctx->current_position - ctx->visible_start);
+    frames_available = std::max(0, frames_available);
+    int32_t frames_to_consume = std::min(frames_requested - frames_consumed, frames_available);
+
+    // memcpy(out + frames_consumed, buffer + ctx->current_position, frames_to_copy * sizeof(int16_t));
+
+    int decimated_sample_count = do_signal_processing(buffer + ctx->current_position,
+                                                      frames_to_consume,
+                                                      out + frames_written,
+                                                      ctx->decimation_counter);
+
+    ctx->current_position += frames_to_consume;
+    frames_consumed += frames_to_consume;
+    frames_written += decimated_sample_count;
+
+    // Wrap if required:
+    if (ctx->current_position >= ctx->visible_start + ctx->visible_length)
+        ctx->current_position = ctx->visible_start;
+
+    return decimated_sample_count;
+}
+
+static aaudio_data_callback_result_t audioCallback(
+        AAudioStream *stream,
+        void *user_data,
+        void *target_buffer,
+        const int32_t frames_requested
+) {
+    auto *ctx = (PlaybackContext*) user_data;
+    auto *out = (int16_t*) target_buffer;
+
+    // __android_log_print(ANDROID_LOG_INFO, __FILE__, "called: frames_requested = %d", frames_requested);
+
+    // ASSUMPTION: frames == samples is assumed in this code, but only equal for single channel audio.
+
+    // To access the data, the recipe is to attach this thread to the JVM, then
+    // use the global reference to the buffer to get a local one that we can
+    // get the actual data pointer from.
+
+    // Possible optimization: check if the thread is already attached, and avoid
+    // attaching it again on each call. Cache the env value in a thread_local.
+    JNIEnv *env;
+    s_pJVM->AttachCurrentThread(&env, nullptr);
+
+    auto local_array = (jshortArray) env->NewLocalRef(ctx->global_ref_to_buffer);
+    jshort* buffer = env->GetShortArrayElements(local_array, nullptr);
+
+    // The buffer audio data will be processed and decimated. We need to account for
+    // that decimation by inflating the request by the decimation factor:
+    int32_t inflated_frames_requested = frames_requested * s_decimation_factor;
+
+    memset(out, 0, sizeof(int16_t) * frames_requested);
+
+    // Copy the audio data across to the buffer we are provided with. This may
+    // need to be done in two parts to handle wrapping. Note that signal processing
+    // decimates the input data points into a reduced number of output data points.
+    int32_t frames_consumed = 0;
+    int32_t frames_written = 0;
+    copy_audio_data(inflated_frames_requested, frames_consumed, frames_written, ctx, buffer, out);
+    if (s_looped_playback && (frames_written < frames_requested)) {
+        // We didn't have enough data to fulfil the entire request, so
+        // wrap around and add some more.
+        copy_audio_data(inflated_frames_requested, frames_consumed, frames_written, ctx, buffer, out);
+    }
+
+    // And clean up:
+    env->ReleaseShortArrayElements(local_array, buffer, 0);
+    env->DeleteLocalRef(local_array);
+
+    // Don't detach the thread. Apparently there is no need, and it results in an error being logged:
+    // s_pJVM->DetachCurrentThread();
+    // env = nullptr;
+
+    if (frames_written < frames_requested) {
+        // We get here if either (1) we have reached the end of the data or (2) the visible
+        // data range is too short to fulfil the request. If I zoom in too far, 2 becomes true.
+
+        // End playback:
+        signal_progress(ctx, env, -1);
+        return AAUDIO_CALLBACK_RESULT_STOP;
+    }
+    else {
+        signal_progress(ctx, env, ctx->current_position);
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromStream(JNIEnv *env, jobject thiz,
+                                                              jint audio_device_id,
+                                                              jint heterodyne1_kHz,
+                                                              jint heterodyne2_kHz,
+                                                              jfloat audio_boost_factor) {
+
     pthread_mutex_lock(&s_mutex);
 
-    // In case we were already recording, restart:
-    stop_recording();
-
-#if STREAM_TO_WAV
-    wav_writeheader(fd, s_num_channels, s_sample_rate);
-#endif
-
-    // Once the following value is set, we start streaming data into it:
-    s_fd_file = fd;
+    stop_audio_output(env);    // Just in case.
+    jboolean rc = initialise_audio_data(heterodyne1_kHz, heterodyne2_kHz,
+                                        audio_boost_factor, s_nominal_samples_per_frame);
+    rc = rc && start_audio_output(audio_device_id);
 
     pthread_mutex_unlock(&s_mutex);
 
-    return true;
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_org_batgizmo_app_pipeline_NativeUSB_startRecordingFd(JNIEnv* env, jobject thiz, jint fd) {
-    return fd >= 0 && start_recording(fd);  // Order is important.
+    return rc;
 }
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_org_batgizmo_app_pipeline_NativeUSB_stopRecording(JNIEnv *env, jobject thiz) {
-    stop_recording();
+Java_org_batgizmo_app_pipeline_NativeUSB_stopAudio(JNIEnv *env, jobject thiz) {
+    pthread_mutex_lock(&s_mutex);
+    stop_audio_output(env);
+    pthread_mutex_unlock(&s_mutex);
 }
-
-/***********************************************************************************/
-/* Support for forwarding streamed data to audio output.                           */
-/***********************************************************************************/
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_org_batgizmo_app_pipeline_NativeUSB_startAudio(JNIEnv *env, jobject thiz,
-                                              jint audio_device_id,
-                                              jint heterodyne1_kHz,
-                                              jint heterodyne2_kHz,
-                                              jint audio_boost_shift) {
+Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobject thiz,
+                                                              jint audio_device_id,
+                                                              jint sample_rate,
+                                                              jint heterodyne1_kHz,
+                                                              jint heterodyne2_kHz,
+                                                              jfloat audio_boost_factor,
+                                                              jshortArray buffer,
+                                                              jint start_index,
+                                                              jint end_exclusive_index,
+                                                              jboolean looped_playback,
+                                                              jobject progress_callback) {
+
     pthread_mutex_lock(&s_mutex);
+
+    stop_audio_output(env);    // Just in case.
+
+    s_looped_playback = looped_playback;
+
+    calc_audio_out_parameters(sample_rate);
+
+    jboolean rc = initialise_audio_data(heterodyne1_kHz, heterodyne2_kHz,
+                                        audio_boost_factor, sample_rate / 1000);
+
+    // Set up the playback context. Use global refs for Kotlin owned things that
+    // we need to access from subsequent JNI calls.
+    playback_context.visible_start = start_index;
+    playback_context.visible_length = end_exclusive_index - start_index;
+    playback_context.current_position = playback_context.visible_start;
+    playback_context.global_ref_to_buffer = env->NewGlobalRef(buffer);
+    playback_context.global_callback = env->NewGlobalRef(progress_callback);
+    playback_context.decimation_counter = 0;
+
+    rc = rc && start_audio_output(audio_device_id, &playback_context);
+
+    pthread_mutex_unlock(&s_mutex);
+
+    return rc;
+}
+
+static jboolean initialise_audio_data(jint heterodyne1_kHz,
+    jint heterodyne2_kHz,
+    float audio_boost_factor,
+    int samples_per_frame) {
 
     downsampling_filter_reset();
 
-    // In case we are already doing audio:
-    stop_audio_output();
-
     // For now, we only support heterodyne.
 
-    int n = s_nominal_samples_per_frame;
+    int n = samples_per_frame;
     if (n > MAX_REFERENCE_LEN)      // Paranoia.
         n = MAX_REFERENCE_LEN;
 
     if (heterodyne1_kHz > n || heterodyne2_kHz > n) {
         __android_log_print(ANDROID_LOG_INFO, __FILE__,
-                            "Heterodyne reference outside the valid range for the frame length (%d)", n);
+                            "Heterodyne reference outside the valid range for the frame length (%d)",
+                            n);
         return false;
     }
 
@@ -696,32 +827,20 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudio(JNIEnv *env, jobject thiz,
         int i = 0;
         for (i = 0; i < n; i++) {
             double x = ((double) i) * pi2 / n;
-            s_reference_data[i] = cos(x) * 0x7FFE;
+            s_reference_data[i] = (int16_t) (cos(x) * 0x7FFE);
         }
         s_reference_data[i] = CANARY_DATA_VALUE;
         s_reference_len = n;
     }
     s_heterodyne1_kHz = heterodyne1_kHz;
     s_heterodyne2_kHz = heterodyne2_kHz;
-    s_audio_boost_shift = audio_boost_shift;
+    s_scaled_audio_boost_factor = scale_boost_factor(audio_boost_factor);
     s_reference1_index = s_reference2_index = 0;
 
-    jboolean rc = start_audio_output(audio_device_id);
-
-    pthread_mutex_unlock(&s_mutex);
-
-    return rc;
+    return true;
 }
 
-extern "C"
-JNIEXPORT void JNICALL
-Java_org_batgizmo_app_pipeline_NativeUSB_stopAudio(JNIEnv *env, jobject thiz) {
-    pthread_mutex_lock(&s_mutex);
-    stop_audio_output();
-    pthread_mutex_unlock(&s_mutex);
-}
-
-static bool start_audio_output(jint output_device_id) {
+static bool start_audio_output(jint output_device_id, void *context) {
 
     // Get a stream builder:
     AAudioStreamBuilder *builder;
@@ -741,7 +860,11 @@ static bool start_audio_output(jint output_device_id) {
     AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_I16);
 
     // AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    // Prevent other apps using the audio while we are using it:
     AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+
+    if (context)
+        AAudioStreamBuilder_setDataCallback(builder, audioCallback, context);
 
     // Use the builder to open a stream:
     result = AAudioStreamBuilder_openStream(builder, &s_android_stream);
@@ -789,28 +912,45 @@ static bool start_audio_output(jint output_device_id) {
     return result == 0;
 }
 
-static void stop_audio_output()
-{
+static void stop_audio_output(JNIEnv *env) {
+
     if (s_android_stream) {
-#if STREAM_TO_WAV
-        __android_log_print(ANDROID_LOG_INFO, __FILE__, "Closing audio stream.");
+
+        // __android_log_print(ANDROID_LOG_INFO, __FILE__, "stop_audio_output called");
+
+        // Signal via the callback that audio is stopping:
+        // signal_progress(&playback_context, env, -1);
+
+        // Close down playback from buffer cleanly by asking it to stop, then waiting.
+
+        // Signal to stop calling the callback in case we are in playback mode:
+        AAudioStream_requestStop(s_android_stream);
+
+        // Wait for it to actually stop:
+        aaudio_stream_state_t nextState = AAUDIO_STREAM_STATE_UNINITIALIZED;
+        int64_t timeoutNanos = 500 * 1000;  // 500 ms
+        auto result = AAudioStream_waitForStateChange(s_android_stream,
+                                                      AAUDIO_STREAM_STATE_STOPPING,
+                                                      &nextState, timeoutNanos);
+
+        // Finally, close the the stream:
         AAudioStream_close(s_android_stream);
-#endif
         s_android_stream = nullptr;
+    }
+
+    if (playback_context.global_ref_to_buffer) {
+        env->DeleteGlobalRef(playback_context.global_ref_to_buffer);
+        playback_context.global_ref_to_buffer = nullptr;
+    }
+
+    if (playback_context.global_callback) {
+        env->DeleteGlobalRef(playback_context.global_callback);
+        playback_context.global_callback = nullptr;
     }
 }
 
-static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jint num_channels)
-{
-    /**
-     * Confusingly android audio streaming uses "frame" to mean something different from USB, so we call it
-     * sample_count instead. sample_count is the number of mono values one channel mode, or the
-     * number of stereo data value pairs in two channel mode.
-     */
-
-    static int16_t downsampled_buffer[MAX_DATA_POINTS_PER_URB];
-
-    int decimation_counter = 0;
+static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
+                                int16_t *downsampled_buffer, int32_t &decimation_counter) {
     int decimated_sample_count = 0;
 
     // Should this be split into multiple loops that it is more likely to
@@ -828,27 +968,34 @@ static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jin
         int64_t filtered = mixed;
         for (int order = 0; order < DOWNSAMPLING_AA_STAGES; order++) {
             filtered = (int64_t) s_downsampling_iir_coefficient * filtered +
-                               (int64_t) ((1LL << 31) - s_downsampling_iir_coefficient) *
-                               s_downsampling_filter_state.previous[order];
+                       (int64_t) ((1LL << 31) - s_downsampling_iir_coefficient) *
+                       s_downsampling_filter_state.previous[order];
             filtered >>= 31;
             s_downsampling_filter_state.previous[order] = (int32_t) filtered;
         }
 
         // Down sample:
-        if (++decimation_counter == s_decimation_factor) {
+        decimation_counter++;
+        if (decimation_counter == s_decimation_factor) {
             decimation_counter = 0;
 
-            // Reduce the result to the range of 16 bit signed. 15 rather than 16 to gain a factor of 2,
-            // because 0.5 * 0.5 is 0.25. Note that it remains a 32 bit signed for the moment:
-            filtered >>= (15 - s_audio_boost_shift);
+            // "filtered" is the value in 32 bit signed range, held in a 64 bit integer.
+            // We need to apply the boost factor, and scale it to a signed 16 bit range,
+            // and saturating rather than wrapping around.
 
-#define DO_SATURATION 1
-#if DO_SATURATION
+            filtered *= s_scaled_audio_boost_factor;
+
+            // Scale down the result of filtering, and also apply the boost factor scaling, in
+            // one operation. 15 rather than 16 to gain a factor of 2,
+            // because 0.5 * 0.5 is 0.25. Note that it remains a 32 bit signed for the moment so we
+            // can handle saturation:
+            filtered >>= 15 + BOOST_FACTOR_SCALING_SHIFT;
+
+            // Saturate rather then wrapping around:
             if (filtered > INT16_MAX)
                 filtered = INT16_MAX;
             if (filtered < INT16_MIN)
                 filtered = INT16_MIN;
-#endif
 
             downsampled_buffer[decimated_sample_count++] = static_cast<int16_t>(filtered);
         }
@@ -863,17 +1010,22 @@ static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jin
             s_reference2_index -= s_reference_len;
     }
 
-#ifdef CAPTURE  // Debug buffer
-    static int16_t debug_capture_buffer[MAX_SAMPLES_PER_FRAME * MAX_CHANNELS];     // Bigger than we will ever need.
-    static uint32_t capture_count = 0;
-#endif
+    return decimated_sample_count;
+}
 
-    // See if there was an over or underrun. This can happen if the USB microphone is
-    // slower than the device expectation of 48 kHz.
-    int32_t xrun_count = AAudioStream_getXRunCount(s_android_stream);
-    if (xrun_count > 0) {
-        ;
-    }
+static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jint num_channels)
+{
+    /**
+     * Confusingly android audio streaming uses "frame" to mean something different from USB, so we call it
+     * sample_count instead. sample_count is the number of mono values one channel mode, or the
+     * number of stereo data value pairs in two channel mode.
+     */
+
+    static int16_t downsampled_buffer[MAX_DATA_POINTS_PER_URB];
+
+    int32_t decimation_counter = 0;
+    int decimated_sample_count = do_signal_processing(pBuffer, sample_count,
+                                                      downsampled_buffer, decimation_counter);
 
     // The write may block until there is enough room in its write buffer
     // to write all our data. Note buffer_frames and burst size when we opened
@@ -901,4 +1053,11 @@ Java_org_batgizmo_app_pipeline_NativeUSB_setHeterodyne(JNIEnv *env, jobject thiz
     // A smooth change to the heterodyne frequency, no step:
     s_heterodyne1_kHz = heterodyne1_kHz;
     s_heterodyne2_kHz = heterodyne2_kHz;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_batgizmo_app_pipeline_NativeUSB_setAudioBoostFactor(JNIEnv *env, jobject thiz,
+                                                             jfloat boost_factor) {
+    s_scaled_audio_boost_factor = scale_boost_factor(boost_factor);
 }

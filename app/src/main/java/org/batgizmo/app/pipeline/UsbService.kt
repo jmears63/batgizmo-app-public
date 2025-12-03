@@ -58,6 +58,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.parcelize.Parcelize
+import org.batgizmo.app.HORange
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import timber.log.Timber
@@ -90,12 +91,19 @@ class NativeUSB {
     external fun cancelStream()
     external fun pauseStream()
     external fun resumeStream()
-    external fun startRecordingFd(fd: Int): Boolean
-    external fun stopRecording()
-    external fun startAudio(audioDeviceId: Int, heterodynekHz: Int,
-                            heterodyne2kHz: Int, audioBoostFactor: Int): Boolean
+    external fun startAudioFromStream(audioDeviceId: Int, heterodynekHz: Int,
+                                      heterodyne2kHz: Int, audioBoostFactor: Float): Boolean
+    external fun startAudioFromBuffer(
+        audioDeviceId: Int, samplingRateHz: Int,
+        heterodynekHz: Int, heterodyne2kHz: Int,
+        audioBoostShift: Float, buffer: ShortArray,
+        startIndex: Int, endExclusiveIndex: Int,
+        loopedPlayback: Boolean,
+        progressCallback: ((Int) -> Unit)
+    ): Boolean
     external fun stopAudio()
     external fun setHeterodyne(heterodyne1kHz: Int, heterodyne2kHz: Int)
+    external fun setAudioBoostFactor(boostFactor: Float)
     external fun copyURBBufferData(sourceOffset: Long, sourceSamples: Int,
                                    targetBuffer: ShortArray, targetBufferOffset: Int, targetBufferSize: Int): Int
 }
@@ -620,16 +628,6 @@ class UsbService(private val context: Context,
         FREQUENCY_DIVISION(3)       // !!!
     }
 
-    // LiveData used to communicate audio state changes back to the UI:
-    /*
-    private val ldAudioState = MutableLiveData<Pair<AudioState, Int>>(Pair(AudioState.OFF, AudioMode.NONE.value))
-    suspend fun getAudioState() : MutableLiveData<Pair<AudioState, Int>> {
-        mutex.withLock {
-            return ldAudioState
-        }
-    }
-     */
-
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager;
 
     /*
@@ -1087,7 +1085,6 @@ class UsbService(private val context: Context,
         if (isConnected) {
 
             // These does nothing if the activity wasn't in progress:
-            internalStopRecording()
             internalStopAudio()
 
             // Flag to the worker thread to stop audio streaming and exit:
@@ -1112,54 +1109,51 @@ class UsbService(private val context: Context,
         }
     }
 
-    suspend fun startRecording(fd: Int) {
-        mutex.withLock {
-            if (isConnected && ldRecordingState.value == RecordingState.OFF) {
-                Timber.i("startRecording: $fd")
-                if (nativeUsb.startRecordingFd(fd))
-                    ldRecordingState.value = RecordingState.ON
-            }
-        }
-    }
+    /**
+     * Unspecified audio device means that Android chooses one for us, which is
+     * typically the right choice:
+     */
+    var AAUDIO_UNSPECIFIED = 0  // As defined in aaudio and the native layer.
 
-    private fun internalStopRecording() {
-        if (ldRecordingState.value == RecordingState.ON) {
-            Timber.i("stopRecording")
-            nativeUsb.stopRecording()
-            ldRecordingState.value = RecordingState.OFF
-        }
-    }
-
-    suspend fun stopRecording() {
-        mutex.withLock {
-            internalStopRecording()
-        }
-    }
-
-    suspend fun startAudio(heterodyne1kHz: Int, heterodyne2kHz: Int?, audioBoostFactor: Int) {
+    suspend fun startAudio(heterodyne1kHz: Int, heterodyne2kHz: Int?, audioBoostFactor: Float) {
         mutex.withLock {
             if (isConnected) {
-                // It's OK to proceed if audio is already running - that's how we change the audio mode.
                 Timber.i("startAudio: heterodynekHz = $heterodyne1kHz")
-                val AAUDIO_UNSPECIFIED = 0  // As defined in aaudio and the native layer.
-                // Unspecified audio device means that Android chooses one for us, which is
-                // typically the right choice:
-                val outputDeviceId = AAUDIO_UNSPECIFIED
-                if (nativeUsb.startAudio(outputDeviceId, heterodyne1kHz,
-                        heterodyne2kHz ?: 0, audioBoostFactor)) {
-                    // ldAudioState.value = Pair(AudioState.ON, mode)
-                }
+                val rc = nativeUsb.startAudioFromStream(AAUDIO_UNSPECIFIED, heterodyne1kHz,
+                        heterodyne2kHz ?: 0, audioBoostFactor)
             }
+        }
+    }
+
+    /**
+     * Strictly speaking this has nothing to do with USB, but it lives in the same native layer.
+     */
+    suspend fun startAudioFromBuffer(
+        heterodyne1kHz: Int, heterodyne2kHz: Int?, audioBoostExponent: Float,
+        visibleRawData: Pair<ShortArray, HORange>, loopedPlayback: Boolean,
+        samplingRateHz: Int,
+        onAudioProgress: (Int) -> Unit
+    ) {
+        mutex.withLock {
+            // Note: we can't use a lambda as the callback, it has to be a method.
+            val (buffer, dataRangeExclusive) = visibleRawData
+            val rc = nativeUsb.startAudioFromBuffer(AAUDIO_UNSPECIFIED,
+                samplingRateHz,
+                heterodyne1kHz,heterodyne2kHz ?: 0,
+                audioBoostExponent,
+                buffer, dataRangeExclusive.start, dataRangeExclusive.exclusiveEnd,
+                loopedPlayback, onAudioProgress)
         }
     }
 
     private fun internalStopAudio() {
-        Timber.i("internalStopAudio")
+        // Timber.i("UsbService: internalStopAudio")
         nativeUsb.stopAudio()
     }
 
-     suspend fun stopAudio() {
+    suspend fun stopAudio() {
         mutex.withLock {
+            // Timber.i("UsbService: stopAudio")
             internalStopAudio()
         }
     }
@@ -1167,6 +1161,13 @@ class UsbService(private val context: Context,
     suspend fun setHeterodyne(heterodyne1kHz: Int, heterodyne2kHz: Int?) {
         mutex.withLock {
             nativeUsb.setHeterodyne(heterodyne1kHz, heterodyne2kHz ?: 0)
+        }
+    }
+
+    suspend fun setAudioBoost(audioBoostFactor: Float) {
+        mutex.withLock {
+            Timber.d("Setting audio boost to $audioBoostFactor")
+            nativeUsb.setAudioBoostFactor(audioBoostFactor)
         }
     }
 

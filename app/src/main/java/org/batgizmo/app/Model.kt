@@ -229,8 +229,6 @@ class UIModel(application: Application,
         // Dedicated cleanup scope for critical cleanup tasks:
         val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         cleanupScope.launch {
-            // Close any recording files in progress cleanly. Does no harm if we are not recording:
-            usbService.stopRecording()
 
             // Signal to the main streaming loop to exit. Otherwise, the kotlin thread
             // never finishes and it continues zombie like after the app has appeared
@@ -248,6 +246,14 @@ class UIModel(application: Application,
     fun setAutoBnCRequired(required: Boolean) {
         mutableAutoBnCRequiredFlow.value = required
     }
+
+    // The single source of truth for the audio boost slider value:
+    private val mutableAudioBoostFlow = MutableStateFlow(8f) // Initial value used if no setting.
+    val audioBoostFlow: StateFlow<Float> = mutableAudioBoostFlow.asStateFlow()
+    fun setAudioBoost(boost: Float) {
+        mutableAudioBoostFlow.value = boost
+    }
+
 
     /*
         The single sources of truth for the logical and axis ranges used by the renderer.
@@ -289,6 +295,9 @@ class UIModel(application: Application,
     // Details text to display over the graph:
     private val mutableDetailsTextFlow = MutableStateFlow<String?>(null)
     val detailsTextFlow: StateFlow<String?> = mutableDetailsTextFlow.asStateFlow()
+
+    private val audioProgressChannel = Channel<Int>(Channel.CONFLATED)
+    val audioProgressFlow = audioProgressChannel.receiveAsFlow()
 
     var colourMapSize: Int? = null
 
@@ -335,8 +344,8 @@ class UIModel(application: Application,
     val liveConnectFlow = liveConnectChannel.receiveAsFlow()
 
     // Signal to the UI that an attempt to start audio has completed:
-    private val audioStartChannel = Channel<UsbService.AudioStartResult>(Channel.BUFFERED)
-    val audioStartFlow = audioStartChannel.receiveAsFlow()
+    private val liveAudioStartChannel = Channel<UsbService.AudioStartResult>(Channel.BUFFERED)
+    val liveAudioStartFlow = liveAudioStartChannel.receiveAsFlow()
 
     // Signal to this model that an attempt to connect to the USB device has completed:
     private val usbConnectChannel = Channel<UsbService.UsbConnectResult>(Channel.BUFFERED)
@@ -457,9 +466,7 @@ class UIModel(application: Application,
     suspend fun updateStoredSettings(updatedSettings: Settings) {
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                Timber.d(
-                    "updateStoredSettings called: useDarkTheme = ${updatedSettings.useDarkTheme}"
-                )
+                // Timber.d("updateStoredSettings called: audioBoostMultiplier = ${updatedSettings.audioBoostFactor}")
                 settings = updatedSettings
                 // Invoke edit on the datastore to update and persist the changes:
                 settingsDataStore.edit { prefs -> settings.copyToPreferences(prefs) }
@@ -655,7 +662,7 @@ class UIModel(application: Application,
 
                     Timber.d("doAutoBnC called: newBnCRange = $newBnCRange, logicalBnCRange = $logicalBnCRange")
                     // Update our single source of truth, notifying the UI as a side effect:
-                    mutableBnCRangeFlow.value = logicalBnCRange
+                    logicalBnCRange.also { mutableBnCRangeFlow.value = it }
                 }
 
                 rerenderRequired = true
@@ -841,22 +848,22 @@ class UIModel(application: Application,
         return Pair(FloatRange(0f, settings.defaultLiveTimeSpanS.toFloat()), true)
     }
 
-    fun startAudio() {
+    fun startLiveAudio() {
         viewModelScope.launch(Dispatchers.Default) {
 
             val runtime = Runtime.getRuntime()
-            Timber.i("startAudio start: runtime.{maxMemory, totalMemory, freeMemory) = " +
+            Timber.i("startViewerAudio start: runtime.{maxMemory, totalMemory, freeMemory) = " +
                     "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB")
 
             var audioStartResult: UsbService.AudioStartResult? = null
-            Timber.d("startAudio callled")
+            Timber.d("startAudio called")
 
             mutex.withLock {
 
                 usbService.startAudio(
                     settings.heterodyneRef1kHz,
                     if (settings.heterodyneDual) settings.heterodyneRef2kHz else null,
-                    settings.audioBoostShift
+                    settings.audioBoostFactor
                 )
 
                 audioStartResult = UsbService.AudioStartResult(startedOK = true)
@@ -864,7 +871,7 @@ class UIModel(application: Application,
 
             audioStartResult?.let {
                 Timber.d("Sending result of start audios: $it")
-                audioStartChannel.send(it)
+                liveAudioStartChannel.send(it)
             }
 
             Timber.i("startAudio end: runtime.{maxMemory, totalMemory, freeMemory) = " +
@@ -872,12 +879,46 @@ class UIModel(application: Application,
         }
     }
 
-    fun stopAudio() {
+    private fun onAudioProgress(position: Int) {
+        audioProgressChannel.trySend(position)
+    }
+
+    fun startViewerAudio(sampleRateHz: Int) {
         viewModelScope.launch(Dispatchers.Default) {
 
+            var audioStartResult: UsbService.AudioStartResult? = null
+            Timber.d("startViewerAudio called")
+
             mutex.withLock {
+
+                pipeline?.getVisibleRawDataBuffer(timeAxisRangeFlow)?.let { visibleRawData ->
+
+                    Timber.d("Visible raw data range: ${visibleRawData.second}")
+
+                    usbService.startAudioFromBuffer(
+                        settings.heterodyneRef1kHz,
+                        if (settings.heterodyneDual) settings.heterodyneRef2kHz else null,
+                        settings.audioBoostFactor,
+                        visibleRawData, settings.loopedAudioPlayback,
+                        sampleRateHz, ::onAudioProgress
+                    )
+
+                    audioStartResult = UsbService.AudioStartResult(startedOK = true)
+                }
+            }
+
+            audioStartResult?.let {
+                Timber.d("Sending result of start audio: $it")
+                liveAudioStartChannel.send(it)
+            }
+        }
+    }
+
+    fun stopAudio() {
+        viewModelScope.launch(Dispatchers.Default) {
+            mutex.withLock {
+                // Timber.d("Model: stopAudio called")
                 usbService.stopAudio()
-                Timber.d("stopAudio called")
             }
         }
     }
@@ -1048,6 +1089,29 @@ class UIModel(application: Application,
     }
 
     /**
+     * Apply a new audio boost value, or store the existing value to settings storage.
+     */
+    suspend fun applyAudioBoost(audioBoostFactor: Float?) {
+        mutex.withLock {
+
+            // Update our single source of truth, notifying the UI as a side effect:
+            audioBoostFactor?.let {
+                // Timber.d("Updated audio boost to $it")
+                settings.audioBoostFactor = it
+                mutableAudioBoostFlow.value = it
+
+                usbService.setAudioBoost(it)
+            }
+        }
+
+        if (audioBoostFactor == null) {
+            // The null value signals that the user has finished sliding.
+            // Timber.d("Writing settings to storage. audio boost = ${settings.audioBoostFactor}")
+            updateStoredSettings(settings)
+        }
+    }
+
+    /**
      * Call from the UI thread.
      *
      * Call this method to set the visible ranges of the transformed data. No re-rendering is done.
@@ -1108,6 +1172,8 @@ class UIModel(application: Application,
                         resetVisibleRange = true
                     }
                 }
+
+                setAudioBoost(settings.audioBoostFactor)
 
                 /*
                   For now, do a complete reload for any settings change. This could be smarter

@@ -99,7 +99,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -158,7 +157,7 @@ class SpectrogramUI(
         val audioChecked: MutableState<Boolean> = mutableStateOf(false),
         val audioEnabled: MutableState<Boolean> = mutableStateOf(false),
         val slidersButtonChecked: MutableState<Boolean> = mutableStateOf(false),
-        val slidersButtonEnabled: MutableState<Boolean> = mutableStateOf(false),
+        val slidersButtonEnabled: MutableState<Boolean> = mutableStateOf(true),
         val showMetadataEnabled: MutableState<Boolean> = mutableStateOf(false),
         val closeFileEnabled: MutableState<Boolean> = mutableStateOf(false),
         val previousFileEnabled: MutableState<Boolean> = mutableStateOf(false),
@@ -174,7 +173,7 @@ class SpectrogramUI(
             audioChecked.value = false
             audioEnabled.value = false
             slidersButtonChecked.value = false
-            slidersButtonEnabled.value = false
+            slidersButtonEnabled.value = true
             showMetadataEnabled.value = false
             closeFileEnabled.value = false
             previousFileEnabled.value = false
@@ -206,8 +205,8 @@ class SpectrogramUI(
         val audioSettingsAlreadyShown: MutableState<Boolean> = mutableStateOf(false),
         val heterodyneRef1kHz: MutableState<Int?> = mutableStateOf(null),
         val heterodyneRef2kHz: MutableState<Int?> = mutableStateOf(null),
-        val liveSamplingRateHz: MutableState<Int?> = mutableStateOf(null),
-        val dataPresent: MutableState<Boolean> = mutableStateOf(false),
+        val samplingRateHz: MutableState<Int?> = mutableStateOf(null),
+        val dataPresent: MutableState<Boolean> = mutableStateOf(false)
     ) {
         fun reset() {
             fileIsOpen.value = false
@@ -392,12 +391,9 @@ class SpectrogramUI(
         appMode: MutableIntState,
         onExitApp: () -> Unit
     ) {
-        if (BuildConfig.DEBUG)
-            Timber.d("SpectrogramUI.Compose called")
+       Timber.d("SpectrogramUI.Compose called")
 
         val context = LocalContext.current
-        val menuExpanded = rememberSaveable { uiState.menuExpanded }
-        val scope = rememberCoroutineScope()
 
         val documentPickerLauncher = DocumentHelper.composeDocumentPickerLauncher(
             model.documentHelper,
@@ -437,24 +433,26 @@ class SpectrogramUI(
         // Response to audio start result:
         LaunchedEffect(Unit) {
             // Main UI thread. The following suspends waiting for live data open events.
-            viewModel.audioStartFlow.collectLatest { result ->
-                onAudioStarted(result, appMode)
+            viewModel.liveAudioStartFlow.collectLatest { result ->
+                onLiveAudioStarted(result, appMode)
             }
         }
 
         // Enable buttons depending on audio state:
         LaunchedEffect(uiState.audioMode.intValue) {
-            buttonState.audioChecked.value = (uiState.audioMode.intValue == AudioMode.CONNECTING.value
+            buttonState.audioChecked.value = (
+                    uiState.audioMode.intValue == AudioMode.CONNECTING.value
                     || uiState.audioMode.intValue == AudioMode.ON.value)
         }
 
         /**
          * Handle the case when data streaming has started.
          */
-        LaunchedEffect(appMode.intValue, uiState.liveMode.intValue) {
+        LaunchedEffect(appMode.intValue, uiState.liveMode.intValue, uiState.dataPresent.value) {
             val isLiveAndStreaming = appMode.intValue == AppMode.LIVE.value &&
                     uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
-            buttonState.audioEnabled.value = isLiveAndStreaming
+            val isViewingAndDataLoaded = appMode.intValue == AppMode.VIEWER.value && uiState.dataPresent.value
+            buttonState.audioEnabled.value = isLiveAndStreaming or isViewingAndDataLoaded
             buttonState.manualRecordingEnabled.value = isLiveAndStreaming
             buttonState.triggeredRecordingEnabled.value = isLiveAndStreaming
         }
@@ -473,8 +471,6 @@ class SpectrogramUI(
             // Set the value via the model - which exposes back to us as autoBnCRequiredFlow.
             model.setAutoBnCRequired(required)
         }
-
-        // buttonState.audioEnabled.value
 
         /**
          * Prevent sleep when we are acquiring live data:
@@ -502,7 +498,7 @@ class SpectrogramUI(
          * change in value. Note that changes to settings values cam't trigger a launched effect.
          */
         LaunchedEffect(appMode.intValue, uiState.audioMode.intValue) {
-            updateHeterodyneUIState(appMode)
+            updateHeterodyneUIState()
         }
 
         /**
@@ -515,15 +511,17 @@ class SpectrogramUI(
         }
 
         /**
-         * Logic to enable the sliders button.
+         * Logic to enable the sliders button asynchronously.
          */
-        val autoBnCRequiredState = model.autoBnCRequiredFlow.collectAsStateWithLifecycle()
-        LaunchedEffect(uiState.dataPresent.value, autoBnCRequiredState.value) {
-            val enabled = shouldEnableSlidersButton()
-            buttonState.slidersButtonEnabled.value = enabled
-            if (!enabled) {
-                // Hide the sliders if we disable the button:
-                buttonState.slidersButtonChecked.value = false
+        LaunchedEffect(uiState.dataPresent.value) {
+            // Enable the sliders button in when data is present, in live or viewer mode:
+            buttonState.slidersButtonEnabled.value = uiState.dataPresent.value
+        }
+
+        LaunchedEffect(Unit) {
+            // Main UI thread. The following suspends waiting for file open events.
+            viewModel.audioProgressFlow.collectLatest { position ->
+                onAudioProgress(position)
             }
         }
 
@@ -668,7 +666,7 @@ class SpectrogramUI(
 
             // Calculate the heterodyne range we can support:
             var heterodyneRangekHz = IntRange(heterodyneCursors.minimumHeterodynekHz, 150)
-            uiState.liveSamplingRateHz.value?.let { hz ->
+            uiState.samplingRateHz.value?.let { hz ->
                 var upper = floor(hz / (2f * 1000f)).toInt() - 1
                 // Limit the heterodyne to the useful range so that the UI slider is
                 // more manageable on smaller screens:
@@ -688,14 +686,14 @@ class SpectrogramUI(
                         buttonState.audioChecked.value = false
                 },
                 onConfirm = { audioDualHeterodyne: Boolean, audioRef1kHz: Int,
-                              audioRef2kHz: Int, audioBoostFactor: Int ->
+                              audioRef2kHz: Int, loopedPlayback: Boolean ->
                     scope.launch {
                         model.updateStoredSettings(
                             model.settings.copy(
                                 heterodyneDual = audioDualHeterodyne,
                                 heterodyneRef1kHz = audioRef1kHz,
                                 heterodyneRef2kHz = audioRef2kHz,
-                                audioBoostShift = audioBoostFactor
+                                loopedAudioPlayback = loopedPlayback
                             )
                         )
 
@@ -705,12 +703,10 @@ class SpectrogramUI(
                         uiState.showAudioConfig.value = false
                         uiState.audioSettingsAlreadyShown.value = true
 
-                        // Notify changes to the UI, and model:
-                        updateHeterodyneUIState(appMode)
+                        // Notify changes to the UI, and model.
+                        updateHeterodyneUIState()
 
-                        // Start audio asynchronously. We will be notified of the outcome
-                        // in due course:
-                        model.startAudio()
+                        startAudio(appMode)
                     }
                 },
                 heterodyneRange = heterodyneRangekHz
@@ -756,55 +752,66 @@ class SpectrogramUI(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val currentlyWritingFile by model.currentlyWritingFlow.collectAsState()
+                    Box(
+                        Modifier.fillMaxWidth()
+                    ) {
+                        Row(Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically) {
 
-                    val colour = when (uiState.liveMode.intValue) {
-                        LiveMode.OFF.value -> Color.Transparent
-                        LiveMode.CONNECTING.value -> Color.DarkGray
-                        LiveMode.STREAMING.value -> {
-                            if (buttonState.triggeredRecordingChecked.value || buttonState.manualRecordingChecked.value) {
-                                if (currentlyWritingFile) Color(0xFF8B0000) else Color(0xFFB07020)
+                            val currentlyWritingFile by model.currentlyWritingFlow.collectAsState()
+
+                            val colour = when (uiState.liveMode.intValue) {
+                                LiveMode.OFF.value -> Color.Transparent
+                                LiveMode.CONNECTING.value -> Color.DarkGray
+                                LiveMode.STREAMING.value -> {
+                                    if (buttonState.triggeredRecordingChecked.value || buttonState.manualRecordingChecked.value) {
+                                        if (currentlyWritingFile) Color(0xFF8B0000) else Color(0xFFB07020)
+                                    }
+                                    else
+                                        Color(0xFF006400)           // Dark green
+                                }
+                                LiveMode.PAUSED.value -> Color.DarkGray
+                                else -> Color.Transparent           // Shouldn't get here.
                             }
-                            else
-                                Color(0xFF006400)           // Dark green
-                        }
-                        LiveMode.PAUSED.value -> Color.DarkGray
-                        else -> Color.Transparent           // Shouldn't get here.
-                    }
 
-                    if (uiState.liveMode.intValue != LiveMode.OFF.value) {
-                        MyLamp2(20.dp, colour)
-                    }
-
-                    Spacer(Modifier.weight(1f))
-
-                    if (uiState.fileIsOpen.value) {
-                        Column {
-                            MyTransparentButton(
-                                ImageVector.vectorResource(R.drawable.baseline_close_24),
-                                "Close file", true
-                            ) {
-                                model.resetUIMode(AppMode.LIVE)
+                            if (uiState.liveMode.intValue != LiveMode.OFF.value) {
+                                MyLamp2(20.dp, colour)
                             }
-                        }
-                    }
 
-                    if (uiState.audioMode.value == AudioMode.ON.value) {
-                        Column {
-                            uiState.heterodyneRef1kHz.value?.let {
-                                Text("${uiState.heterodyneRef1kHz.value} kHz")
-                            }
-                            uiState.heterodyneRef2kHz.value?.let {
-                                Text("${uiState.heterodyneRef2kHz.value} kHz")
+                            Spacer(Modifier.weight(1f))
+
+                            if (uiState.fileIsOpen.value) {
+                                Column {
+                                    MyTransparentButton(
+                                        ImageVector.vectorResource(R.drawable.baseline_close_24),
+                                        "Close file", true
+                                    ) {
+                                        model.resetUIMode(AppMode.LIVE)
+                                    }
+                                }
                             }
                         }
-                    }
 
+                        Row(Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically) {
+
+                            Spacer(Modifier.weight(1f))
+
+                            if (uiState.audioMode.intValue == AudioMode.ON.value) {
+                                Column {
+                                    uiState.heterodyneRef1kHz.value?.let {
+                                        Text("${uiState.heterodyneRef1kHz.value} kHz")
+                                    }
+                                    uiState.heterodyneRef2kHz.value?.let {
+                                        Text("${uiState.heterodyneRef2kHz.value} kHz")
+                                    }
+                                }
+                            }
+
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
-
-                // Takes up excess vertical space:
-                Spacer(modifier = Modifier.weight(1f))
-
                 if (uiState.pagingEnabled.value) {
                     Row(commonModifier, verticalAlignment = commonAlignment) {
                         Column {
@@ -832,29 +839,38 @@ class SpectrogramUI(
                     }
                 }
 
+                // Takes up excess vertical space:
+                Spacer(modifier = Modifier.weight(1f))
+
                 val bnCRange = model.bnCRangeFlow.collectAsStateWithLifecycle()
+                val audioBoost = model.audioBoostFlow.collectAsStateWithLifecycle()
                 /*
                 This row is always present, but totally transparent when it is not
                 required. This allows the screen layout to not jump around.
                 */
-                Row(
-                    commonModifier
-                        .then(if (!buttonState.slidersButtonChecked.value) Modifier.alpha(0f) else Modifier),
-                    verticalAlignment = commonAlignment,
-                ) {
-                    Spacer(Modifier.weight(1f))
-                    Column(
-                        modifier = Modifier
-                            .widthIn(max = 400.dp)
-                            .background(Color.Transparent),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                if (buttonState.slidersButtonChecked.value) {
+                    Row(
+                        commonModifier,
+                        /*commonModifier
+                        .invisibleAndUntouchable(buttonState.slidersButtonChecked.value),
+                     */
+                        verticalAlignment = commonAlignment
                     ) {
-                        sliders.Compose(
-                            Modifier, model, bnCRange, buttonState.slidersButtonChecked.value,
-                            uiState.rawPageRange
-                        )
+                        Spacer(Modifier.weight(1f))
+                        Column(
+                            modifier = Modifier
+                                .widthIn(max = 400.dp)
+                                .background(Color.Transparent),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            sliders.Compose(
+                                Modifier, model, bnCRange,
+                                uiState.dataPresent,
+                                audioBoost
+                            )
+                        }
+                        Spacer(Modifier.weight(1f))
                     }
-                    Spacer(Modifier.weight(1f))
                 }
 
                 Row(
@@ -894,10 +910,8 @@ class SpectrogramUI(
        }
     }
 
-    private fun updateHeterodyneUIState(appMode: MutableIntState) {
-        if (uiState.audioMode.intValue in setOf(AudioMode.ON.value)
-            &&
-            appMode.intValue in setOf(AppMode.LIVE.value)) {
+    private fun updateHeterodyneUIState() {
+        if (uiState.audioMode.intValue in setOf(AudioMode.ON.value)) {
 
             // Assigning these values makes the heterodyne cursor appear on the graph:
             uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
@@ -1252,6 +1266,45 @@ class SpectrogramUI(
         }
     }
 
+    private suspend fun onAudioProgress(position: Int) {
+        // Timber.d("onAudioProgress called: $position")
+
+        if (position < 0) {
+            // Negative offset signals that audio playback has finished because it reached
+            // the end of the data.
+
+            Timber.d("Handling end of audio data: $position")
+            model.stopAudio()
+            uiState.audioMode.intValue = AudioMode.OFF.value
+            model.amplitudeBitmapHolder.cursorTime = null       // Hide the cursor
+        }
+
+        // Update the visible cursor position:
+        uiState.samplingRateHz.value?.let { samplingRate ->
+            if (samplingRate > 0) {
+                model.amplitudeBitmapHolder.cursorTime =
+                    ((position + (uiState.rawPageRange.value?.start
+                        ?: 0))).toFloat() / samplingRate.toFloat()
+
+                // Timber.d("Audio playback cursor time is ${model.amplitudeBitmapHolder.cursorTime}")
+            }
+        }
+
+        model.rerender()
+    }
+
+    private fun startAudio(appMode: MutableIntState) {
+        // Kick off live audio asynchronously. We will get notified later with the outcome:
+        when (appMode.intValue) {
+            AppMode.LIVE.value -> model.startLiveAudio()
+            AppMode.VIEWER.value -> {
+                uiState.samplingRateHz.value?.let {
+                    model.startViewerAudio(it)
+                }
+            }
+        }
+    }
+
     @Composable
     fun ComposeButtonsGroup1(
         liveMode: MutableIntState,
@@ -1355,16 +1408,22 @@ class SpectrogramUI(
                     // The first time, we route them via the audio config dialog:
                     if (!uiState.audioSettingsAlreadyShown.value)
                         uiState.showAudioConfig.value = true
-                    else {
-                        // Kick off live audio asynchronously. We will get notified later with the outcome:
-                        model.startAudio()
-                    }
+                    else
+                        startAudio(appMode)
                 }
                 else {
                     // Provide instant UI feedback:
                     uiState.audioMode.intValue = AudioMode.OFF.value
+
                     // Stop live audio asynchronously. Fire and forget.
+                    // This works for either live or viewer mode audio:
                     model.stopAudio()
+
+                    // Hide the cursor:
+                    model.amplitudeBitmapHolder.cursorTime = null
+                    scope.launch {
+                        model.rerender()
+                    }
                 }
             },
             onLongPress = { checked: Boolean ->
@@ -1421,6 +1480,7 @@ class SpectrogramUI(
             val title = wfi.fileName
             uiState.title.value = title
             uiState.fileIsOpen.value = true
+            uiState.samplingRateHz.value = wfi.sampleRate
 
             // Paging data is constant for the data file, it doesn't
             // change when the page sized is changed:
@@ -1446,6 +1506,7 @@ class SpectrogramUI(
             uiState.errorMessage.value = "Unable to open data file.\n\n$msg"
             uiState.showErrorDialog.value = true
             uiState.resetUIOnErrorDialogDismissed.value = true
+            uiState.samplingRateHz.value = null
 
             // Clean up. An error results in a file open or partly open to be closed:
             model.closePipeline()
@@ -1472,10 +1533,10 @@ class SpectrogramUI(
             val hz = lcr.sampleRate
             if (hz != null) {
                 rateText = String.format(Locale.getDefault(), " @ %.1f kHz", hz / 1000f)
-                uiState.liveSamplingRateHz.value = hz
+                uiState.samplingRateHz.value = hz
             }
             else {
-                uiState.liveSamplingRateHz.value = null
+                uiState.samplingRateHz.value = null
             }
             var manufacturer = ""
             /*  The manufacturer name is often included in the product name.
@@ -1489,7 +1550,7 @@ class SpectrogramUI(
             buttonState.acquisitionChecked.value = false
             uiState.liveMode.intValue = LiveMode.OFF.value
             uiState.title.value = null
-            uiState.liveSamplingRateHz.value = null
+            uiState.samplingRateHz.value = null
             if (lcr.errorMessage != null) {
                 val msg = lcr.errorMessage
                 uiState.errorMessage.value = "Unable to connect live.\n\n$msg"
@@ -1498,11 +1559,11 @@ class SpectrogramUI(
         }
     }
 
-    private fun onAudioStarted(
+    private fun onLiveAudioStarted(
         asr: UsbService.AudioStartResult,
         appMode: MutableIntState
     ) {
-        Timber.i("onAudioStarted called: $asr")
+        Timber.i("onLiveAudioStarted called: $asr")
 
         if (asr.startedOK) {
             uiState.audioMode.intValue = AudioMode.ON.value
@@ -1572,6 +1633,7 @@ class SpectrogramUI(
 
     private fun closeViewer() {
         // Timber.d("closeViewer called")
+        model.stopAudio()       // Idempotent.
         model.closePipeline()   // Idempotent.
 
         uiState.fileIsOpen.value = false
@@ -1611,8 +1673,6 @@ class SpectrogramUI(
 
         // Stop periodic location updates when we are in viewer mode:
         model.locationTracker.stopPeriodicUpdates()
-
-        buttonState.slidersButtonEnabled.value = shouldEnableSlidersButton()
     }
 
     fun resetToLive(context: Context, previousMode: Int, streaming: Boolean) {
@@ -1630,8 +1690,6 @@ class SpectrogramUI(
         buttonState.acquisitionEnabled.value = true
         buttonState.showMetadataEnabled.value = false
         buttonState.closeFileEnabled.value = false
-        buttonState.slidersButtonEnabled.value = shouldEnableSlidersButton()
-        // Other button enabled done via a LaunchedEffect
 
         // Request periodic location updates when we are in live mode:
         model.locationTracker.startPeriodicUpdates()
@@ -1639,13 +1697,7 @@ class SpectrogramUI(
         if (streaming)
             model.openLive(::fileWriterErrorHandler)
     }
-
-    fun shouldEnableSlidersButton(): Boolean {
-        val enabled = uiState.dataPresent.value && !model.autoBnCRequiredFlow.value
-        // Timber.d("JM: uiState.dataPresent.value = ${uiState.dataPresent.value}, model.autoBnCRequiredFlow.value = ${model.autoBnCRequiredFlow.value}, Setting slidersButtonEnabled = $enabled")
-        return enabled
-    }
-
+    
     private fun fileWriterErrorHandler(msg: String) {
         buttonState.manualRecordingChecked.value = false
         buttonState.triggeredRecordingChecked.value = false

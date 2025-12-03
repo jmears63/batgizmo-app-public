@@ -22,14 +22,28 @@
 
 package org.batgizmo.app.ui
 
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Arrangement.spacedBy
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -38,7 +52,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import org.batgizmo.app.Settings
 import kotlin.math.roundToInt
 
@@ -75,86 +93,148 @@ class AudioConfig {
     }
 
     @Composable
-    fun Compose(settings: Settings,
-                audioStarting: Boolean,
-                onDismiss: () -> Unit,
-                onConfirm: (Boolean, Int, Int, Int) -> Unit,
-                heterodyneRange: IntRange,
+    fun Compose(
+        settings: Settings,
+        audioStarting: Boolean,
+        onDismiss: () -> Unit,
+        onConfirm: (Boolean, Int, Int, Boolean) -> Unit,
+        heterodyneRange: IntRange,
     ) {
-        // Make sure the heterodyne frequencies are within the range
-        // allowed:
+        // Constrain frequencies
         fun constrainFrequency(kHz: Int, factor: Float): Int {
-            return if (kHz > heterodyneRange.endInclusive || kHz < heterodyneRange.start)
+            return if (kHz !in heterodyneRange)
                 (heterodyneRange.start + (heterodyneRange.endInclusive - heterodyneRange.start) * factor + 0.5).toInt()
             else
                 kHz
         }
+
         val constrainedRef1kHz = constrainFrequency(settings.heterodyneRef1kHz, 0.33f)
         val constrainedRef2kHz = constrainFrequency(settings.heterodyneRef2kHz, 0.66f)
 
-        // Copy the current values out of the settings. We will update settings
-        // if the user confirms, otherwise discard them.
-        val audioDualHeterodyne = rememberSaveable { mutableStateOf(settings.heterodyneDual)}
-        val audioRef1kHz = rememberSaveable { mutableIntStateOf(constrainedRef1kHz)}
-        val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz)}
-        val audioBoostShift = rememberSaveable { mutableIntStateOf(settings.audioBoostShift) }
+        // State
+        val audioDualHeterodyne = rememberSaveable { mutableStateOf(settings.heterodyneDual) }
+        val audioRef1kHz = rememberSaveable { mutableIntStateOf(constrainedRef1kHz) }
+        val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz) }
+        val loopedPlayback = rememberSaveable { mutableStateOf(settings.loopedAudioPlayback) }
 
-        AlertDialog(
-            onDismissRequest = onDismiss,   // Action on passive dismissal such as tapping outside.
-            title = { Text("Audio Settings") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = spacedBy(8.dp)) {
+        val isLandscape =
+            LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 200.dp)
+                        .widthIn(max = 600.dp), // Card max width
+                    shape = RoundedCornerShape(16.dp),
+                    tonalElevation = 8.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    val scrollState = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .padding(20.dp)
+                            .verticalScroll(scrollState),
+                        verticalArrangement = spacedBy(12.dp)
                     ) {
-                        Checkbox(
-                            enabled = true,
-                            checked = audioDualHeterodyne.value,
-                            onCheckedChange = { audioDualHeterodyne.value = it }
+                        Text(
+                            text = "Audio Settings",
+                            style = MaterialTheme.typography.headlineSmall,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
                         )
-                        Text("Dual heterodyne mode")
-                    }
 
-                    IntegerSlider(
-                        label = "Reference",
-                        value = audioRef1kHz.intValue,
-                        onValueChange = { audioRef1kHz.intValue = it },
-                        range = heterodyneRange
-                    )
+                        // Checkboxes
+                        if (isLandscape) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = audioDualHeterodyne.value,
+                                        onCheckedChange = { audioDualHeterodyne.value = it }
+                                    )
+                                    Text("Dual heterodyne mode")
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = loopedPlayback.value,
+                                        onCheckedChange = { loopedPlayback.value = it }
+                                    )
+                                    Text("Loop playback")
+                                }
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = audioDualHeterodyne.value,
+                                    onCheckedChange = { audioDualHeterodyne.value = it }
+                                )
+                                Text("Dual heterodyne mode")
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = loopedPlayback.value,
+                                    onCheckedChange = { loopedPlayback.value = it }
+                                )
+                                Text("Looped playback")
+                            }
+                        }
 
-                    if (audioDualHeterodyne.value) {
+                        // Sliders
                         IntegerSlider(
-                            label = "Reference 2",
-                            value = audioRef2kHz.intValue,
-                            onValueChange = { audioRef2kHz.intValue = it },
+                            label = "Reference",
+                            value = audioRef1kHz.intValue,
+                            onValueChange = { audioRef1kHz.intValue = it },
                             range = heterodyneRange
                         )
-                    }
 
-                    MySliderSelector<Settings.AudioBoostOptions>(
-                        Settings.AudioBoostOptions.entries,
-                        "Audio boost",
-                        audioBoostShift.intValue
-                    ) { value: Int ->
-                        audioBoostShift.intValue = value
+                        if (audioDualHeterodyne.value) {
+                            IntegerSlider(
+                                label = "Reference 2",
+                                value = audioRef2kHz.intValue,
+                                onValueChange = { audioRef2kHz.intValue = it },
+                                range = heterodyneRange
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = onDismiss) {
+                                Text("Cancel")
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Button(
+                                onClick = {
+                                    onConfirm(
+                                        audioDualHeterodyne.value,
+                                        audioRef1kHz.intValue,
+                                        audioRef2kHz.intValue,
+                                        loopedPlayback.value
+                                    )
+                                }
+                            ) {
+                                Text(if (audioStarting) "Start" else "Apply")
+                            }
+                        }
                     }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onConfirm(audioDualHeterodyne.value, audioRef1kHz.intValue,
-                        audioRef2kHz.intValue, audioBoostShift.intValue)
-                }) {
-                    Text(if (audioStarting) "Start" else "Apply" )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = onDismiss) {
-                    Text("Cancel")
                 }
             }
-        )
+        }
     }
 }

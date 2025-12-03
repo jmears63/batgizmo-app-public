@@ -220,7 +220,6 @@ class WavFileParser {
         val actualValuesRead = (byteArray.size / 2).toInt()
         // This will be different from actualValuesRead when we do channels != 1:
         val actualSamplesRead = actualValuesRead
-        // TODO: check this endianism:
         // Access the ByteArray as a Buffer:
         val byteBuffer = ByteBuffer.wrap(byteArray).order(ByteOrder.LITTLE_ENDIAN)
         // Create a ShortArray of the right size:
@@ -229,7 +228,7 @@ class WavFileParser {
         byteBuffer.asShortBuffer().get(dataBuffer, bufferOffset, valueCount)
 
         /*
-        // TODO support for multiple channels.
+        // Future: support for multiple channels.
         if (fmtChunk.numChannels > 1) {
             /*
                 if self._fmt_header.num_channels > 1:

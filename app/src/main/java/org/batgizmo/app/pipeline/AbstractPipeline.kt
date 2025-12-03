@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.batgizmo.app.BitmapHolder
@@ -45,7 +46,6 @@ import kotlin.math.pow
 import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
-import kotlin.time.measureTime
 
 abstract class AbstractPipeline(
     val pipelineParametersSnapshot: PipelineParameters,
@@ -341,6 +341,24 @@ abstract class AbstractPipeline(
 
     // Synchronize access to data members:
     protected val mutex = Mutex()
+
+    fun getVisibleRawDataBuffer(timeAxisRangeFlow: StateFlow<FloatRange>): Pair<ShortArray, HORange>? {
+
+        pipelineData?.let { pd ->
+            pd.rangedRawDataBuffer?.buffer?.let { buffer ->
+                val timeAxisRange = timeAxisRangeFlow.value
+                val range = HORange(
+                    maxOf(0, (timeAxisRange.start * pd.calcs.rawSampleRate).toInt()),
+                    minOf(buffer.size, (timeAxisRange.endInclusive * pd.calcs.rawSampleRate).toInt())
+                )
+
+                return Pair(buffer, range)
+            }
+        }
+
+        return null
+    }
+
 
     private fun startPipeline(pld: PipelineData) {
         pld.dataSourceStep.start()

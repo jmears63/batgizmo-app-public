@@ -531,7 +531,7 @@ Java_org_batgizmo_app_pipeline_AbstractPipeline_00024Companion_nativeFindBnCRang
     float maxDB = std::numeric_limits<float>::lowest();
     bool first = true;
 
-    // TODO consider nesting this loop the other way around as an optimization.
+    // Future: consider nesting this loop the other way around as an optimization.
     for (int timeIndex = x_min; timeIndex <= x_max; ++timeIndex) {
         int data_offset = timeIndex * frequency_buckets;
         // Reflect the Y indices:

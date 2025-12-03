@@ -28,7 +28,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.RangeSlider
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.remember
@@ -38,37 +40,65 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import org.batgizmo.app.FloatRange
-import org.batgizmo.app.HORange
 import org.batgizmo.app.UIModel
 import uk.org.gimell.batgimzoapp.R
+import kotlin.math.log2
+import kotlin.math.pow
 
 class Sliders {
     private val maxRange = FloatRange(0f, 1f)
 
+
     @Composable
     fun Compose(
-        modifier: Modifier, model: UIModel,
-        bnCRange: State<FloatRange>, enabled: Boolean,
-        rawPageRangeState: State<HORange?>
+        modifier: Modifier,
+        model: UIModel,
+        bnCRange: State<FloatRange>,
+        dataPresent: State<Boolean>,
+        audioBoost: State<Float>
     ) {
-        // Get a coroutine scope linked to the Compose scope, using the main UI thread.
         val scope = rememberCoroutineScope()
 
         // CONFLATED so that multiple events are replaced with the single most recent:
-        val sliderEvents = remember { Channel<ClosedFloatingPointRange<Float>>(capacity = Channel.CONFLATED) }
-
+        val bncSliderEvents =
+            remember { Channel<ClosedFloatingPointRange<Float>>(capacity = Channel.CONFLATED) }
         LaunchedEffect(Unit) {
-            for (range in sliderEvents) {
+            for (range in bncSliderEvents) {
                 // CPU heavy processing in the worker thread pool:
                 withContext(Dispatchers.Default) {
                     model.applyBnC(FloatRange(range), true)
                 }
             }
         }
+        DisposableEffect(Unit) {
+            onDispose {
+                bncSliderEvents.close()
+            }
+        }
+
+        // CONFLATED so that multiple events are replaced with the single most recent.
+        // The null value signals that the user has finished sliding.
+        val audioBoostSliderEvents = remember { Channel<Float?>(capacity = Channel.CONFLATED) }
+        LaunchedEffect(Unit) {
+            for (audioBoostFactor in audioBoostSliderEvents) {
+                model.applyAudioBoost(audioBoostFactor)
+            }
+        }
+        DisposableEffect(Unit) {
+            onDispose {
+                audioBoostSliderEvents.close()
+            }
+        }
+
+        /**
+         * Logic to enable the BnC button asynchronously.
+         */
+        val autoBnCRequiredState = model.autoBnCRequiredFlow.collectAsStateWithLifecycle()
 
         // Column to hold the RangeSlider and the selected range text
         Column(
@@ -87,16 +117,58 @@ class Sliders {
                         "brightness/contrast"
                     )
                 }
-                Column(Modifier
-                    .padding(start = innerMargin)
-                    .weight(1f)) {
+                Column(
+                    Modifier
+                        .padding(start = innerMargin)
+                        .weight(1f)
+                ) {
                     RangeSlider(
                         value = bnCRange.value,
                         onValueChange = { newRange ->
-                            sliderEvents.trySend(newRange)
+                            bncSliderEvents.trySend(newRange)
                         },
                         valueRange = maxRange,
-                        enabled = enabled
+                        // Enable the BnC slider when data is present (file or live) AND
+                        // we are not in auto BnC mode:
+                        enabled = dataPresent.value && !autoBnCRequiredState.value
+                    )
+                }
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Icon(
+                        ImageVector.vectorResource(R.drawable.baseline_volume_up_24),
+                        "audio boost"
+                    )
+                }
+
+                Column(
+                    Modifier
+                        .padding(start = innerMargin)
+                        .weight(1f)
+                ) {
+                    // The audio boost slider has an exponential scale for natural feel.
+                    // Beware of making the maximum gain setting too high as it can result in
+                    // audio feedback.
+
+                    val allowedBoostRange = 0.1f..16f
+                    val logAllowedBoostRange = log2(allowedBoostRange.start)..log2(allowedBoostRange.endInclusive)
+
+                    Slider(
+                        value = log2(audioBoost.value.coerceIn(allowedBoostRange)),
+                        onValueChange = { v ->
+                            // Send a new value to be applied as the user slides:
+                            audioBoostSliderEvents.trySend(2.0.pow(v.toDouble()).toFloat())
+                        },
+                        onValueChangeFinished = {
+                            // Send a null value to signal that the user has finished sliding:
+                            audioBoostSliderEvents.trySend(null)
+                        },
+                        valueRange = logAllowedBoostRange
                     )
                 }
             }

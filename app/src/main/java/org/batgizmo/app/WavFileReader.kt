@@ -114,6 +114,7 @@ class WavFileReader(private val ctx: Context) {
             }
 
             if (safeWavChunks.fmtChunk.numChannels != 1.toShort()) {
+                // Various parts of the code of this app assume a single channel, such as audio playback.
                 throw IllegalArgumentException("Support is currently limited to one channel. ${safeWavChunks.fmtChunk.numChannels} channels are present.")
             }
 

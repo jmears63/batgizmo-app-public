@@ -31,7 +31,7 @@ import timber.log.Timber
  * raw data cache in the next step.
  *
  * It reads a window of file data into raw data buffer to fill the buffer if possible. The
- * window can start from any position in the raw data stream.
+ * window can start from any offset in the raw data stream.
  */
 abstract class DataSourceStep(
     protected val nextStep: AbstractStep,

@@ -49,8 +49,9 @@ data class Settings(
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
     var heterodyneRef2kHz: Int = 20,
+    var loopedAudioPlayback: Boolean = false,
     var includeLocationInFile: Boolean = true,
-    var audioBoostShift: Int = AudioBoostOptions.AUDIOBOOST_8.value,
+    var audioBoostFactor: Float = 4f,
     var preTriggerTimeMs: Int = PreTriggerTimeOptions.PRETRIGGER_TIME_500MS.value,
     var postTriggerTimeMs: Int = PostTriggerTimeOptions.POSTTRIGGER_TIME_1000MS.value,
     var maxFileTimeMs: Int = MaxFileTimeOptions.MAX_FILE_TIME_5000MS.value,
@@ -135,18 +136,6 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
-    // The value is the shift required to achieve the factor:
-    enum class AudioBoostOptions(val value: Int, val label: String) : EnumHelper {
-        AUDIOBOOST_NONE(0, "none"),
-        AUDIOBOOST_2(1, "+6 dB"),
-        AUDIOBOOST_4(2, "+12 dB"),
-        AUDIOBOOST_8(3, "+18 dB"),
-        AUDIOBOOST_16(4, "+24 dB");
-
-        override fun theValue(): Int = value
-        override fun theLabel(): String = label
-    }
-
     enum class PreTriggerTimeOptions(val value: Int, val label: String) : EnumHelper {
         PRETRIGGER_TIME_0MS(0, "none"),
         PRETRIGGER_TIME_200MS(200, "0.2s"),
@@ -199,7 +188,7 @@ data class Settings(
     private val keyAudioRef1kHz = intPreferencesKey("audioRef1kHz")
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
-    private val keyAudioBoostShift = intPreferencesKey("audioBoostShift")
+    private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor")
     private val keyLocationInFile = booleanPreferencesKey("locationInFile")
     private val keyPreTriggerTimeMs = intPreferencesKey("preTriggerTimeMs")
     private val keyPostTriggerTimeMs = intPreferencesKey("postTriggerTimeMs")
@@ -207,6 +196,7 @@ data class Settings(
     private val keyAutoTriggerThresholdDb = floatPreferencesKey("autoTriggerThresholdDb")
     private val keyAutoTriggerRangeStartkHz = floatPreferencesKey("autoTriggerRangeStartkHz")
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
+    private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -229,7 +219,7 @@ data class Settings(
         prefs[keyAudioDualHeterodyne] = heterodyneDual
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
-        prefs[keyAudioBoostShift] = audioBoostShift
+        prefs[keyAudioBoostFactor] = audioBoostFactor
         prefs[keyLocationInFile] = includeLocationInFile
         prefs[keyPreTriggerTimeMs] = preTriggerTimeMs
         prefs[keyPostTriggerTimeMs] = postTriggerTimeMs
@@ -237,6 +227,7 @@ data class Settings(
         prefs[keyAutoTriggerThresholdDb] = autoTriggerThresholdDb
         prefs[keyAutoTriggerRangeStartkHz] = autoTriggerRangeMinkHz
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
+        prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -271,8 +262,8 @@ data class Settings(
             heterodyneRef1kHz = requireNotNull(prefs[keyAudioRef1kHz])
         if (prefs[keyAudioRef2kHz] != null)
             heterodyneRef2kHz = requireNotNull(prefs[keyAudioRef2kHz])
-        if (prefs[keyAudioBoostShift] != null)
-            audioBoostShift = requireNotNull(prefs[keyAudioBoostShift])
+        if (prefs[keyAudioBoostFactor] != null)
+            audioBoostFactor = requireNotNull(prefs[keyAudioBoostFactor])
         if (prefs[keyLocationInFile] != null)
             includeLocationInFile = requireNotNull(prefs[keyLocationInFile])
         if (prefs[keyPreTriggerTimeMs] != null)
@@ -287,6 +278,8 @@ data class Settings(
             autoTriggerRangeMinkHz = requireNotNull(prefs[keyAutoTriggerRangeStartkHz])
         if (prefs[keyAutoTriggerRangeEndkHz] != null)
             autoTriggerRangeMaxkHz = requireNotNull(prefs[keyAutoTriggerRangeEndkHz])
+        if (prefs[keyLoopedAudioPlayback] != null)
+            loopedAudioPlayback = requireNotNull(prefs[keyLoopedAudioPlayback])
     }
 }
 

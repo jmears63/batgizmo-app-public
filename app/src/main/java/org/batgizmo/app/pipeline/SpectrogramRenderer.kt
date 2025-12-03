@@ -61,7 +61,7 @@ class SpectrogramDrawThread(
     : DrawThread(model, surfaceHolder, bitmapHolder)
 {
     private val cursorColour = Color.Yellow
-    val lineWidthPx = 2f    // TODO use dp and convert to px.
+    val lineWidthPx = 2f    // Slight improvement: use dp and convert to px.
 
     private val cursorPaint = Paint().apply {
         color = cursorColour.toArgb()

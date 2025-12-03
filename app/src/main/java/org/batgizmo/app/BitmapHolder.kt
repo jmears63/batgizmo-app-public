@@ -53,7 +53,7 @@ class BitmapHolder {
     var bitmap: Bitmap? = null
 
     /**
-     * If a cursor should be displayed, set this to the time position required.
+     * If a cursor should be displayed, set this to the time offset required.
      */
     var cursorTime: Float? = null
 
