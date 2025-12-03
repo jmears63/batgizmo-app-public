@@ -678,6 +678,7 @@ class SpectrogramUI(
             val isStarting = uiState.audioMode.intValue != AudioMode.ON.value
             audioConfig.Compose(
                 model.settings,
+                appMode.intValue,
                 isStarting,
                 onDismiss =  {
                     // They changed their mind:

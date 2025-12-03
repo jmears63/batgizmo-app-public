@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.batgizmo.app.Settings
+import org.batgizmo.app.ui.TopLevelUI.AppMode
 import kotlin.math.roundToInt
 
 class AudioConfig {
@@ -95,6 +96,7 @@ class AudioConfig {
     @Composable
     fun Compose(
         settings: Settings,
+        appMode: Int,
         audioStarting: Boolean,
         onDismiss: () -> Unit,
         onConfirm: (Boolean, Int, Int, Boolean) -> Unit,
@@ -166,12 +168,14 @@ class AudioConfig {
                                     )
                                     Text("Dual heterodyne mode")
                                 }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = loopedPlayback.value,
-                                        onCheckedChange = { loopedPlayback.value = it }
-                                    )
-                                    Text("Loop playback")
+                                if (appMode == AppMode.VIEWER.value) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = loopedPlayback.value,
+                                            onCheckedChange = { loopedPlayback.value = it }
+                                        )
+                                        Text("Loop playback")
+                                    }
                                 }
                             }
                         } else {
@@ -182,12 +186,14 @@ class AudioConfig {
                                 )
                                 Text("Dual heterodyne mode")
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = loopedPlayback.value,
-                                    onCheckedChange = { loopedPlayback.value = it }
-                                )
-                                Text("Looped playback")
+                            if (appMode == AppMode.VIEWER.value) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = loopedPlayback.value,
+                                        onCheckedChange = { loopedPlayback.value = it }
+                                    )
+                                    Text("Looped playback")
+                                }
                             }
                         }
 
