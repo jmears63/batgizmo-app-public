@@ -19,27 +19,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-/*
- * Copyright (c) 2025 John Mears
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 
 package org.batgizmo.app.ui
 
@@ -71,6 +50,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.ScreenLockRotation
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -141,9 +121,6 @@ import kotlin.math.floor
 class SpectrogramUI(
     private val model: UIModel
 ) {
-    companion object {
-    }
-
     val localShowGrid = compositionLocalOf<Boolean> { true }
 
     // Represent the state of buttons in the UI:
@@ -161,7 +138,9 @@ class SpectrogramUI(
         val showMetadataEnabled: MutableState<Boolean> = mutableStateOf(false),
         val closeFileEnabled: MutableState<Boolean> = mutableStateOf(false),
         val previousFileEnabled: MutableState<Boolean> = mutableStateOf(false),
-        val nextFileEnabled: MutableState<Boolean> = mutableStateOf(false)
+        val nextFileEnabled: MutableState<Boolean> = mutableStateOf(false),
+        val screenOrientationLocked: MutableState<Boolean> = mutableStateOf(false),
+        val screenOrientationEnabled: MutableState<Boolean> = mutableStateOf(true)
     ) {
         fun reset() {
             acquisitionChecked.value = false
@@ -402,10 +381,6 @@ class SpectrogramUI(
             }
         )
 
-        fun onShowMetadata() {
-            uiState.showMetadata.value = true
-        }
-
         // Collect file metadata from a file that has just been opened:
         LaunchedEffect(Unit) {
             // Main UI thread. The following suspends waiting for file open events.
@@ -550,8 +525,7 @@ class SpectrogramUI(
                 ComposeBottomBar(
                     orientation,
                     appMode,
-                    uiState.liveMode,
-                    ::onShowMetadata
+                    uiState.liveMode
                 )
             }
 
@@ -567,7 +541,6 @@ class SpectrogramUI(
                 leftHandedMode,
                 settingsVisible,
                 uiState.liveMode,
-                ::onShowMetadata,
                 documentPickerLauncher,
                 onExitApp
             )
@@ -585,7 +558,6 @@ class SpectrogramUI(
         leftHandedMode: Boolean,
         settingsVisible: MutableState<Boolean>,
         liveMode: MutableIntState,
-        onShowMetadata: () -> Unit,
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
         onExitApp: () -> Unit
     ) {
@@ -603,7 +575,6 @@ class SpectrogramUI(
                         innerPadding,
                         liveMode,
                         appMode,
-                        onShowMetadata,
                         documentPickerLauncher,
                         settingsVisible,
                         onExitApp
@@ -647,7 +618,6 @@ class SpectrogramUI(
                         innerPadding,
                         liveMode,
                         appMode,
-                        onShowMetadata,
                         documentPickerLauncher,
                         settingsVisible,
                         onExitApp
@@ -954,12 +924,11 @@ class SpectrogramUI(
     private fun ComposeBottomBar(
         orientation: MutableIntState,
         appMode: MutableIntState,
-        liveMode: MutableIntState,
-        onShowMetadata: () -> Unit
+        liveMode: MutableIntState
     ) {
         if (orientation.intValue == Configuration.ORIENTATION_PORTRAIT) {
             BottomAppBar {
-                ComposeButtonsHorizontal(liveMode, appMode, onShowMetadata)
+                ComposeButtonsHorizontal(liveMode, appMode)
             }
         }
     }
@@ -1046,6 +1015,17 @@ class SpectrogramUI(
                     painter = painterResource(id = R.drawable.outline_audio_file_24),
                     contentDescription = "Settings")
                 }
+            )
+            DropdownMenuItem(
+                text = { Text("File info") },
+                onClick = {
+                    uiState.showMetadata.value = true
+                },
+                leadingIcon = { Icon(
+                    imageVector = Icons.Filled.Info,
+                    contentDescription = "File info")
+                },
+                enabled = uiState.fileIsOpen.value
             )
             DropdownMenuItem(
                 text = { Text("Close file") },
@@ -1159,8 +1139,7 @@ class SpectrogramUI(
     @Composable
     fun ComposeButtonsHorizontal(
         liveMode: MutableIntState,
-        appMode: MutableIntState,
-        onShowMetadata: () -> Unit,
+        appMode: MutableIntState
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1170,7 +1149,6 @@ class SpectrogramUI(
             Spacer(Modifier.weight(1f))
             ComposeButtonsGroup1(liveMode, appMode)
             Spacer(Modifier.weight(1f))
-            ComposeButtonsGroup2(liveMode, appMode, onShowMetadata)
         }
     }
 
@@ -1179,7 +1157,6 @@ class SpectrogramUI(
         innerPadding: PaddingValues,
         liveMode: MutableIntState,
         appMode: MutableIntState,
-        onShowMetadata: () -> Unit,
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
         settingsVisible: MutableState<Boolean>,
         onExitApp: () -> Unit
@@ -1201,7 +1178,6 @@ class SpectrogramUI(
             Spacer(Modifier.weight(1f))
             ComposeButtonsGroup1(liveMode, appMode)
             Spacer(Modifier.weight(1f))
-            ComposeButtonsGroup2(liveMode, appMode, onShowMetadata)
         }
     }
 
@@ -1431,6 +1407,19 @@ class SpectrogramUI(
                 // Route them via the audio config dialog:
                 // uiState.audioMode.intValue = AudioMode.CONNECTING.value
                 uiState.showAudioConfig.value = true
+            }
+        )
+
+        MyLatchingButton(
+            buttonState.screenOrientationLocked, buttonState.screenOrientationEnabled,
+            Icons.Filled.ScreenLockRotation,
+            "Lock screen rotation",
+            onSelectionChanged = { checked: Boolean ->
+                val activity = context as Activity
+                if (checked)
+                    ScreenOrientationLocker.lockCurrentRotation(activity)
+                else
+                    ScreenOrientationLocker.unlock(activity)
             }
         )
     }

@@ -96,6 +96,7 @@ dependencies {
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.timber)
+    implementation(libs.androidx.compose.material.icons.extended)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
