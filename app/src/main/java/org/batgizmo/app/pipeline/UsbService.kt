@@ -1339,7 +1339,7 @@ class UsbService(private val context: Context,
         }
     }
 
-    suspend fun setVolume(volumeDB: Float) {
+    suspend fun setVolume(volumeDB: Float): Boolean {
         mutex.withLock {
             usbConnection?.let { conn ->
                 endpointData?.let { e ->
@@ -1350,6 +1350,7 @@ class UsbService(private val context: Context,
                                 conn,
                                 e.featureUnitId, e.audioControlInterfaceNumber, v
                             )
+                            return true
                         }
                         catch (e: IllegalStateException) {
                             Timber.e("Unable to set microphone volume: $e")
@@ -1358,6 +1359,8 @@ class UsbService(private val context: Context,
                 }
             }
         }
+
+        return false
     }
 
     suspend fun resume() {

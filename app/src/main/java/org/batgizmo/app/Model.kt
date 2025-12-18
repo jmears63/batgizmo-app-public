@@ -273,8 +273,8 @@ class UIModel(application: Application,
             val steps = ((allowedGainDB - parms.min) / parms.res).roundToInt()
             allowedGainDB = parms.min + steps * parms.res
             Timber.d("Setting microphone volume: requested = $gainDB, allowed = $allowedGainDB")
-            usbService.setVolume(allowedGainDB)
-            mutableMicrophoneGainFlow.value = allowedGainDB
+            if (usbService.setVolume(allowedGainDB))
+                mutableMicrophoneGainFlow.value = allowedGainDB
         }
     }
 
