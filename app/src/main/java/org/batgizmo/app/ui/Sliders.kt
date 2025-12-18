@@ -33,8 +33,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -49,10 +49,10 @@ import org.batgizmo.app.UIModel
 import uk.org.gimell.batgimzoapp.R
 import kotlin.math.log2
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 class Sliders {
-    private val maxRange = FloatRange(0f, 1f)
-
+    private val defaultRange = FloatRange(0f, 1f)
 
     @Composable
     fun Compose(
@@ -62,7 +62,7 @@ class Sliders {
         dataPresent: State<Boolean>,
         audioBoost: State<Float>
     ) {
-        val scope = rememberCoroutineScope()
+        // val scope = rememberCoroutineScope()
 
         // CONFLATED so that multiple events are replaced with the single most recent:
         val bncSliderEvents =
@@ -78,6 +78,24 @@ class Sliders {
         DisposableEffect(Unit) {
             onDispose {
                 bncSliderEvents.close()
+            }
+        }
+
+        // CONFLATED so that multiple events are replaced with the single most recent:
+        val microphoneGainEvents =
+            remember { Channel<Float>(capacity = Channel.CONFLATED) }
+        LaunchedEffect(Unit) {
+            for (gain in microphoneGainEvents) {
+                // USB handling in the worker thread pool:
+                withContext(Dispatchers.Default) {
+                    // Timber.d("Setting microphone gain to $gain")
+                    model.setMicrophoneGain(gain)
+                }
+            }
+        }
+        DisposableEffect(Unit) {
+            onDispose {
+                microphoneGainEvents.close()
             }
         }
 
@@ -100,12 +118,50 @@ class Sliders {
          */
         val autoBnCRequiredState = model.autoBnCRequiredFlow.collectAsStateWithLifecycle()
 
-        // Column to hold the RangeSlider and the selected range text
         Column(
             modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             val innerMargin = 5.dp
+
+            val microphoneVolumeParameters = model.microphoneVolumeParametersFlow.collectAsState()
+            microphoneVolumeParameters.value?.let { parms ->
+
+                val gainValue = model.microphoneGainFlow.collectAsStateWithLifecycle()
+
+                val gainRange = parms.min..parms.max
+                var gainSteps = maxOf(0, ((parms.max - parms.min) / parms.res - 1).roundToInt())
+                if (gainSteps > 16)
+                    gainSteps = 0   // Avoid displaying a huge number of gain steps.
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Icon(
+                            ImageVector.vectorResource(R.drawable.outline_mic_gear_24),
+                            "microphone gain"
+                        )
+                    }
+                    Column(
+                        Modifier
+                            .padding(start = innerMargin)
+                            .weight(1f)
+                    ) {
+                        gainValue.value?.let { gain ->
+                            Slider(
+                                value = gain,
+                                onValueChange = { gain ->
+                                    microphoneGainEvents.trySend(gain)
+                                },
+                                valueRange = gainRange,
+                                steps = gainSteps
+                            )
+                        }
+                    }
+                }
+            }
 
             Row(
                 Modifier.fillMaxWidth(),
@@ -127,7 +183,7 @@ class Sliders {
                         onValueChange = { newRange ->
                             bncSliderEvents.trySend(newRange)
                         },
-                        valueRange = maxRange,
+                        valueRange = defaultRange,
                         // Enable the BnC slider when data is present (file or live) AND
                         // we are not in auto BnC mode:
                         enabled = dataPresent.value && !autoBnCRequiredState.value

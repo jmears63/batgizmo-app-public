@@ -40,6 +40,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
@@ -66,6 +67,7 @@ import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 
 data class OpenWavFileResult(
@@ -140,6 +142,7 @@ class UIModelFactory(
  * Beware: the pipeline has its own locking, so avoid the pipeline calling
  * back to this class, to avoid the risk of deadlock.
  */
+@OptIn(FlowPreview::class)
 class UIModel(application: Application,
               private val settingsDataStore: DataStore<Preferences>)
     : AndroidViewModel(application) {
@@ -254,6 +257,26 @@ class UIModel(application: Application,
         mutableAudioBoostFlow.value = boost
     }
 
+    // The single source of truth for the microphone gain, if the microphone allows it
+    // to be set via USB:
+    data class UsbVolumeParameters(val min: Float, val max: Float, val res: Float)
+    private val mutableMicrophoneVolumeParametersFlow = MutableStateFlow<UsbVolumeParameters?>(null)
+    val microphoneVolumeParametersFlow: StateFlow<UsbVolumeParameters?> = mutableMicrophoneVolumeParametersFlow.asStateFlow()
+
+    private val mutableMicrophoneGainFlow = MutableStateFlow<Float?>(null) // Initial value
+    val microphoneGainFlow: StateFlow<Float?> = mutableMicrophoneGainFlow.asStateFlow()
+
+    suspend fun setMicrophoneGain(gainDB: Float) {
+        // Force the request gain to be an allowed value based on microphoneVolumeParametersFlow:
+        microphoneVolumeParametersFlow.value?.let { parms ->
+            var allowedGainDB = gainDB.coerceIn(parms.min, parms.max)
+            val steps = ((allowedGainDB - parms.min) / parms.res).roundToInt()
+            allowedGainDB = parms.min + steps * parms.res
+            Timber.d("Setting microphone volume: requested = $gainDB, allowed = $allowedGainDB")
+            usbService.setVolume(allowedGainDB)
+            mutableMicrophoneGainFlow.value = allowedGainDB
+        }
+    }
 
     /*
         The single sources of truth for the logical and axis ranges used by the renderer.
@@ -690,6 +713,10 @@ class UIModel(application: Application,
             pipelineCloseJob?.join()
             pipelineCloseJob = null
 
+            // Reset after any previous connect:
+            mutableMicrophoneVolumeParametersFlow.value = null
+            mutableMicrophoneGainFlow.value = null
+
             mutex.withLock {
                 try {
                     // Take a snapshot of the parameters used to build this pipeline.
@@ -718,7 +745,13 @@ class UIModel(application: Application,
                     // Part 1:
                     // Suspend until connect is complete, and handle any exceptions the obvious way:
                     coroutineScope {
-                        usbService.connect()
+                        usbService.connect( {
+                            min: Float, max: Float, res: Float, cur: Float ->
+
+                            // Lambda executed if the microphone supports volume setting:
+                            mutableMicrophoneVolumeParametersFlow.value = UsbVolumeParameters(min, max, res)
+                            mutableMicrophoneGainFlow.value = cur
+                        })
                     }
 
                     // Part 2: suspend until the *first* response (collect would loop for ever):
@@ -1033,6 +1066,8 @@ class UIModel(application: Application,
         wavFileInfo.set(null)
 
         mutableDetailsTextFlow.value = null
+        mutableMicrophoneVolumeParametersFlow.value = null
+        mutableMicrophoneGainFlow.value = null
 
         resetRanges()
     }

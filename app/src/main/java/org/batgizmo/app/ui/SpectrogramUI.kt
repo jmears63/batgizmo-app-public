@@ -1581,7 +1581,8 @@ class SpectrogramUI(
         buttonState.manualRecordingEnabled.value = false
         buttonState.triggeredRecordingChecked.value = false
         buttonState.audioEnabled.value = false
-        // buttonState.slidersButtonEnabled.value = false
+        buttonState.slidersButtonEnabled.value = false
+        buttonState.slidersButtonChecked.value = false
 
 
         uiState.title.value = null

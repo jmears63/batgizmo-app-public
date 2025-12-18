@@ -27,7 +27,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbInterface
@@ -45,6 +44,7 @@ import com.android.server.usb.descriptors.Usb10ASGeneral
 import com.android.server.usb.descriptors.Usb20ASFormatI
 import com.android.server.usb.descriptors.Usb20ASGeneral
 import com.android.server.usb.descriptors.UsbACAudioStreamEndpoint
+import com.android.server.usb.descriptors.UsbACFeatureUnit
 import com.android.server.usb.descriptors.UsbACInterfaceUnparsed
 import com.android.server.usb.descriptors.UsbConfigDescriptor
 import com.android.server.usb.descriptors.UsbDescriptorParser
@@ -145,7 +145,7 @@ class UsbService(private val context: Context,
      * the following variable. This is a hack and perhaps one day I will figure out
      * how to include the device info in the intent.
      */
-    private var theDevice: UsbDevice? = null
+    private var theOnFeatureUnitDiscovered: ((Float, Float, Float, Float) -> Unit)? = null
 
     private val usbPermissionName = "${context.packageName}.USB_PERMISSION"
 
@@ -166,7 +166,9 @@ class UsbService(private val context: Context,
     // fun getEndpointListItems() : LiveData<Pair<Int, List<EndpointData>>> = ldEndpointListItems
 
     // The current connection, or nun if nun.
-    private var connection: UsbDeviceConnection? = null
+    private var usbConnection: UsbDeviceConnection? = null
+    private var usbDevice: UsbDevice? = null
+    private var endpointData: EndpointData? = null
 
     // The thread in use for streaming audio, or nun if nun.
     private var streamingThread: Thread? = null
@@ -211,30 +213,30 @@ class UsbService(private val context: Context,
                         Duh.
                         */
 
-                        val device = theDevice
-                        theDevice = null
-
                         // We should have assigned the UsbDevice in question to device before
                         // requesting permission:
-                        check(device != null) { "Internal error - device is null" }
+                        check(usbDevice != null) { "Internal error - device is null" }
+                        usbDevice?.let { device ->
+                            val granted = usbManager.hasPermission(device)
+                            val grantedString = if (granted) "granted" else "NOT granted"
+                            Timber.i("${device.productName} permission $usbPermissionName: $grantedString")
+                            if (granted) {
+                                theOnFeatureUnitDiscovered?.let {
+                                    processDevice(device, it)
+                                }
+                            } else {
+                                // It looks like the user declined to grant permission. This is not exactly
+                                // an error, but the handling is similar:
 
-                        val granted = usbManager.hasPermission(device)
-                        val grantedString = if (granted) "granted" else "NOT granted"
-                        Timber.i("${device.productName} permission $usbPermissionName: $grantedString")
-                        if (granted) {
-                            processDevice(device)
-                        } else {
-                            // It looks like the user declined to grant permission. This is not exactly
-                            // an error, but the handling is similar:
-
-                            usbConnectChannel
-                                .send(
-                                UsbConnectResult(
-                                    false,
-                                    manufacturerName = sanitizeUsbText(device.manufacturerName),
-                                    productName = sanitizeUsbText(device.productName)
-                                )
-                            )
+                                usbConnectChannel
+                                    .send(
+                                        UsbConnectResult(
+                                            false,
+                                            manufacturerName = sanitizeUsbText(device.manufacturerName),
+                                            productName = sanitizeUsbText(device.productName)
+                                        )
+                                    )
+                            }
                         }
                     }
                 }
@@ -262,7 +264,7 @@ class UsbService(private val context: Context,
 
         Return the sample rate of the endpoint we connected to.
      */
-    suspend fun connect() {
+    suspend fun connect(onFeatureUnitDiscovered: (Float, Float, Float, Float) -> Unit) {
         mutex.withLock {
             try {
                 /*
@@ -276,28 +278,32 @@ class UsbService(private val context: Context,
                  */
 
                 // Select the first item if present, and request permission to access it:
-                val device = usbManager.deviceList.values.firstOrNull()
-                if (device == null) {
+                usbDevice = usbManager.deviceList.values.firstOrNull()
+                if (usbDevice == null) {
                     Timber.i("No USB device found")
                     throw RuntimeException("No USB microphone found. Please plug one in to the phone.")
                 }
 
-                val hp = usbManager.hasPermission(device)   // Already got permission?
-                if (hp) {
-                    Timber.i("Device ${device.deviceName} already has permission")
-                    processDevice(device)
-                } else {
-                    // A hacky way to communicate with the intent handle callback code:
-                    theDevice = device
-                    val permissionIntent = PendingIntent.getBroadcast(
-                        context, 0, Intent(usbPermissionName),
-                        PendingIntent.FLAG_IMMUTABLE
-                    )
+                usbDevice?.let { device ->
+                    val hp = usbManager.hasPermission(device)   // Already got permission?
+                    if (hp) {
+                        Timber.i("Device ${device.deviceName} already has permission")
+                        processDevice(device, onFeatureUnitDiscovered)
+                    } else {
+                        // A hacky way to communicate with the intent handle callback code. There seems
+                        // to be no other way that works:
+                        usbDevice = device
+                        theOnFeatureUnitDiscovered = onFeatureUnitDiscovered
+                        val permissionIntent = PendingIntent.getBroadcast(
+                            context, 0, Intent(usbPermissionName),
+                            PendingIntent.FLAG_IMMUTABLE
+                        )
 
-                    // This following line requests the user interactively for permission, and
-                    // if they grant it, calls processDevice:
-                    Timber.i("Requesting permission for device ${device.deviceName}")
-                    usbManager.requestPermission(device, permissionIntent)
+                        // This following line requests the user interactively for permission, and
+                        // if they grant it, calls processDevice:
+                        Timber.i("Requesting permission for device ${device.deviceName}")
+                        usbManager.requestPermission(device, permissionIntent)
+                    }
                 }
             }
             finally {
@@ -313,7 +319,10 @@ class UsbService(private val context: Context,
      * IMPORTANT: this function can be called asynchronously so its success or failure status
      * is signalled via a channel.
      */
-    private fun processDevice(device: UsbDevice) {
+    private fun processDevice(
+        device: UsbDevice,
+        onFeatureUnitDiscovered: (Float, Float, Float, Float) -> Unit
+    ) {
 
         try {
             val b = usbManager.hasPermission(device)
@@ -346,9 +355,11 @@ class UsbService(private val context: Context,
                         + "The maximum sampling rate currently supported by this app is 384 kHz.")
                 }
 
-            val actualSampleRate = connectToEndpoint(endpointToUse, endpoints)
+            val actualSampleRate = connectToEndpoint(endpointToUse, endpoints, onFeatureUnitDiscovered)
             if (actualSampleRate == null)
                 throw RuntimeException("Unable to connect to the endpoint on device ${device.productName}.")
+
+            endpointData = endpointToUse
 
             val result = UsbConnectResult(
                 true,
@@ -405,7 +416,11 @@ class UsbService(private val context: Context,
         return device
     }
 
-    private fun connectToEndpoint(endpointData: EndpointData, endpoints: List<EndpointData>): Int? {
+    private fun connectToEndpoint(
+        endpointData: EndpointData,
+        endpoints: List<EndpointData>,
+        onFeatureUnitDiscovered: (Float, Float, Float, Float) -> Unit
+    ): Int? {
 
         // In case it is already connected:
         internalDisconnect()
@@ -413,12 +428,12 @@ class UsbService(private val context: Context,
         Timber.i("connectToEndpoint: Attempting to connect to endpoint $endpointData")
 
         val device = endpointData.usbDevice
-        connection = usbManager.openDevice(device)
-        if (connection == null) {
+        usbConnection = usbManager.openDevice(device)
+        if (usbConnection == null) {
             throw RuntimeException("Failed to connect to device ${device.deviceName}")
         }
 
-        connection?.let { conn ->
+        usbConnection?.let { conn ->
             var usbInterface = getUsbInterfaceObject(device, endpoints, endpointData.endpointAddress)
 
             // For simplicity, claim *all* the device's interfaces. That's easier than figuring
@@ -434,7 +449,7 @@ class UsbService(private val context: Context,
                         "(${sanitizeUsbText(device.manufacturerName)} ${sanitizeUsbText(device.productName)})")
                 isConnected = true
 
-                return startStreaming(device, usbInterface, endpointData)
+                return startStreaming(device, usbInterface, endpointData, onFeatureUnitDiscovered)
 
             } else {
                 conn.close()
@@ -445,6 +460,18 @@ class UsbService(private val context: Context,
 
         return null
     }
+
+    /**
+     * USB Audio Class (UAC) Feature Unit Request Codes
+     * Used for controlTransfer bmRequestType Class Interface
+     */
+    private enum class UsbClassRequest(val code: Int) {
+        GET_CUR(0x01),   // Get Current Value
+    }
+
+    private val VOLUME_CONTROL = 0x02
+    private val DEVICE_TO_HOST_CLASS_INTERFACE = 0xA1
+    private val HOST_TO_DEVICE_CLASS_INTERFACE = 0x21
 
     /**
      * Read a UAC2 sample rate over a connection.
@@ -472,11 +499,10 @@ class UsbService(private val context: Context,
         val usbRecipientInterface =
             1   // The get request is directed to an interface (rather than an endpoint or device) - not the iface number.
         val csSamFreqControl = 1    // See A.17.1
-        val classGetCur = 1
 
         val result = conn.controlTransfer(
-            UsbConstants.USB_DIR_IN or UsbConstants.USB_TYPE_CLASS or usbRecipientInterface,  // 0xA1
-            classGetCur,                // 0x01
+            DEVICE_TO_HOST_CLASS_INTERFACE,
+            UsbClassRequest.GET_CUR.code,                // 0x01
             csSamFreqControl shl 8,     // 0x0100,
             clockId shl 8,              // 1024
             buffer,
@@ -490,6 +516,80 @@ class UsbService(private val context: Context,
         Timber.i("UAC2 sample rate is $sampleRate Hz")
 
         return sampleRate
+    }
+
+    /**
+     * USB Audio Class (UAC) Feature Unit Request Codes
+     * Used for controlTransfer bmRequestType Class Interface
+     */
+    private enum class UsbAudioRequest(val code: Int) {
+        SET_CUR(0x01),   // Set Current Value
+        GET_CUR(0x81),   // Get Current Value
+        GET_MIN(0x82),   // Get Minimum Value
+        GET_MAX(0x83),   // Get Maximum Value
+        GET_RES(0x84),   // Get Resolution/Step Size
+    }
+
+    private fun getVolumeValue(
+        connection: UsbDeviceConnection,
+        featureUnitId: Int,
+        interfaceNumber: Int,
+        request: UsbAudioRequest,
+        channel: Int = 0
+    ): Int {
+        val buffer = ByteArray(2) // 16-bit volume
+        val wValue = (VOLUME_CONTROL shl 8) or channel
+        val wIndex = (featureUnitId shl 8) or interfaceNumber
+
+        val received = connection.controlTransfer(
+            DEVICE_TO_HOST_CLASS_INTERFACE, // bmRequestType
+            request.code,                    // bRequest
+            wValue,                          // wValue
+            wIndex,                          // wIndex
+            buffer,                          // data buffer
+            buffer.size,             // length
+            1000                    // timeout in ms
+        )
+
+        if (received != 2)
+            throw IllegalStateException("Failed to get volume control")
+
+        val result: Int = (buffer[1].toInt() shl 8) or (buffer[0].toInt() and 0xFF)
+
+        // Convert 2 bytes to signed 16-bit
+        return result
+    }
+
+    private fun setVolumeValue(
+        connection: UsbDeviceConnection,
+        featureUnitId: Int,
+        interfaceNumber: Int,
+        value: Int,
+        channel: Int = 0
+    ) {
+        val buffer = ByteArray(2)
+
+        // Convert Int to signed 16-bit, then to little-endian bytes
+        val shortValue = value.toShort()
+        buffer[0] = (shortValue.toInt() and 0xFF).toByte()       // LSB
+        buffer[1] = ((shortValue.toInt() shr 8) and 0xFF).toByte() // MSB
+
+        val wValue = (VOLUME_CONTROL shl 8) or channel
+        val wIndex = (featureUnitId shl 8) or interfaceNumber
+
+        val sent = connection.controlTransfer(
+            HOST_TO_DEVICE_CLASS_INTERFACE,
+            UsbAudioRequest.SET_CUR.code,
+            wValue,
+            wIndex,
+            buffer,
+            buffer.size,
+            1000
+        )
+
+        if (sent != 2) {
+            throw IllegalStateException("Failed to set volume control")
+        }
     }
 
     /**
@@ -524,8 +624,10 @@ class UsbService(private val context: Context,
         val bitResolution: Int = Int.MIN_VALUE,
         // val interfacesToClaim: List<Int>,
         val packetSize: Int = 0,
-        val sampleRateSettable: Boolean
-
+        val sampleRateSettable: Boolean,
+        val volumeSettable: Boolean,
+        val featureUnitId: Int?,
+        val audioControlInterfaceNumber: Int?
     ) : Comparable<EndpointData>, Parcelable {
 
         override fun compareTo(other: EndpointData): Int = compareValuesBy(this, other,
@@ -644,7 +746,10 @@ class UsbService(private val context: Context,
         EXPECTING_ASENDPOINT
     }
 
-    private fun parseEndpointsFromDescriptor(device: UsbDevice, rawDescriptors: ByteArray): List<EndpointData> {
+    private fun parseEndpointsFromDescriptor(
+        device: UsbDevice,
+        rawDescriptors: ByteArray
+    ): List<EndpointData> {
 
         var candidateEndpoints = mutableListOf<EndpointData>()
 
@@ -690,6 +795,10 @@ class UsbService(private val context: Context,
         var uac2ClockId: Int? = null
         // var interfacesToClaim = mutableListOf<Int>()
         var currentlyParsingInterface: Int? = null
+        var volumeSettable = false
+        var featureUnitId: Int? = null
+        var audioControlInterfaceNumber: Int? = null
+
 
         for (desc in parser.descriptors) {
 
@@ -735,6 +844,30 @@ class UsbService(private val context: Context,
                         catch (e: ClassCastException) {
                         }
 
+                        // See if there is a feature unit with volume control:
+                        try {
+                            val d = desc as UsbACFeatureUnit    // Throws if not a feature unit.
+
+                            val rawData = d.rawData
+                            val bUnitId = rawData[0]
+                            val bSourceId = rawData[1]
+                            val bControlSize = rawData[2]
+                            if (bControlSize > 0) {
+                                val bmaControls0 = rawData[3]
+                                if (bmaControls0.toInt() and 2 != 0) {
+                                    volumeSettable = true
+                                    featureUnitId = bUnitId.toInt()
+                                    audioControlInterfaceNumber = currentlyParsingInterface
+                                }
+                                Timber.d("descriptor: UsbACFeatureUnit found: volumeControlSupported = $volumeSettable, " +
+                                        "currentlyParsingInterface = $currentlyParsingInterface" +
+                                        "featureUnitId = $featureUnitId")
+                            }
+                        }
+                        catch (e: ClassCastException) {
+                        }
+
+                        // See if there is a UAC2 clock source:
                         try {
                             val d = desc as UsbACInterfaceUnparsed
                             // Is it a clock source descriptor? There is no android class for this at present,
@@ -770,7 +903,7 @@ class UsbService(private val context: Context,
                     }
 
                     DescriptorParserState.EXPECTING_ASGENERALINTERFACE -> {
-                        // If no match try for another interface.
+                        // Default: if no match, try for another interface.
                         state = DescriptorParserState.EXPECTING_SUITABLEINTERFACE
                         consumed = false
 
@@ -894,7 +1027,10 @@ class UsbService(private val context: Context,
                                 numChannels,
                                 bitResolution,
                                 packetSize,
-                                sampleRateSettable
+                                sampleRateSettable,
+                                volumeSettable,
+                                featureUnitId,
+                                audioControlInterfaceNumber
                             )
 
                             candidateEndpoints.add(details)
@@ -929,9 +1065,10 @@ class UsbService(private val context: Context,
     private fun startStreaming(
         device: UsbDevice,
         usbInterface: UsbInterface,
-        endpointData: EndpointData
+        endpointData: EndpointData,
+        onFeatureUnitDiscovered: (Float, Float, Float, Float) -> Unit
     ): Int? {
-        connection?.let { conn ->
+        usbConnection?.let { conn ->
 
             // Do as much setup as we can here via standard Android objects:
 
@@ -957,7 +1094,7 @@ class UsbService(private val context: Context,
                         /*
                          * Important:
                          * Don't try to set/get the sample rate for endpoints that don't support that, you will end up with a
-                         * garbage sample rate. On the other hand, if it is suppored, we must set it, even if only one value is
+                         * garbage sample rate. On the other hand, if it is supported, we must set it, even if only one value is
                          * available. This is to avoid very strange effects with EMT2, which otherwise sends data frames sized
                          * for 288 kHz, which is not he advertised sampling rate, though interesting.
                          */
@@ -967,6 +1104,35 @@ class UsbService(private val context: Context,
                 }
                 endpointData.uac2ClockId?.let { id ->
                     actualSampleRate = getUac2SampleRate(conn, endpointData.uac2ClockId)
+                }
+
+                if (endpointData.volumeSettable &&
+                    endpointData.audioControlInterfaceNumber != null &&
+                    endpointData.featureUnitId != null) {
+                    // Read the allowable volume range from the device:
+                    val unitId = endpointData.featureUnitId
+                    val ifNumber = endpointData.audioControlInterfaceNumber
+
+                    try {
+                        val cur =
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_CUR)
+                        val min =
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_MIN)
+                        val max =
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_MAX)
+                        val res =
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_RES)
+                        Timber.d("Settable volume discovered in the USB descriptor.")
+
+                        if (min <= max && res > 0) {
+                            // Notify those who would like to know:
+                            Timber.d("onFeatureUnitDiscovered invoked: $min $max $res $cur")
+                            onFeatureUnitDiscovered(min / 256f, max / 256f, res / 256f, cur / 256f)
+                        }
+                    }
+                    catch (e: IllegalStateException) {
+                        Timber.e("Unable to read microphone volume values: $e")
+                    }
                 }
 
                 val range = 1..2
@@ -1072,7 +1238,7 @@ class UsbService(private val context: Context,
         */
     }
 
-    private fun getAudioOutputDevices (): Array<AudioDeviceInfo> {
+    private fun getAudioOutputDevices(): Array<AudioDeviceInfo> {
 
         val devices = audioManager.getDevices(GET_DEVICES_OUTPUTS)
         for (device in devices) {
@@ -1098,8 +1264,10 @@ class UsbService(private val context: Context,
             }
 
             Timber.i("disconnecting")
-            connection?.close()
-            connection = null
+            usbConnection?.close()
+            usbConnection = null
+            usbDevice = null
+            endpointData = null
         }
     }
 
@@ -1168,6 +1336,27 @@ class UsbService(private val context: Context,
         mutex.withLock {
             Timber.d("Setting audio boost to $audioBoostFactor")
             nativeUsb.setAudioBoostFactor(audioBoostFactor)
+        }
+    }
+
+    suspend fun setVolume(volumeDB: Float) {
+        mutex.withLock {
+            usbConnection?.let { conn ->
+                endpointData?.let { e ->
+                    val v = (volumeDB * 256).toInt()
+                    if (e.featureUnitId != null && e.audioControlInterfaceNumber != null) {
+                        try {
+                            setVolumeValue(
+                                conn,
+                                e.featureUnitId, e.audioControlInterfaceNumber, v
+                            )
+                        }
+                        catch (e: IllegalStateException) {
+                            Timber.e("Unable to set microphone volume: $e")
+                        }
+                    }
+                }
+            }
         }
     }
 
