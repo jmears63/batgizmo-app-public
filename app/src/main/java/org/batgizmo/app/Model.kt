@@ -88,12 +88,32 @@ data class OpenWavFileResult(
  */
 object LiveDataBridge {
 
-    data class BufferDescriptor(val nativeAddress: Long, val samples: Int)
+    sealed class BufferDescriptor {
+        abstract val samples: Int
+
+        /** Samples in a native URB buffer (USB live path). */
+        data class Native(val nativeAddress: Long, override val samples: Int) : BufferDescriptor()
+
+        /** Samples in a Kotlin heap buffer (reserved for non-USB live sources). */
+        data class Heap(val data: ShortArray, val offset: Int, override val samples: Int) :
+            BufferDescriptor()
+    }
 
     // Provide finite capacity for buffering and decoupling.
     // Should probably match the URBS_TO_JUGGLE in the native layer.
     val renderingChannel = Channel<BufferDescriptor>(capacity = 10)
     val fileWriterChannel = Channel<BufferDescriptor>(capacity = 100)
+
+    private fun trySendToChannels(descriptor: BufferDescriptor) {
+        val rc1 = renderingChannel.trySend(descriptor)
+        if (!rc1.isSuccess) {
+            Timber.e("renderingChannel is full: data buffer discarded")
+        }
+        val rc2 = fileWriterChannel.trySend(descriptor)
+        if (!rc2.isSuccess) {
+            Timber.e("fileWriterChannel is full: data buffer discarded")
+        }
+    }
 
     /**
      * This method is called from the native layer in thread it uses for data
@@ -104,18 +124,7 @@ object LiveDataBridge {
      */
     @JvmStatic
     fun onDataBufferReady(nativeAddress: Long, samples: Int) {
-
-        // This is the synchronous method for send an event in a channel.
-        // It may fail, for example, if the channel is full, which is OK.
-
-        val rc1 = renderingChannel.trySend(BufferDescriptor(nativeAddress, samples))
-        if (!rc1.isSuccess) {
-            Timber.e("renderingChannel is full: data buffer discarded")
-        }
-        val rc2 = fileWriterChannel.trySend(BufferDescriptor(nativeAddress, samples))
-        if (!rc2.isSuccess) {
-            Timber.e("fileWriterChannel is full: data buffer discarded")
-        }
+        trySendToChannels(BufferDescriptor.Native(nativeAddress, samples))
     }
 }
 

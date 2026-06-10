@@ -245,12 +245,12 @@ class FileWriter(
                         copiedCount = sourceSamples
                     }
                     else {
-                        copiedCount = nativeUSB.copyURBBufferData(
-                            bufferDescriptor.nativeAddress,
-                            sourceSamples,
+                        copiedCount = LiveDataCopy.copyIntoRingBuffer(
+                            bufferDescriptor,
                             buffer,
                             nextWriteIndex,
-                            bufferSizeEntries
+                            bufferSizeEntries,
+                            nativeUSB
                         )
                     }
 

@@ -85,8 +85,8 @@ static volatile int s_audio_out_rate = 0;
 static int32_t calculate_iir_coefficient(double cutoff_hz, double sample_rate_hz) {
     double exponent = -2.0 * M_PI * cutoff_hz / sample_rate_hz;
     double a = 1.0 - exp(exponent);
-    auto s_downsampling_iir_coefficient = (int32_t) lround(a * (1LL << 31));
-    return s_downsampling_iir_coefficient;
+    int32_t coeff = (int32_t) lround(a * (1LL << 31));
+    return coeff;
 }
 
 /*
@@ -121,9 +121,12 @@ typedef struct {
 
 static int32_t s_downsampling_iir_coefficient = 0;
 static aa_filter_state_t s_downsampling_filter_state;
+/* Decimation phase for the streaming path; preserved across write_audio_output calls. */
+static int32_t s_stream_decimation_counter = 0;
 
 static void downsampling_filter_reset() {
     memset(&s_downsampling_filter_state, 0, sizeof(s_downsampling_filter_state));
+    s_stream_decimation_counter = 0;
 }
 
 static bool start_audio_output(jint output_device_id, void* context = nullptr);
@@ -952,6 +955,9 @@ static void stop_audio_output(JNIEnv *env) {
 static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
                                 int16_t *downsampled_buffer, int32_t &decimation_counter) {
     int decimated_sample_count = 0;
+    int decimation_factor = s_decimation_factor;
+    if (decimation_factor < 1)
+        decimation_factor = 1;
 
     // Should this be split into multiple loops that it is more likely to
     // handled entirely in CPU registers? But then we would need more intermediate storage, and
@@ -976,7 +982,7 @@ static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
 
         // Down sample:
         decimation_counter++;
-        if (decimation_counter == s_decimation_factor) {
+        if (decimation_counter == decimation_factor) {
             decimation_counter = 0;
 
             // "filtered" is the value in 32 bit signed range, held in a 64 bit integer.
@@ -1023,9 +1029,8 @@ static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jin
 
     static int16_t downsampled_buffer[MAX_DATA_POINTS_PER_URB];
 
-    int32_t decimation_counter = 0;
     int decimated_sample_count = do_signal_processing(pBuffer, sample_count,
-                                                      downsampled_buffer, decimation_counter);
+                                                      downsampled_buffer, s_stream_decimation_counter);
 
     // The write may block until there is enough room in its write buffer
     // to write all our data. Note buffer_frames and burst size when we opened

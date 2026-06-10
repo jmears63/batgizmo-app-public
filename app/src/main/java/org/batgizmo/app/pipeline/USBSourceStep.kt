@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.HORange
 import org.batgizmo.app.LiveDataBridge
+import org.batgizmo.app.LiveDataCopy
 import org.batgizmo.app.UIModel
 import timber.log.Timber
 
@@ -76,13 +77,13 @@ class USBSourceStep(
                 // to the finally block for cleanup and to prevent this job becoming a zombie:
                 for (bufferDescriptor in LiveDataBridge.renderingChannel) {
                     if (rawDataCapacity > 0) {
-                        // Copy the native data into rawDataBuffer with wrap:
-                        val copiedCount = nativeUSB.copyURBBufferData(
-                            bufferDescriptor.nativeAddress,
-                            bufferDescriptor.samples,
+                        // Copy live data into rawDataBuffer with wrap:
+                        val copiedCount = LiveDataCopy.copyIntoRingBuffer(
+                            bufferDescriptor,
                             rangedRawDataBuffer.buffer,
                             rawDataBufferOffset,
-                            rawDataCapacity
+                            rawDataCapacity,
+                            nativeUSB
                         )
                         rawDataBufferOffset += copiedCount
 
