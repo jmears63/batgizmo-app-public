@@ -40,8 +40,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.batgizmo.app.pipeline.LiveConnectResult
 import org.batgizmo.app.pipeline.NativeUSB
-import org.batgizmo.app.pipeline.UsbService
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import java.io.File
@@ -59,7 +59,7 @@ class FileWriter(
     private val context: Context,
     private val model: UIModel,
     private val locationFlow: StateFlow<Location?>,
-    private val usbConnectResult: UsbService.UsbConnectResult,
+    private val liveConnectResult: LiveConnectResult,
     private val sampleRate: Int,
     private val signalCurrentlyWriting: (Boolean) -> Unit,
     private val onError: (String) -> Unit
@@ -913,9 +913,9 @@ class FileWriter(
         // Required GUANO fields
         fields["GUANO|Version"] = "1.0"
 
-        usbConnectResult.sampleRate?.let { fields["Samplerate"] = it.toString() }
-        usbConnectResult.manufacturerName?.let { fields["Make"] = it }
-        usbConnectResult.productName?.let { fields["Model"] = it }
+        liveConnectResult.sampleRate?.let { fields["Samplerate"] = it.toString() }
+        liveConnectResult.manufacturerName?.let { fields["Make"] = it }
+        liveConnectResult.productName?.let { fields["Model"] = it }
         guanoDataTime?.let { fields["Timestamp"] = it }
 
         if (model.settings.includeLocationInFile) {

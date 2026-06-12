@@ -110,8 +110,8 @@ class NativeUSB {
 
 class UsbService(private val context: Context,
                  private val model: UIModel,
-                 private val usbConnectChannel: Channel<UsbConnectResult>,
-                 private val usbErrorChannel: Channel<UsbErrorResult>,
+                 private val usbConnectChannel: Channel<LiveConnectResult>,
+                 private val usbErrorChannel: Channel<LiveStreamErrorResult>,
                  private val scope: CoroutineScope) {
 
     companion object {
@@ -119,23 +119,6 @@ class UsbService(private val context: Context,
         const val MAX_SAMPLING_RATE = 384000
         const val MIN_SAMPLING_RATE = 44100
     }
-
-    data class UsbConnectResult(
-        val connectedOK: Boolean,
-        val errorMessage: String? = null,
-        val deviceName: String? = null,
-        val manufacturerName: String? = null,
-        val productName: String? = null,
-        val sampleRate: Int? = null
-    )
-
-    data class UsbErrorResult(
-        val errno: Int
-    )
-
-    data class AudioStartResult(
-        val startedOK: Boolean
-    )
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
 
@@ -230,7 +213,7 @@ class UsbService(private val context: Context,
 
                                 usbConnectChannel
                                     .send(
-                                        UsbConnectResult(
+                                        LiveConnectResult(
                                             false,
                                             manufacturerName = sanitizeUsbText(device.manufacturerName),
                                             productName = sanitizeUsbText(device.productName)
@@ -361,7 +344,7 @@ class UsbService(private val context: Context,
 
             endpointData = endpointToUse
 
-            val result = UsbConnectResult(
+            val result = LiveConnectResult(
                 true,
                 deviceName = device.deviceName,
                 manufacturerName = sanitizeUsbText(device.manufacturerName),
@@ -676,7 +659,7 @@ class UsbService(private val context: Context,
                     "Exception when connecting to USB device: $message"
                 }
 
-                usbConnectChannel.send(UsbConnectResult(false, errorMessage = e.message))
+                usbConnectChannel.send(LiveConnectResult(false, errorMessage = e.message))
             }
         }
     }
@@ -1176,7 +1159,7 @@ class UsbService(private val context: Context,
                     // occurred in the thread. In the latter case, the returned value is errno.
 
                     if (errno != 0) {
-                        usbErrorChannel.trySend(UsbErrorResult(errno))
+                        usbErrorChannel.trySend(LiveStreamErrorResult(errno))
                     }
 
                     Timber.i("USB streaming thread existing with errno = $errno")

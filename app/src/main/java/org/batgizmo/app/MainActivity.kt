@@ -62,14 +62,17 @@ class MainActivity : ComponentActivity() {
     private val viewModel: UIModel by viewModels()
     private lateinit var uiTopLevel: TopLevelUI
 
-    // Request permission to access locationL
-    private val requestPermissionLauncher =
+    private val requestLocationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             Timber.i("Location permission granted: $granted")
             if (granted) {
-                // Kick off a one off location request
                 viewModel.locationTracker.requestOneTimeLocation()
             }
+        }
+
+    private val requestRecordAudioPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            Timber.i("Record audio permission granted: $granted")
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -86,8 +89,8 @@ class MainActivity : ComponentActivity() {
         val factory = UIModelFactory(application, dataStore)
         val model = ViewModelProvider(this, factory).get(UIModel::class.java)
 
-        // Request permission to access location (which might or might not succeed):
-        requestPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        requestLocationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        requestRecordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 
         // Tell Android we'll manage insets:
         WindowCompat.setDecorFitsSystemWindows(window, false)

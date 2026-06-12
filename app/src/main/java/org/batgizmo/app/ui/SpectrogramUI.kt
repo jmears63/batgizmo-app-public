@@ -110,7 +110,9 @@ import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.AbstractPipeline
-import org.batgizmo.app.pipeline.UsbService
+import org.batgizmo.app.pipeline.LiveAudioStartResult
+import org.batgizmo.app.pipeline.LiveConnectResult
+import org.batgizmo.app.pipeline.LiveStreamErrorResult
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
@@ -1197,7 +1199,7 @@ class SpectrogramUI(
                 if (checked) {
                     Timber.i("Live mode: connecting.")
 
-                    // Start data streaming from the USB device, asynchronously:
+                    // Start live data acquisition asynchronously:
                     liveMode.intValue = LiveMode.CONNECTING.value
                     model.openLive(::fileWriterErrorHandler)
                 }
@@ -1504,7 +1506,7 @@ class SpectrogramUI(
     }
 
     private fun onLiveConnected(
-        lcr: UsbService.UsbConnectResult,
+        lcr: LiveConnectResult,
         appMode: MutableIntState
     ) {
 
@@ -1550,7 +1552,7 @@ class SpectrogramUI(
     }
 
     private fun onLiveAudioStarted(
-        asr: UsbService.AudioStartResult,
+        asr: LiveAudioStartResult,
         appMode: MutableIntState
     ) {
         Timber.i("onLiveAudioStarted called: $asr")
@@ -1567,7 +1569,7 @@ class SpectrogramUI(
      * This method is called there is an error subsequent to successful
      * connection to the USB microphone.
      */
-    private fun onUsbError(result: UsbService.UsbErrorResult) {
+    private fun onUsbError(result: LiveStreamErrorResult) {
         model.closePipeline()   // Idempotent. Also stops audio and file writing.
 
         uiState.liveMode.intValue = LiveMode.OFF.value

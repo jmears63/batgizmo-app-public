@@ -39,6 +39,7 @@ data class Settings(
     var amplitudePaneVisibility: Int = VisibilityOptions.AUTO.value,
     var showGrid: Boolean = true,
     var defaultLiveTimeSpanS: Int = DefaultLiveTimeSpanOptions.DEFAULTLIVETIMESPAN_3S.value,
+    var liveInputSource: Int = LiveInputSourceOptions.USB.value,
     var pageOverlapPercent: Int = PagingOverlapOptions.PAGINGOVERLAP_25.value,                  // *
     var autoBnCEnabledViewer: Boolean = true,
     var autoBnCEnabledLive: Boolean = true,
@@ -114,6 +115,14 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
+    enum class LiveInputSourceOptions(val value: Int, val label: String) : EnumHelper {
+        USB(1, "External USB microphone"),
+        PHONE_MIC(2, "Internal microphone");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+    }
+
     enum class DefaultLiveTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
         DEFAULTLIVETIMESPAN_NONE(0, "Use existing"),
         DEFAULTLIVETIMESPAN_1S(1, "1s"),
@@ -182,6 +191,7 @@ data class Settings(
     private val keyAutoBaselineEnabled = booleanPreferencesKey("autoBaselineEnabled")
     private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
     private val keyDefaultLiveTimeSpanS = intPreferencesKey("keyDefaultLiveTimeSpanS")
+    private val keyLiveInputSource = intPreferencesKey("liveInputSource")
     private val keyPageOverlapPercent = intPreferencesKey("keyPageOverlapPercent")
     private val keyLeftHandedMode = booleanPreferencesKey("keyLeftHandedMode")
     private val keyEnableLogging = booleanPreferencesKey("enableLogging")
@@ -213,6 +223,7 @@ data class Settings(
         prefs[keyAutoBaselineEnabled] = autoBaselineEnabled
         prefs[keyAutoBaselineEnabled] = autoBaselineEnabled
         prefs[keyDefaultLiveTimeSpanS] = defaultLiveTimeSpanS
+        prefs[keyLiveInputSource] = liveInputSource
         prefs[keyPageOverlapPercent] = pageOverlapPercent
         prefs[keyLeftHandedMode] = leftHandButtons
         prefs[keyEnableLogging] = enableLogging
@@ -250,6 +261,8 @@ data class Settings(
             autoBaselineEnabled = requireNotNull(prefs[keyAutoBaselineEnabled])
         if (prefs[keyDefaultLiveTimeSpanS] != null)
             defaultLiveTimeSpanS = requireNotNull(prefs[keyDefaultLiveTimeSpanS])
+        if (prefs[keyLiveInputSource] != null)
+            liveInputSource = requireNotNull(prefs[keyLiveInputSource])
         if (prefs[keyPageOverlapPercent] != null)
             pageOverlapPercent = requireNotNull(prefs[keyPageOverlapPercent])
         if (prefs[keyLeftHandedMode] != null)

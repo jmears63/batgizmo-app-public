@@ -78,6 +78,24 @@ abstract class AbstractPipeline(
         const val CANARY_ENTRIES = 1
         const val CANARY_VALUE = 0xFACE.toShort()
 
+        /**
+         * Live spectrogram slice size at [NOMINAL_SLICE_REFERENCE_SAMPLE_RATE_HZ].
+         * About 26 ms of audio, matching the USB streaming update cadence.
+         */
+        private const val NOMINAL_SLICE_ENTRIES_AT_REFERENCE = 10000
+        private const val NOMINAL_SLICE_REFERENCE_SAMPLE_RATE_HZ = 384_000
+
+        /**
+         * Raw samples per pipeline slice, scaled so update interval is similar at any sample rate.
+         */
+        fun nominalSliceEntriesForSampleRate(sampleRate: Int, minEntries: Int): Int {
+            val scaled = (
+                NOMINAL_SLICE_ENTRIES_AT_REFERENCE.toLong() * sampleRate
+                    / NOMINAL_SLICE_REFERENCE_SAMPLE_RATE_HZ
+                ).toInt()
+            return maxOf(scaled, minEntries)
+        }
+
         external fun nativeFindBnCRange(
             xMin: Int, xMax: Int,
             yMin: Int, yMax: Int,
@@ -968,8 +986,8 @@ abstract class AbstractPipeline(
             (rawPageDataCount - nFft) / fftStride + 1
 
         // The following size must be greater than the maximum FFT window size - preferably,
-        // many times. This value determines the UI update granularity.
-        val nominalSliceEntries = 10000 // Approx 26ms at 384 kHz.
+        // many times. This value determines the UI update granularity (~26 ms at any rate).
+        val nominalSliceEntries = nominalSliceEntriesForSampleRate(sampleRate, nFft)
 
         // Round the slice size to accommodate an exact number of strides, allowing for a half window at
         // each end of the slice:

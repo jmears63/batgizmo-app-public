@@ -58,7 +58,14 @@ import kotlinx.coroutines.withContext
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.ColourMapStep
 import org.batgizmo.app.pipeline.FileViewerPipeline
+import org.batgizmo.app.pipeline.LiveAudioStartResult
+import org.batgizmo.app.pipeline.LiveConnectResult
+import org.batgizmo.app.pipeline.LiveInputSource
+import org.batgizmo.app.pipeline.LiveStreamErrorResult
 import org.batgizmo.app.pipeline.LiveUSBPipeline
+import org.batgizmo.app.pipeline.MicCaptureService
+import org.batgizmo.app.pipeline.DeviceMicInputSource
+import org.batgizmo.app.pipeline.UsbLiveInputSource
 import org.batgizmo.app.pipeline.UsbService
 import org.batgizmo.app.ui.GraphBase
 import org.batgizmo.app.ui.SpectrogramUI
@@ -125,6 +132,18 @@ object LiveDataBridge {
     @JvmStatic
     fun onDataBufferReady(nativeAddress: Long, samples: Int) {
         trySendToChannels(BufferDescriptor.Native(nativeAddress, samples))
+    }
+
+    /**
+     * Post samples from a Kotlin heap buffer (phone microphone live path).
+     * A copy is taken so the capture thread can reuse its read buffer immediately.
+     */
+    fun onHeapDataBufferReady(source: ShortArray, offset: Int, samples: Int) {
+        if (samples <= 0)
+            return
+        val copy = ShortArray(samples)
+        source.copyInto(copy, destinationOffset = 0, startIndex = offset, endIndex = offset + samples)
+        trySendToChannels(BufferDescriptor.Heap(copy, 0, samples))
     }
 }
 
@@ -245,8 +264,156 @@ class UIModel(application: Application,
             // Signal to the main streaming loop to exit. Otherwise, the kotlin thread
             // never finishes and it continues zombie like after the app has appeared
             // to close. Does no harm if we are not connected.
-            usbService.disconnect()
+            activeLiveInputSource?.disconnect() ?: usbService.disconnect()
         }
+    }
+
+    private fun createLiveInputSource(): LiveInputSource {
+        return when (settings.liveInputSource) {
+            Settings.LiveInputSourceOptions.PHONE_MIC.value ->
+                DeviceMicInputSource(micCaptureService)
+
+            else ->
+                UsbLiveInputSource(usbService, usbConnectChannel, usbConnectFlow)
+        }
+    }
+
+    private suspend fun cleanupPartialLiveConnect(liveInputSource: LiveInputSource) {
+        fileWriter?.shutdown()
+        fileWriter = null
+        pipeline?.shutdown()
+        pipeline = null
+        connectedLiveInputSource = null
+        liveInputSource.disconnect()
+        activeLiveInputSource = null
+    }
+
+    private suspend fun connectLiveInputAndBuildPipeline(
+        pps: PipelineParameters,
+        context: Context,
+        onFileWriterError: (String) -> Unit,
+        resetLiveVisibleRanges: Boolean,
+    ): LiveConnectResult {
+        val liveInputSource = createLiveInputSource()
+        activeLiveInputSource = liveInputSource
+
+        if (settings.liveInputSource == Settings.LiveInputSourceOptions.USB.value) {
+            // Make sure there are no pending responses:
+            drainChannel(usbErrorChannel)
+        }
+
+        try {
+            val result = liveInputSource.connect { min, max, res, cur ->
+                // Lambda executed if the microphone supports volume setting:
+                mutableMicrophoneVolumeParametersFlow.value = UsbVolumeParameters(min, max, res)
+                mutableMicrophoneGainFlow.value = cur
+            }
+
+            if (!result.connectedOK) {
+                liveInputSource.disconnect()
+                activeLiveInputSource = null
+                return result
+            }
+
+            require(result.sampleRate != null)
+
+            val p = LiveUSBPipeline(
+                pps,
+                viewModelScope,
+                context, this,
+                spectrogramBitmapHolder, amplitudeBitmapHolder,
+                mutableTimeAxisRangeFlow, mutableFrequencyAxisRangeFlow,
+                mutableDetailsTextFlow, result.sampleRate,
+                result.sampleRate * pps.dataPageTimeSpanS
+            ) {
+                // This lambda is called if a trigger was detected in the live data.
+
+                // Trigger a file write:
+                fileWriter?.trigger()
+                // Trigger the monitor lamp in the Settings UI:
+                triggerMonitorChannel.trySend(Unit)
+            }
+
+            // Initial values for the FFT parameters (window, overlap):
+            val defaultSize = DpSize(100.dp, 100.dp) // Square by default.
+            Timber.d("spectrogramSizeDp = $spectrogramSizeDp in connectLiveInputAndBuildPipeline()")
+            val fftParameters = p.getDefaultFftParameters(
+                result.sampleRate,
+                spectrogramSizeDp ?: defaultSize
+            )
+
+            // The following creates the pipeline internals if they don't already exist:
+            p.fullExecute(
+                fftParameters = fftParameters,
+                amplitudeSizeDp = amplitudeSizeDp,
+                doRender = false
+            )
+
+            pipeline = p
+            connectedLiveInputSource = settings.liveInputSource
+
+            if (resetLiveVisibleRanges) {
+                // Preset the time range in live mode to a value according to settings.
+                // This has a side affect of updating the axis ranges in the UI:
+                val (timeAxisRange, dummy) = getTimeAxisRangeForLive()
+                mutableTimeAxisRangeFlow.value = timeAxisRange
+                val logicalTimeRange = FloatRange(
+                    0f,
+                    timeAxisRangeFlow.value.endInclusive / pps.dataPageTimeSpanS
+                )
+                internalSetSpectrogramVisibleRange(logicalTimeRange, FloatRange(0f, 1f))
+            }
+
+            // Start up the file writer ready to write data to file:
+            fileWriter = FileWriter(
+                viewModelScope, getApplication(),
+                this, locationFlow, result, result.sampleRate,
+                { isWriting: Boolean ->
+                    mutableCurrentlyWritingFlow.value = isWriting
+                },
+                onFileWriterError
+            )
+            fileWriter?.run()
+
+            return result
+        } catch (e: OutOfMemoryError) {
+            cleanupPartialLiveConnect(liveInputSource)
+            return LiveConnectResult(false, oomMessage)
+        } catch (e: Exception) {
+            Timber.w(e, "Exception during live connect")
+            cleanupPartialLiveConnect(liveInputSource)
+            return LiveConnectResult(
+                connectedOK = false,
+                errorMessage = e.localizedMessage ?: "Unable to connect live input source."
+            )
+        }
+    }
+
+    private suspend fun reconnectLiveInputSource(onFileWriterError: (String) -> Unit): LiveConnectResult {
+        Timber.i(
+            "Live input source changed from $connectedLiveInputSource to ${settings.liveInputSource}; reconnecting"
+        )
+
+        activeLiveInputSource?.disconnect()
+        activeLiveInputSource = null
+
+        fileWriter?.shutdown()
+        fileWriter = null
+
+        pipeline?.shutdown()
+        pipeline = null
+        connectedLiveInputSource = null
+
+        mutableMicrophoneVolumeParametersFlow.value = null
+        mutableMicrophoneGainFlow.value = null
+
+        val pps = settings.pipelineParameters.copy()
+        return connectLiveInputAndBuildPipeline(
+            pps,
+            getApplication(),
+            onFileWriterError,
+            resetLiveVisibleRanges = false
+        )
     }
 
     // The single source of truth for the BnC slider value is normalize to the range 0f..1f.
@@ -372,20 +539,25 @@ class UIModel(application: Application,
     private var currentFftParameters: AbstractPipeline.FftParameters = defaultFftParameters
 
     // Signal to the UI that an attempt to open a live connection has completed:
-    private val liveConnectChannel = Channel<UsbService.UsbConnectResult>(Channel.BUFFERED)
+    private val liveConnectChannel = Channel<LiveConnectResult>(Channel.BUFFERED)
     val liveConnectFlow = liveConnectChannel.receiveAsFlow()
 
     // Signal to the UI that an attempt to start audio has completed:
-    private val liveAudioStartChannel = Channel<UsbService.AudioStartResult>(Channel.BUFFERED)
+    private val liveAudioStartChannel = Channel<LiveAudioStartResult>(Channel.BUFFERED)
     val liveAudioStartFlow = liveAudioStartChannel.receiveAsFlow()
 
     // Signal to this model that an attempt to connect to the USB device has completed:
-    private val usbConnectChannel = Channel<UsbService.UsbConnectResult>(Channel.BUFFERED)
+    private val usbConnectChannel = Channel<LiveConnectResult>(Channel.BUFFERED)
     private val usbConnectFlow = usbConnectChannel.receiveAsFlow()
-    private val usbErrorChannel = Channel<UsbService.UsbErrorResult>(Channel.BUFFERED)
+    private val usbErrorChannel = Channel<LiveStreamErrorResult>(Channel.BUFFERED)
     val usbErrorFlow = usbErrorChannel.receiveAsFlow()
     private val usbService =
         UsbService(getApplication(), this, usbConnectChannel, usbErrorChannel, viewModelScope)
+    private val micCaptureService =
+        MicCaptureService(getApplication(), viewModelScope)
+    private var activeLiveInputSource: LiveInputSource? = null
+    private var connectedLiveInputSource: Int? = null
+    private var liveFileWriterErrorHandler: ((String) -> Unit)? = null
 
     data class AppModeRequest(
         val mode: AppMode,
@@ -711,11 +883,11 @@ class UIModel(application: Application,
     }
 
     fun openLive(onFileWriterError: (String) -> Unit) {
-        val model = this
+        liveFileWriterErrorHandler = onFileWriterError
         // Heavy processing in CPU worker thread:
         viewModelScope.launch(Dispatchers.Default) {
             val context: Context = getApplication()
-            var usbConnectResult: UsbService.UsbConnectResult? = null
+            var liveConnectResult: LiveConnectResult? = null
 
             // Allow any previous pipeline async cleanup to complete before we create a new one,
             // to avoid overlap and races:
@@ -740,87 +912,12 @@ class UIModel(application: Application,
                     mutableAmplitudeVisibleRangeFlow.value = defaultAmplitudeVisibleRange
                     // mutableTimeAxisRangeFlow.value = defaultTimeAxisRange
 
-                    /*
-                        Connect to the USB data stream, very asynchronously because user
-                        approval may be required. This is two parts:
-                        * 1: The connect call itself suspends before returning. User interaction
-                        *       may be requested to approve access to the device.
-                        * 2: Finally an event is posted into a channel for us to pick up.
-                     */
-                    // Make sure there are no pending responses:
-                    drainChannel(usbConnectChannel)
-                    drainChannel(usbErrorChannel)
-
-                    // Part 1:
-                    // Suspend until connect is complete, and handle any exceptions the obvious way:
-                    coroutineScope {
-                        usbService.connect( {
-                            min: Float, max: Float, res: Float, cur: Float ->
-
-                            // Lambda executed if the microphone supports volume setting:
-                            mutableMicrophoneVolumeParametersFlow.value = UsbVolumeParameters(min, max, res)
-                            mutableMicrophoneGainFlow.value = cur
-                        })
-                    }
-
-                    // Part 2: suspend until the *first* response (collect would loop for ever):
-                    val result = usbConnectFlow.first()
-
-                    usbConnectResult = result
-                    if (result.connectedOK) {
-                        require(result.sampleRate != null)
-
-                        val p = LiveUSBPipeline(
-                            pps,
-                            viewModelScope,
-                            context, model,
-                            spectrogramBitmapHolder, amplitudeBitmapHolder,
-                            mutableTimeAxisRangeFlow, mutableFrequencyAxisRangeFlow,
-                            mutableDetailsTextFlow, result.sampleRate,
-                            result.sampleRate * pps.dataPageTimeSpanS
-                        ) {
-                            // This lambda is called if a trigger was detected in the live data.
-
-                            // Trigger a file write:
-                            fileWriter?.trigger()
-                            // Trigger the monitor lamp in the Settings UI:
-                            triggerMonitorChannel.trySend(Unit)
-                        }
-
-                        // Initial values for the FFT parameters (window, overlap):
-                        val defaultSize = DpSize(100.dp, 100.dp) // Square by default.
-                        Timber.d("spectrogramSizeDp = $spectrogramSizeDp in openLive()")
-                        val fftParameters = p.getDefaultFftParameters(
-                            result.sampleRate,
-                            spectrogramSizeDp ?: defaultSize
-                        )
-
-                        // The following creates the pipeline internals if they don't already exist:
-                        p.fullExecute(
-                            fftParameters = fftParameters,
-                            amplitudeSizeDp = amplitudeSizeDp,
-                            doRender = false
-                        )
-
-                        pipeline = p
-
-                        // Preset the time range in live mode to a value according to settings.
-                        // This has a side affect of updating the axis ranges in the UI:
-                        val (timeAxisRange, dummy) = getTimeAxisRangeForLive()
-                        mutableTimeAxisRangeFlow.value = timeAxisRange
-                        val logicalTimeRange = FloatRange(0f,
-                            timeAxisRangeFlow.value.endInclusive / pps.dataPageTimeSpanS)
-                        internalSetSpectrogramVisibleRange(logicalTimeRange, FloatRange(0f, 1f))
-
-                        // Start up the file writer ready to write data to file:
-                        fileWriter = FileWriter(viewModelScope, getApplication(),
-                            model, locationFlow, usbConnectResult, result.sampleRate,
-                            { isWriting: Boolean ->
-                            mutableCurrentlyWritingFlow.value = isWriting },
-                            onFileWriterError
-                        )
-                        fileWriter?.run()
-                    }
+                    liveConnectResult = connectLiveInputAndBuildPipeline(
+                        pps,
+                        context,
+                        onFileWriterError,
+                        resetLiveVisibleRanges = true
+                    )
                 } catch (e: Exception) {
                     internalClosePipeline()
 
@@ -838,7 +935,7 @@ class UIModel(application: Application,
                     Timber.d("Exception during live connect: ${e.stackTrace.asList()}")
 
                     // Return the message to the UI for display to the user:
-                    usbConnectResult = UsbService.UsbConnectResult(false, message)
+                    liveConnectResult = LiveConnectResult(false, message)
                 }
                 catch (e: OutOfMemoryError) {
                     internalClosePipeline()
@@ -847,14 +944,14 @@ class UIModel(application: Application,
                     diagnosticLogger.log { "Out of memory in openLive()" }
 
                     // Return the message to the UI for display to the user:
-                    usbConnectResult = UsbService.UsbConnectResult(false, oomMessage)
+                    liveConnectResult = LiveConnectResult(false, oomMessage)
                 }
             }
 
             // Do this suspending operation outside the critical section to avoid
             // blocking with the lock:
-            require(usbConnectResult != null)
-            usbConnectResult.let {
+            require(liveConnectResult != null)
+            liveConnectResult.let {
                 Timber.d("Sending result of live connection: $it")
                 liveConnectChannel.send(it)
             }
@@ -897,7 +994,7 @@ class UIModel(application: Application,
             Timber.i("startViewerAudio start: runtime.{maxMemory, totalMemory, freeMemory) = " +
                     "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB")
 
-            var audioStartResult: UsbService.AudioStartResult? = null
+            var audioStartResult: LiveAudioStartResult? = null
             Timber.d("startAudio called")
 
             mutex.withLock {
@@ -908,7 +1005,7 @@ class UIModel(application: Application,
                     settings.audioBoostFactor
                 )
 
-                audioStartResult = UsbService.AudioStartResult(startedOK = true)
+                audioStartResult = LiveAudioStartResult(startedOK = true)
             }
 
             audioStartResult?.let {
@@ -928,7 +1025,7 @@ class UIModel(application: Application,
     fun startViewerAudio(sampleRateHz: Int) {
         viewModelScope.launch(Dispatchers.Default) {
 
-            var audioStartResult: UsbService.AudioStartResult? = null
+            var audioStartResult: LiveAudioStartResult? = null
             Timber.d("startViewerAudio called")
 
             mutex.withLock {
@@ -945,7 +1042,7 @@ class UIModel(application: Application,
                         sampleRateHz, ::onAudioProgress
                     )
 
-                    audioStartResult = UsbService.AudioStartResult(startedOK = true)
+                    audioStartResult = LiveAudioStartResult(startedOK = true)
                 }
             }
 
@@ -999,20 +1096,40 @@ class UIModel(application: Application,
     fun pauseLiveStream() {
         viewModelScope.launch(Dispatchers.Default + CoroutineName("openLive coroutine")) {
             mutex.withLock {
-                usbService.pause()
+                activeLiveInputSource?.pause()
             }
         }
     }
 
     fun resumeLiveStream() {
         viewModelScope.launch(Dispatchers.Default + CoroutineName("openLive coroutine")) {
+            var reconnectResult: LiveConnectResult? = null
+
             mutex.withLock {
-                Timber.w("Logical error: pipeline must exist at this point (2)")
+                var sourceChanged = false
+
+                if (connectedLiveInputSource != null &&
+                    connectedLiveInputSource != settings.liveInputSource
+                ) {
+                    val handler = liveFileWriterErrorHandler
+                    if (handler == null) {
+                        Timber.w("Cannot reconnect live input: no file writer error handler")
+                        reconnectResult = LiveConnectResult(
+                            connectedOK = false,
+                            errorMessage = "Unable to switch live input source."
+                        )
+                        return@withLock
+                    }
+                    sourceChanged = true
+                    reconnectResult = reconnectLiveInputSource(handler)
+                    if (!reconnectResult!!.connectedOK) {
+                        return@withLock
+                    }
+                }
+
                 pipeline?.let { p ->
                     p.resetState()
 
-                    val tar = timeAxisRangeFlow.value
-                    val tar2 = tar
                     val pps = p.pipelineParametersSnapshot
 
                     /*
@@ -1033,8 +1150,6 @@ class UIModel(application: Application,
                         "resumeLiveStream: adjusting time logical range from ${mutableTimeVisibleRangeFlow.value} to $visibleTimeRange"
                     )
 
-                    // onVisibleRangeChange(settings, shouldAutoBnC, rawPageRangeState.value)
-
                     internalSetSpectrogramVisibleRange(
                         visibleTimeRange,
                         frequencyVisibleRangeFlow.value
@@ -1043,8 +1158,16 @@ class UIModel(application: Application,
                     // Do a full pipeline rebuild so that any new settings take effect:
                     reload(settings, null, false)
 
-                    usbService.resume()
+                    // A fresh connect already streams; only resume a paused existing source.
+                    if (!sourceChanged) {
+                        activeLiveInputSource?.resume()
+                    }
                 }
+            }
+
+            reconnectResult?.let { result ->
+                Timber.d("Sending result of live reconnect: $result")
+                liveConnectChannel.send(result)
             }
         }
     }
@@ -1063,8 +1186,9 @@ class UIModel(application: Application,
         fileWriter?.shutdown()
         fileWriter = null
 
-        // This blocks on the thread until native layer processing has cleanly terminated.
-        usbService.disconnect()    // Harmless if it wasn't connected.
+        activeLiveInputSource?.disconnect()
+        activeLiveInputSource = null
+        connectedLiveInputSource = null
 
         pipeline?.shutdown()
         pipeline = null

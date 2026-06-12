@@ -226,6 +226,20 @@ class SettingsUI(private val model: UIModel) {
 
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    MyListSelector<Settings.LiveInputSourceOptions>(
+                        Settings.LiveInputSourceOptions.entries,
+                        "Live audio Source",
+                        model.settings.liveInputSource
+                    ) { value: Int ->
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(liveInputSource = value))
+                        }
+                    }
+                }
+            }
+
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     MyListSelector<Settings.DefaultLiveTimeSpanOptions>(
                         Settings.DefaultLiveTimeSpanOptions.entries,
                         "Live acquisition time span",
