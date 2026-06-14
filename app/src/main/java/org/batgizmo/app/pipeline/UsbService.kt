@@ -92,13 +92,15 @@ class NativeUSB {
     external fun pauseStream()
     external fun resumeStream()
     external fun startAudioFromStream(audioDeviceId: Int, heterodynekHz: Int,
-                                      heterodyne2kHz: Int, audioBoostFactor: Float): Boolean
+                                      heterodyne2kHz: Int, audioBoostFactor: Float,
+                                      directPlayback: Boolean): Boolean
     external fun startAudioFromBuffer(
         audioDeviceId: Int, samplingRateHz: Int,
         heterodynekHz: Int, heterodyne2kHz: Int,
         audioBoostShift: Float, buffer: ShortArray,
         startIndex: Int, endExclusiveIndex: Int,
         loopedPlayback: Boolean,
+        directPlayback: Boolean,
         progressCallback: ((Int) -> Unit)
     ): Boolean
     external fun stopAudio()
@@ -1266,12 +1268,17 @@ class UsbService(private val context: Context,
      */
     var AAUDIO_UNSPECIFIED = 0  // As defined in aaudio and the native layer.
 
-    suspend fun startAudio(heterodyne1kHz: Int, heterodyne2kHz: Int?, audioBoostFactor: Float) {
+    suspend fun startAudio(
+        heterodyne1kHz: Int,
+        heterodyne2kHz: Int?,
+        audioBoostFactor: Float,
+        directPlayback: Boolean
+    ) {
         mutex.withLock {
             if (isConnected) {
                 Timber.i("startAudio: heterodynekHz = $heterodyne1kHz")
-                val rc = nativeUsb.startAudioFromStream(AAUDIO_UNSPECIFIED, heterodyne1kHz,
-                        heterodyne2kHz ?: 0, audioBoostFactor)
+                nativeUsb.startAudioFromStream(AAUDIO_UNSPECIFIED, heterodyne1kHz,
+                        heterodyne2kHz ?: 0, audioBoostFactor, directPlayback)
             }
         }
     }
@@ -1283,17 +1290,18 @@ class UsbService(private val context: Context,
         heterodyne1kHz: Int, heterodyne2kHz: Int?, audioBoostExponent: Float,
         visibleRawData: Pair<ShortArray, HORange>, loopedPlayback: Boolean,
         samplingRateHz: Int,
+        directPlayback: Boolean,
         onAudioProgress: (Int) -> Unit
     ) {
         mutex.withLock {
             // Note: we can't use a lambda as the callback, it has to be a method.
             val (buffer, dataRangeExclusive) = visibleRawData
-            val rc = nativeUsb.startAudioFromBuffer(AAUDIO_UNSPECIFIED,
+            nativeUsb.startAudioFromBuffer(AAUDIO_UNSPECIFIED,
                 samplingRateHz,
-                heterodyne1kHz,heterodyne2kHz ?: 0,
+                heterodyne1kHz, heterodyne2kHz ?: 0,
                 audioBoostExponent,
                 buffer, dataRangeExclusive.start, dataRangeExclusive.exclusiveEnd,
-                loopedPlayback, onAudioProgress)
+                loopedPlayback, directPlayback, onAudioProgress)
         }
     }
 

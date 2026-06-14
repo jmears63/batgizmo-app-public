@@ -104,6 +104,7 @@ static int16_t s_reference_data[MAX_REFERENCE_LEN + CANARY_COUNT];
 static int s_reference_len = 0;
 static volatile int s_reference1_index = 0, s_reference2_index = 0;
 static int s_heterodyne1_kHz = 0, s_heterodyne2_kHz = 0;
+static volatile bool s_direct_playback = false;
 
 // Define the audio boost factor which is scaled to increase its resolution:
 #define BOOST_FACTOR_SCALING_SHIFT 8
@@ -135,7 +136,8 @@ static void write_audio_output(const data_t *pBuffer, uint32_t sample_count, jin
 static jboolean initialise_audio_data(jint heterodyne1_kHz,
                                              jint heterodyne2_kHz,
                                              float audio_boost_factor,
-                                             int samples_per_frame);
+                                             int samples_per_frame,
+                                             jboolean direct_playback);
 static void calc_audio_out_parameters(jint sample_rate);
 
 
@@ -736,13 +738,15 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromStream(JNIEnv *env, jobje
                                                               jint audio_device_id,
                                                               jint heterodyne1_kHz,
                                                               jint heterodyne2_kHz,
-                                                              jfloat audio_boost_factor) {
+                                                              jfloat audio_boost_factor,
+                                                              jboolean direct_playback) {
 
     pthread_mutex_lock(&s_mutex);
 
     stop_audio_output(env);    // Just in case.
     jboolean rc = initialise_audio_data(heterodyne1_kHz, heterodyne2_kHz,
-                                        audio_boost_factor, s_nominal_samples_per_frame);
+                                        audio_boost_factor, s_nominal_samples_per_frame,
+                                        direct_playback);
     rc = rc && start_audio_output(audio_device_id);
 
     pthread_mutex_unlock(&s_mutex);
@@ -770,6 +774,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobje
                                                               jint start_index,
                                                               jint end_exclusive_index,
                                                               jboolean looped_playback,
+                                                              jboolean direct_playback,
                                                               jobject progress_callback) {
 
     pthread_mutex_lock(&s_mutex);
@@ -781,7 +786,8 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobje
     calc_audio_out_parameters(sample_rate);
 
     jboolean rc = initialise_audio_data(heterodyne1_kHz, heterodyne2_kHz,
-                                        audio_boost_factor, sample_rate / 1000);
+                                        audio_boost_factor, sample_rate / 1000,
+                                        direct_playback);
 
     // Set up the playback context. Use global refs for Kotlin owned things that
     // we need to access from subsequent JNI calls.
@@ -802,41 +808,47 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobje
 static jboolean initialise_audio_data(jint heterodyne1_kHz,
     jint heterodyne2_kHz,
     float audio_boost_factor,
-    int samples_per_frame) {
+    int samples_per_frame,
+    jboolean direct_playback) {
 
     downsampling_filter_reset();
 
-    // For now, we only support heterodyne.
+    s_direct_playback = direct_playback;
 
     int n = samples_per_frame;
     if (n > MAX_REFERENCE_LEN)      // Paranoia.
         n = MAX_REFERENCE_LEN;
 
-    if (heterodyne1_kHz > n || heterodyne2_kHz > n) {
-        __android_log_print(ANDROID_LOG_INFO, __FILE__,
-                            "Heterodyne reference outside the valid range for the frame length (%d)",
-                            n);
-        return false;
-    }
-
-    // Don't recalculate this unnecessarily:
-    if (n != s_reference_len) {
-        /*
-         * Set up the correct number of heterodyne data points in a single
-         * cycle of a cosine. Having the same number of points as the sampling rate
-         * makes it easy to generated references for multiples of kHz.
-         */
-        const double pi2 = 3.1415927 * 2;
-        int i = 0;
-        for (i = 0; i < n; i++) {
-            double x = ((double) i) * pi2 / n;
-            s_reference_data[i] = (int16_t) (cos(x) * 0x7FFE);
+    if (!direct_playback) {
+        if (heterodyne1_kHz > n || heterodyne2_kHz > n) {
+            __android_log_print(ANDROID_LOG_INFO, __FILE__,
+                                "Heterodyne reference outside the valid range for the frame length (%d)",
+                                n);
+            return false;
         }
-        s_reference_data[i] = CANARY_DATA_VALUE;
-        s_reference_len = n;
+
+        // Don't recalculate this unnecessarily:
+        if (n != s_reference_len) {
+            /*
+             * Set up the correct number of heterodyne data points in a single
+             * cycle of a cosine. Having the same number of points as the sampling rate
+             * makes it easy to generated references for multiples of kHz.
+             */
+            const double pi2 = 3.1415927 * 2;
+            int i = 0;
+            for (i = 0; i < n; i++) {
+                double x = ((double) i) * pi2 / n;
+                s_reference_data[i] = (int16_t) (cos(x) * 0x7FFE);
+            }
+            s_reference_data[i] = CANARY_DATA_VALUE;
+            s_reference_len = n;
+        }
+        s_heterodyne1_kHz = heterodyne1_kHz;
+        s_heterodyne2_kHz = heterodyne2_kHz;
+    } else {
+        s_heterodyne1_kHz = 0;
+        s_heterodyne2_kHz = 0;
     }
-    s_heterodyne1_kHz = heterodyne1_kHz;
-    s_heterodyne2_kHz = heterodyne2_kHz;
     s_scaled_audio_boost_factor = scale_boost_factor(audio_boost_factor);
     s_reference1_index = s_reference2_index = 0;
 
@@ -965,10 +977,15 @@ static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
 
     for (int i = 0; i < sample_count; i++) {
 
-        // Multiply the raw data by the reference(s).
-        int32_t mixed = pBuffer[i] * s_reference_data[s_reference1_index];
-        if (s_heterodyne2_kHz != 0)
-            mixed += pBuffer[i] * s_reference_data[s_reference2_index];
+        int32_t mixed;
+        if (s_direct_playback) {
+            mixed = pBuffer[i];
+        } else {
+            // Multiply the raw data by the reference(s).
+            mixed = pBuffer[i] * s_reference_data[s_reference1_index];
+            if (s_heterodyne2_kHz != 0)
+                mixed += pBuffer[i] * s_reference_data[s_reference2_index];
+        }
 
         // Apply a low pass antialiasing filter. This is important to prevent audio feedback:
         int64_t filtered = mixed;
@@ -991,11 +1008,15 @@ static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
 
             filtered *= s_scaled_audio_boost_factor;
 
-            // Scale down the result of filtering, and also apply the boost factor scaling, in
-            // one operation. 15 rather than 16 to gain a factor of 2,
-            // because 0.5 * 0.5 is 0.25. Note that it remains a 32 bit signed for the moment so we
-            // can handle saturation:
-            filtered >>= 15 + BOOST_FACTOR_SCALING_SHIFT;
+            // Heterodyne mixing multiplies two int16 values; direct playback does not.
+            if (s_direct_playback)
+                filtered >>= BOOST_FACTOR_SCALING_SHIFT;
+            else
+                // Scale down the result of filtering, and also apply the boost factor scaling, in
+                // one operation. 15 rather than 16 to gain a factor of 2,
+                // because 0.5 * 0.5 is 0.25. Note that it remains a 32 bit signed for the moment so we
+                // can handle saturation:
+                filtered >>= 15 + BOOST_FACTOR_SCALING_SHIFT;
 
             // Saturate rather then wrapping around:
             if (filtered > INT16_MAX)
@@ -1007,13 +1028,15 @@ static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
         }
 
         // Step through the reference waveforms:
-        s_reference1_index += s_heterodyne1_kHz;
-        if (s_reference1_index >= s_reference_len)
-            s_reference1_index -= s_reference_len;
+        if (!s_direct_playback) {
+            s_reference1_index += s_heterodyne1_kHz;
+            if (s_reference1_index >= s_reference_len)
+                s_reference1_index -= s_reference_len;
 
-        s_reference2_index += s_heterodyne2_kHz;
-        if (s_reference2_index >= s_reference_len)
-            s_reference2_index -= s_reference_len;
+            s_reference2_index += s_heterodyne2_kHz;
+            if (s_reference2_index >= s_reference_len)
+                s_reference2_index -= s_reference_len;
+        }
     }
 
     return decimated_sample_count;

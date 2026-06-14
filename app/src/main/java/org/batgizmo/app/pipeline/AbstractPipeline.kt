@@ -63,6 +63,8 @@ abstract class AbstractPipeline(
     private val showCursor: Boolean,
     protected val onTrigger: () -> Unit = {}
 ) {
+    fun sampleRateHz(): Int = sampleRate
+
     abstract fun createDataSourceStep(
         pipeline: AbstractPipeline,
         transformStep: TransformStep,

@@ -425,13 +425,13 @@ class SpectrogramUI(
         /**
          * Handle the case when data streaming has started.
          */
-        LaunchedEffect(appMode.intValue, uiState.liveMode.intValue, uiState.dataPresent.value) {
-            val isLiveAndStreaming = appMode.intValue == AppMode.LIVE.value &&
-                    uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
-            val isViewingAndDataLoaded = appMode.intValue == AppMode.VIEWER.value && uiState.dataPresent.value
-            buttonState.audioEnabled.value = isLiveAndStreaming or isViewingAndDataLoaded
-            buttonState.manualRecordingEnabled.value = isLiveAndStreaming
-            buttonState.triggeredRecordingEnabled.value = isLiveAndStreaming
+        LaunchedEffect(
+            appMode.intValue,
+            uiState.liveMode.intValue,
+            uiState.dataPresent.value,
+            model.settings.liveInputSource
+        ) {
+            updateAudioButtonEnabled(appMode.intValue)
         }
 
         /**
@@ -481,7 +481,14 @@ class SpectrogramUI(
         /**
          * Notify the heterodyne frequencies to the native layer.
          */
-        LaunchedEffect(uiState.heterodyneRef1kHz.value, uiState.heterodyneRef2kHz.value) {
+        LaunchedEffect(
+            uiState.heterodyneRef1kHz.value,
+            uiState.heterodyneRef2kHz.value,
+            uiState.samplingRateHz.value
+        ) {
+            val sampleRateHz = uiState.samplingRateHz.value ?: return@LaunchedEffect
+            if (model.settings.isDirectPlayback(sampleRateHz))
+                return@LaunchedEffect
             uiState.heterodyneRef1kHz.value?.let { kHz1 ->
                 model.setHeterodyne(kHz1, uiState.heterodyneRef2kHz.value)
             }
@@ -648,8 +655,11 @@ class SpectrogramUI(
             }
 
             val isStarting = uiState.audioMode.intValue != AudioMode.ON.value
+            val sampleRateHz = uiState.samplingRateHz.value
+                ?: Settings.DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ
             audioConfig.Compose(
                 model.settings,
+                sampleRateHz,
                 appMode.intValue,
                 isStarting,
                 onDismiss =  {
@@ -658,12 +668,15 @@ class SpectrogramUI(
                     if (isStarting)
                         buttonState.audioChecked.value = false
                 },
-                onConfirm = { audioDualHeterodyne: Boolean, audioRef1kHz: Int,
+                onConfirm = { audioPlaybackMode: Int, audioRef1kHz: Int,
                               audioRef2kHz: Int, loopedPlayback: Boolean ->
                     scope.launch {
                         model.updateStoredSettings(
                             model.settings.copy(
-                                heterodyneDual = audioDualHeterodyne,
+                                audioPlaybackMode = audioPlaybackMode,
+                                audioPlaybackModePersisted = true,
+                                heterodyneDual = audioPlaybackMode ==
+                                    Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value,
                                 heterodyneRef1kHz = audioRef1kHz,
                                 heterodyneRef2kHz = audioRef2kHz,
                                 loopedAudioPlayback = loopedPlayback
@@ -883,15 +896,40 @@ class SpectrogramUI(
        }
     }
 
+    private fun updateAudioButtonEnabled(appModeInt: Int) {
+        val isLiveAndStreaming = appModeInt == AppMode.LIVE.value &&
+            uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
+        val isUsbLiveSource =
+            model.settings.liveInputSource == Settings.LiveInputSourceOptions.USB.value
+        val isViewingAndDataLoaded =
+            appModeInt == AppMode.VIEWER.value && uiState.dataPresent.value
+        buttonState.audioEnabled.value =
+            (isLiveAndStreaming && isUsbLiveSource) || isViewingAndDataLoaded
+        buttonState.manualRecordingEnabled.value = isLiveAndStreaming
+        buttonState.triggeredRecordingEnabled.value = isLiveAndStreaming
+
+        if (isLiveAndStreaming && !isUsbLiveSource &&
+            uiState.audioMode.intValue != AudioMode.OFF.value
+        ) {
+            model.stopAudio()
+            uiState.audioMode.intValue = AudioMode.OFF.value
+            buttonState.audioChecked.value = false
+        }
+    }
+
     private fun updateHeterodyneUIState() {
-        if (uiState.audioMode.intValue in setOf(AudioMode.ON.value)) {
+        val sampleRateHz = uiState.samplingRateHz.value ?: return
+        if (uiState.audioMode.intValue in setOf(AudioMode.ON.value) &&
+            !model.settings.isDirectPlayback(sampleRateHz)
+        ) {
 
             // Assigning these values makes the heterodyne cursor appear on the graph:
             uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
-            uiState.heterodyneRef2kHz.value = if (model.settings.heterodyneDual)
-                model.settings.heterodyneRef2kHz
-            else
-                null
+            uiState.heterodyneRef2kHz.value =
+                if (model.settings.isDualHeterodynePlayback(sampleRateHz))
+                    model.settings.heterodyneRef2kHz
+                else
+                    null
         }
         else {
             uiState.heterodyneRef1kHz.value = null
@@ -1614,6 +1652,14 @@ class SpectrogramUI(
         if (resetPaging) {
             // Something related to paging changed so we need to reset to take that into account:
             uiState.pagingState.value?.reset(newSettings)
+        }
+
+        previousSettings?.let { prev ->
+            if (newSettings.liveInputSource != prev.liveInputSource &&
+                uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
+            ) {
+                updateAudioButtonEnabled(AppMode.LIVE.value)
+            }
         }
 
         model.onSettingsUpdate(newSettings, previousSettings, uiState.rawPageRange.value)

@@ -50,6 +50,8 @@ data class Settings(
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
     var heterodyneRef2kHz: Int = 20,
+    var audioPlaybackMode: Int = AudioPlaybackModeOptions.SINGLE_HETERODYNE.value,
+    var audioPlaybackModePersisted: Boolean = false,
     var loopedAudioPlayback: Boolean = false,
     var includeLocationInFile: Boolean = true,
     var audioBoostFactor: Float = 4f,
@@ -123,6 +125,38 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
+    enum class AudioPlaybackModeOptions(val value: Int, val label: String) : EnumHelper {
+        SINGLE_HETERODYNE(0, "Single heterodyne"),
+        DUAL_HETERODYNE(1, "Dual heterodyne"),
+        DIRECT(2, "Direct playback");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+    }
+
+    /** Sample rates at or below this use direct playback when no mode is stored. */
+    fun defaultAudioPlaybackModeForSampleRate(sampleRateHz: Int): Int {
+        return if (sampleRateHz <= DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ)
+            AudioPlaybackModeOptions.DIRECT.value
+        else
+            AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+    }
+
+    fun effectiveAudioPlaybackMode(sampleRateHz: Int): Int {
+        return if (audioPlaybackModePersisted)
+            audioPlaybackMode
+        else
+            defaultAudioPlaybackModeForSampleRate(sampleRateHz)
+    }
+
+    fun isDualHeterodynePlayback(sampleRateHz: Int): Boolean =
+        effectiveAudioPlaybackMode(sampleRateHz) ==
+            AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+
+    fun isDirectPlayback(sampleRateHz: Int): Boolean =
+        effectiveAudioPlaybackMode(sampleRateHz) ==
+            AudioPlaybackModeOptions.DIRECT.value
+
     enum class DefaultLiveTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
         DEFAULTLIVETIMESPAN_NONE(0, "Use existing"),
         DEFAULTLIVETIMESPAN_1S(1, "1s"),
@@ -181,6 +215,8 @@ data class Settings(
         override fun theLabel(): String = label    }
 
     companion object {
+        /** Sample rates at or below this use direct playback when no mode is stored. */
+        const val DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ = 48_000
     }
 
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")
@@ -198,6 +234,7 @@ data class Settings(
     private val keyAudioRef1kHz = intPreferencesKey("audioRef1kHz")
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
+    private val keyAudioPlaybackMode = intPreferencesKey("audioPlaybackMode")
     private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor")
     private val keyLocationInFile = booleanPreferencesKey("locationInFile")
     private val keyPreTriggerTimeMs = intPreferencesKey("preTriggerTimeMs")
@@ -227,7 +264,10 @@ data class Settings(
         prefs[keyPageOverlapPercent] = pageOverlapPercent
         prefs[keyLeftHandedMode] = leftHandButtons
         prefs[keyEnableLogging] = enableLogging
+        heterodyneDual = audioPlaybackMode == AudioPlaybackModeOptions.DUAL_HETERODYNE.value
         prefs[keyAudioDualHeterodyne] = heterodyneDual
+        if (audioPlaybackModePersisted)
+            prefs[keyAudioPlaybackMode] = audioPlaybackMode
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
         prefs[keyAudioBoostFactor] = audioBoostFactor
@@ -269,8 +309,14 @@ data class Settings(
             leftHandButtons = requireNotNull(prefs[keyLeftHandedMode])
         if (prefs[keyEnableLogging] != null)
             enableLogging = requireNotNull(prefs[keyEnableLogging])
-        if (prefs[keyAudioDualHeterodyne] != null)
-            heterodyneDual = requireNotNull(prefs[keyAudioDualHeterodyne])
+        if (prefs[keyAudioPlaybackMode] != null) {
+            audioPlaybackModePersisted = true
+            audioPlaybackMode = requireNotNull(prefs[keyAudioPlaybackMode])
+            heterodyneDual =
+                audioPlaybackMode == AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+        } else {
+            audioPlaybackModePersisted = false
+        }
         if (prefs[keyAudioRef1kHz] != null)
             heterodyneRef1kHz = requireNotNull(prefs[keyAudioRef1kHz])
         if (prefs[keyAudioRef2kHz] != null)

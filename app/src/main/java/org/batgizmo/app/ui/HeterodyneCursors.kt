@@ -164,7 +164,10 @@ class HeterodyneCursors(
                 drawDraggable(offsetY1, heterodyneRef1kHz) { kHz: Int ->
                     model.settings.copy(heterodyneRef1kHz = kHz)
                 }
-                if (model.settings.heterodyneDual) {
+                if (model.pipelineSampleRateHz()?.let { hz ->
+                        model.settings.isDualHeterodynePlayback(hz)
+                    } == true
+                ) {
                     drawDraggable(offsetY2, heterodyneRef2kHz) { kHz: Int ->
                         model.settings.copy(heterodyneRef2kHz = kHz)
                     }

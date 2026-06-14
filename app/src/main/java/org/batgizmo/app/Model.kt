@@ -998,14 +998,27 @@ class UIModel(application: Application,
             Timber.d("startAudio called")
 
             mutex.withLock {
-
-                usbService.startAudio(
-                    settings.heterodyneRef1kHz,
-                    if (settings.heterodyneDual) settings.heterodyneRef2kHz else null,
-                    settings.audioBoostFactor
-                )
-
-                audioStartResult = LiveAudioStartResult(startedOK = true)
+                if (settings.liveInputSource != Settings.LiveInputSourceOptions.USB.value) {
+                    Timber.w("Live audio monitor is only available with a USB input source")
+                    audioStartResult = LiveAudioStartResult(startedOK = false)
+                } else {
+                    val sampleRateHz = requireNotNull(pipeline?.sampleRateHz()) {
+                        "Pipeline sample rate required for live audio"
+                    }
+                    val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
+                    usbService.startAudio(
+                        settings.heterodyneRef1kHz,
+                        if (playbackMode ==
+                            Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+                        )
+                            settings.heterodyneRef2kHz
+                        else
+                            null,
+                        settings.audioBoostFactor,
+                        playbackMode == Settings.AudioPlaybackModeOptions.DIRECT.value
+                    )
+                    audioStartResult = LiveAudioStartResult(startedOK = true)
+                }
             }
 
             audioStartResult?.let {
@@ -1034,12 +1047,20 @@ class UIModel(application: Application,
 
                     Timber.d("Visible raw data range: ${visibleRawData.second}")
 
+                    val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
                     usbService.startAudioFromBuffer(
                         settings.heterodyneRef1kHz,
-                        if (settings.heterodyneDual) settings.heterodyneRef2kHz else null,
+                        if (playbackMode ==
+                            Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+                        )
+                            settings.heterodyneRef2kHz
+                        else
+                            null,
                         settings.audioBoostFactor,
                         visibleRawData, settings.loopedAudioPlayback,
-                        sampleRateHz, ::onAudioProgress
+                        sampleRateHz,
+                        playbackMode == Settings.AudioPlaybackModeOptions.DIRECT.value,
+                        ::onAudioProgress
                     )
 
                     audioStartResult = LiveAudioStartResult(startedOK = true)
@@ -1179,6 +1200,8 @@ class UIModel(application: Application,
             }
         }
     }
+
+    fun pipelineSampleRateHz(): Int? = pipeline?.sampleRateHz()
 
     suspend fun internalClosePipeline() {
 

@@ -96,10 +96,11 @@ class AudioConfig {
     @Composable
     fun Compose(
         settings: Settings,
+        sampleRateHz: Int,
         appMode: Int,
         audioStarting: Boolean,
         onDismiss: () -> Unit,
-        onConfirm: (Boolean, Int, Int, Boolean) -> Unit,
+        onConfirm: (Int, Int, Int, Boolean) -> Unit,
         heterodyneRange: IntRange,
     ) {
         // Constrain frequencies
@@ -114,10 +115,19 @@ class AudioConfig {
         val constrainedRef2kHz = constrainFrequency(settings.heterodyneRef2kHz, 0.66f)
 
         // State
-        val audioDualHeterodyne = rememberSaveable { mutableStateOf(settings.heterodyneDual) }
+        val initialPlaybackMode = if (settings.audioPlaybackModePersisted)
+            settings.audioPlaybackMode
+        else
+            settings.defaultAudioPlaybackModeForSampleRate(sampleRateHz)
+        val audioPlaybackMode = rememberSaveable { mutableIntStateOf(initialPlaybackMode) }
         val audioRef1kHz = rememberSaveable { mutableIntStateOf(constrainedRef1kHz) }
         val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz) }
         val loopedPlayback = rememberSaveable { mutableStateOf(settings.loopedAudioPlayback) }
+
+        val isDirectPlayback =
+            audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DIRECT.value
+        val isDualHeterodyne =
+            audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
 
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -155,20 +165,17 @@ class AudioConfig {
                             textAlign = TextAlign.Center
                         )
 
-                        // Checkboxes
-                        if (isLandscape) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
+                        MyListSelector<Settings.AudioPlaybackModeOptions>(
+                            Settings.AudioPlaybackModeOptions.entries,
+                            "Playback mode",
+                            audioPlaybackMode.intValue
+                        ) { value ->
+                            audioPlaybackMode.intValue = value
+                        }
+
+                        if (appMode == AppMode.VIEWER.value) {
+                            if (isLandscape) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = audioDualHeterodyne.value,
-                                        onCheckedChange = { audioDualHeterodyne.value = it }
-                                    )
-                                    Text("Dual heterodyne mode")
-                                }
-                                if (appMode == AppMode.VIEWER.value) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Checkbox(
                                             checked = loopedPlayback.value,
@@ -177,16 +184,7 @@ class AudioConfig {
                                         Text("Loop playback")
                                     }
                                 }
-                            }
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = audioDualHeterodyne.value,
-                                    onCheckedChange = { audioDualHeterodyne.value = it }
-                                )
-                                Text("Dual heterodyne mode")
-                            }
-                            if (appMode == AppMode.VIEWER.value) {
+                            } else {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(
                                         checked = loopedPlayback.value,
@@ -197,21 +195,22 @@ class AudioConfig {
                             }
                         }
 
-                        // Sliders
-                        IntegerSlider(
-                            label = "Reference",
-                            value = audioRef1kHz.intValue,
-                            onValueChange = { audioRef1kHz.intValue = it },
-                            range = heterodyneRange
-                        )
-
-                        if (audioDualHeterodyne.value) {
+                        if (!isDirectPlayback) {
                             IntegerSlider(
-                                label = "Reference 2",
-                                value = audioRef2kHz.intValue,
-                                onValueChange = { audioRef2kHz.intValue = it },
+                                label = "Reference",
+                                value = audioRef1kHz.intValue,
+                                onValueChange = { audioRef1kHz.intValue = it },
                                 range = heterodyneRange
                             )
+
+                            if (isDualHeterodyne) {
+                                IntegerSlider(
+                                    label = "Reference 2",
+                                    value = audioRef2kHz.intValue,
+                                    onValueChange = { audioRef2kHz.intValue = it },
+                                    range = heterodyneRange
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -228,7 +227,7 @@ class AudioConfig {
                             Button(
                                 onClick = {
                                     onConfirm(
-                                        audioDualHeterodyne.value,
+                                        audioPlaybackMode.intValue,
                                         audioRef1kHz.intValue,
                                         audioRef2kHz.intValue,
                                         loopedPlayback.value
