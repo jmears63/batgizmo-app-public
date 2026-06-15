@@ -473,7 +473,10 @@ class SpectrogramUI(
          * confusing UI behaviour:
          */
         LaunchedEffect(uiState.liveMode.intValue, appMode.intValue) {
-            spectrogramGraph.setClampX(uiState.liveMode.intValue == LiveMode.STREAMING.value && appMode.intValue == AppMode.LIVE.value)
+            val clampX = uiState.liveMode.intValue == LiveMode.STREAMING.value &&
+                appMode.intValue == AppMode.LIVE.value
+            spectrogramGraph.setClampX(clampX)
+            amplitudeGraph.setClampX(clampX)
         }
 
         /**

@@ -76,23 +76,45 @@ private fun axisForFramePosition(
     frameSize: IntSize,
     padding: GraphBase.GraphPadding,
     density: Density,
+    mode: GraphGestureMode,
 ): SpectrogramGestureAxis {
-    val bottomPx = with(density) { padding.bottomDp.dp.toPx() }
-    val leftPx = with(density) { padding.leftDp.dp.toPx() }
-    val frameHeight = frameSize.height.toFloat()
-    if (position.y >= frameHeight - bottomPx)
+    if (mode == GraphGestureMode.AMPLITUDE_TIME) {
+        // Amplitude pane only drives the shared time range.
         return SpectrogramGestureAxis.TIME
-    if (position.x < leftPx)
-        return SpectrogramGestureAxis.FREQUENCY
-    return SpectrogramGestureAxis.FREE
+    }
+
+    val leftPx = with(density) { padding.leftDp.dp.toPx() }
+    val bottomPx = with(density) { padding.bottomDp.dp.toPx() }
+    val frameHeight = frameSize.height.toFloat()
+
+    // Time and frequency axes sit on the inner edges of the bottom and left borders.
+    val timeAxisY = frameHeight - bottomPx
+    val frequencyAxisX = leftPx
+
+    val distToTime = kotlin.math.abs(position.y - timeAxisY)
+    val distToFrequency = kotlin.math.abs(position.x - frequencyAxisX)
+
+    val nearTime = bottomPx > 0f && distToTime <= bottomPx
+    val nearFrequency = leftPx > 0f && distToFrequency <= leftPx
+
+    return when {
+        nearTime && nearFrequency ->
+            if (distToTime <= distToFrequency) SpectrogramGestureAxis.TIME
+            else SpectrogramGestureAxis.FREQUENCY
+
+        nearTime -> SpectrogramGestureAxis.TIME
+        nearFrequency -> SpectrogramGestureAxis.FREQUENCY
+        else -> SpectrogramGestureAxis.FREE
+    }
 }
 
 /**
- * Full-frame pointer handling for the spectrogram graph (plot plus axis borders).
+ * Full-frame pointer handling for spectrogram and amplitude graph panes.
  */
 class SpectrogramGestureHandler(
     private val model: UIModel,
     private val graph: GraphBase,
+    private val mode: GraphGestureMode = GraphGestureMode.SPECTROGRAM,
 ) {
     private var clampX = false
     private var gestureJobCPUIntensive: Job? = null
@@ -106,7 +128,7 @@ class SpectrogramGestureHandler(
         scope: CoroutineScope,
         borderPadding: GraphBase.GraphPadding,
     ): Modifier {
-        return Modifier.pointerInput(borderPadding, clampX) {
+        return Modifier.pointerInput(borderPadding, clampX, mode) {
             val minMovement = 10.dp
             val longPressDurationMs = 800L
             val tapMaximumDurationMs = 300L
@@ -147,7 +169,9 @@ class SpectrogramGestureHandler(
                     (p1.position.y + p2.position.y) / 2
                 )
                 if (sessionAxis == SpectrogramGestureAxis.FREE) {
-                    sessionAxis = axisForFramePosition(centroid, size, borderPadding, this)
+                    sessionAxis = axisForFramePosition(
+                        centroid, size, borderPadding, this, mode
+                    )
                 }
                 startCentroid = dataFrame.framePositionToData(centroid)
                 return SpectrogramGestureState.TWO_FINGERS_MOVING
@@ -167,7 +191,7 @@ class SpectrogramGestureHandler(
                                 val p = pointers[0]
                                 if (p.pressed) {
                                     sessionAxis = axisForFramePosition(
-                                        p.position, size, borderPadding, this
+                                        p.position, size, borderPadding, this, mode
                                     )
                                     val longPressAxis = sessionAxis
                                     longPressJob = scope.launch {
@@ -194,7 +218,8 @@ class SpectrogramGestureHandler(
                                         ),
                                         size,
                                         borderPadding,
-                                        this
+                                        this,
+                                        mode
                                     )
                                     nextState = enterTwoFingersMoving(p1, p2)
                                 }

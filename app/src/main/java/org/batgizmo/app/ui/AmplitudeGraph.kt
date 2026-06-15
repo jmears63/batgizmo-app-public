@@ -33,6 +33,9 @@ class AmplitudeGraph(model: UIModel, rawPageRangeState: MutableState<HORange?>)
     : GraphBase(model, rawPageRangeState,
         model.timeAxisRangeFlow, model.amplitudeAxisRangeFlow, supportCursor = true) {
 
+    private val gestureHandler =
+        SpectrogramGestureHandler(model, this, GraphGestureMode.AMPLITUDE_TIME)
+
     init {
         val amplitudeUnits = listOf(AxisBorder.Unit())
         val timeUnits = listOf(AxisBorder.Unit())
@@ -53,6 +56,17 @@ class AmplitudeGraph(model: UIModel, rawPageRangeState: MutableState<HORange?>)
         viewModel: UIModel,
         showGrid: Boolean
     ) {
-        ComposeFrame(modifier, showGrid, null)
+        ComposeFrame(
+            modifier,
+            showGrid,
+            overlayComposer = null,
+            frameGestures = { padding, scope ->
+                gestureHandler.gestureModifier(scope, padding)
+            }
+        )
+    }
+
+    fun setClampX(constrain: Boolean) {
+        gestureHandler.setXConstraint(constrain)
     }
 }

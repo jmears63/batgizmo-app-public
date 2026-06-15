@@ -35,3 +35,12 @@ enum class SpectrogramGestureAxis {
     /** Touch started on the frequency axis border — frequency only. */
     FREQUENCY,
 }
+
+/** How touch position maps to [SpectrogramGestureAxis] for a graph pane. */
+enum class GraphGestureMode {
+    /** Time/frequency when within one border thickness of that axis; otherwise free. */
+    SPECTROGRAM,
+
+    /** Entire pane uses time-axis pan and zoom (amplitude pane). */
+    AMPLITUDE_TIME,
+}
