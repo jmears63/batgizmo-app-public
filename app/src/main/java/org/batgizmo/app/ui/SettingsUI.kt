@@ -183,6 +183,25 @@ class SettingsUI(private val model: UIModel) {
 
             item {
                 HorizontalDivider(thickness = 2.dp)
+                Text("Audio Source")
+            }
+
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MyListSelector<Settings.LiveInputSourceOptions>(
+                        Settings.LiveInputSourceOptions.entries,
+                        "Live audio source",
+                        model.settings.liveInputSource
+                    ) { value: Int ->
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(liveInputSource = value))
+                        }
+                    }
+                }
+            }
+
+            item {
+                HorizontalDivider(thickness = 2.dp)
                 Text("Auto Brightness/Contrast")
             }
 
@@ -222,20 +241,6 @@ class SettingsUI(private val model: UIModel) {
             item {
                 HorizontalDivider(thickness = 2.dp)
                 Text("Rendering")
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.LiveInputSourceOptions>(
-                        Settings.LiveInputSourceOptions.entries,
-                        "Live audio source",
-                        model.settings.liveInputSource
-                    ) { value: Int ->
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(liveInputSource = value))
-                        }
-                    }
-                }
             }
 
             item {
