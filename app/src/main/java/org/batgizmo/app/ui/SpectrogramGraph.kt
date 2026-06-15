@@ -37,6 +37,7 @@ class SpectrogramGraph(
     model.timeAxisRangeFlow, model.frequencyAxisRangeFlow, supportCursor = false) {
 
     private val titleBorder: TitleBorder
+    private val gestureHandler = SpectrogramGestureHandler(model, this)
 
     init {
         // Define units to be used by axes:
@@ -69,10 +70,18 @@ class SpectrogramGraph(
         overlayComposer: @Composable (Modifier) -> Unit
     ) {
         titleBorder.setTitle(title)
-        ComposeFrame(modifier, showGrid, overlayComposer)
+        ComposeFrame(
+            modifier,
+            showGrid,
+            overlayComposer,
+            frameGestures = { padding, scope ->
+                gestureHandler.gestureModifier(scope, padding)
+            }
+        )
     }
 
     fun setClampX(constrain: Boolean) {
         renderer.setXConstraint(constrain)
+        gestureHandler.setXConstraint(constrain)
     }
 }

@@ -34,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.parcelize.Parcelize
+import kotlinx.coroutines.CoroutineScope
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
 import org.batgizmo.app.UIModel
@@ -87,7 +89,8 @@ abstract class GraphBase(
     fun ComposeFrame(
         modifier: Modifier,
         showGrid: Boolean,
-        overlayComposer: (@Composable (Modifier) -> Unit) ? = null
+        overlayComposer: (@Composable (Modifier) -> Unit)? = null,
+        frameGestures: ((GraphPadding, CoroutineScope) -> Modifier)? = null,
     ) {
         /**
          * This code needs some explanation. It is a mix of declarative (composition) and
@@ -125,7 +128,7 @@ abstract class GraphBase(
                 There is no such issue for API > 30.
              */
 
-            // Don't compose the following things until we know how big the graph borders are.
+            // Don't compose the renderer until we know how big the graph borders are.
             val p = borderPadding.value
             if (p != null) {
                 val safeBorderPadding: GraphPadding = p
@@ -137,12 +140,7 @@ abstract class GraphBase(
                     bottom = safeBorderPadding.bottomDp.dp + 0.5.dp
                 )
 
-                // The actual graph:
                 renderer.Compose(Modifier.padding(padding), model.settings)
-
-                if (overlayComposer != null) {
-                    overlayComposer(Modifier.padding(padding))
-                }
             }
 
             /*
@@ -197,6 +195,25 @@ abstract class GraphBase(
                     )
 
                     borderPadding.value = gp
+                }
+            }
+
+            // Gestures and overlay sit above the border canvas so they receive pointer events.
+            p?.let { safeBorderPadding ->
+                val scope = rememberCoroutineScope()
+                val padding = PaddingValues(
+                    start = maxOf(safeBorderPadding.leftDp.dp, 0.dp),
+                    top = safeBorderPadding.topDp.dp,
+                    end = safeBorderPadding.rightDp.dp,
+                    bottom = safeBorderPadding.bottomDp.dp + 0.5.dp
+                )
+
+                if (frameGestures != null) {
+                    Box(Modifier.fillMaxSize().then(frameGestures(safeBorderPadding, scope)))
+                }
+
+                if (overlayComposer != null) {
+                    overlayComposer(Modifier.padding(padding))
                 }
             }
         }

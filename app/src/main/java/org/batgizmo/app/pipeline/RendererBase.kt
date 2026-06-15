@@ -260,24 +260,19 @@ abstract class RendererBase(
     abstract fun Compose(modifier: Modifier, settings: Settings)
 
     @Composable
-    protected fun Compose(modifier: Modifier, settings: Settings, callback: SHCallback, gestureModifier: Modifier) {
+    protected fun Compose(modifier: Modifier, settings: Settings, callback: SHCallback) {
         val density = LocalDensity.current
 
         AndroidView(
             modifier = modifier
-                //.fillMaxSize()
                 .onSizeChanged { size ->
-                    // Check if the size truly changed. This lambda gets called multiple times
-                    // with the same size:ge
                     if (BuildConfig.DEBUG)
                         Timber.d("AndroidView size changed: $size")
 
-                    // Note the size for future use:
                     sizeDp = with(density) {
                         DpSize(size.width.toDp(), size.height.toDp())
                     }
-                }
-                .then(gestureModifier),
+                },
 
             factory = { ctx ->
                 SurfaceView(ctx).apply {

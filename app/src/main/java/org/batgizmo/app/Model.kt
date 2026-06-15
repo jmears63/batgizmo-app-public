@@ -68,6 +68,7 @@ import org.batgizmo.app.pipeline.DeviceMicInputSource
 import org.batgizmo.app.pipeline.UsbLiveInputSource
 import org.batgizmo.app.pipeline.UsbService
 import org.batgizmo.app.ui.GraphBase
+import org.batgizmo.app.ui.SpectrogramGestureAxis
 import org.batgizmo.app.ui.SpectrogramUI
 import org.batgizmo.app.ui.TopLevelUI
 import org.batgizmo.app.ui.TopLevelUI.AppMode
@@ -1677,7 +1678,12 @@ class UIModel(application: Application,
     /**
      * Called on the UI thread so keep things light weight.
      */
-    suspend fun panSpectrogramVisibleRange(displacement: Offset, size: IntSize, clampX: Boolean) {
+    suspend fun panSpectrogramVisibleRange(
+        displacement: Offset,
+        size: IntSize,
+        clampX: Boolean,
+        axis: SpectrogramGestureAxis = SpectrogramGestureAxis.FREE,
+    ) {
         mutex.withLock {
             // Map screen pixels to logical source bitmap values scaled to within
             // the source region in use:
@@ -1685,6 +1691,12 @@ class UIModel(application: Application,
                     timeVisibleRangeFlow.value.endInclusive - timeVisibleRangeFlow.value.start)
             var logicalSrcDeltaY: Float = -displacement.y / size.height * (
                     frequencyVisibleRangeFlow.value.endInclusive - frequencyVisibleRangeFlow.value.start)
+
+            when (axis) {
+                SpectrogramGestureAxis.TIME -> logicalSrcDeltaY = 0f
+                SpectrogramGestureAxis.FREQUENCY -> logicalSrcDeltaX = 0f
+                SpectrogramGestureAxis.FREE -> Unit
+            }
 
             logicalSrcDeltaX = constrainOffsetForRange(
                 logicalSrcDeltaX,
@@ -1721,7 +1733,9 @@ class UIModel(application: Application,
         startCentroid: Offset,
         previousP1: Offset, previousP2: Offset,
         p1: Offset, p2: Offset,
-        size: IntSize, clampX: Boolean
+        size: IntSize,
+        clampX: Boolean,
+        axis: SpectrogramGestureAxis = SpectrogramGestureAxis.FREE,
     ) {
         mutex.withLock {
             var (scaleFactorX, scaleFactorY) = Pair(1f, 1f)
@@ -1732,17 +1746,21 @@ class UIModel(application: Application,
             )
             val (dxNow, dyNow) = Pair(abs(p1.x - p2.x), abs(p1.y - p2.y))
 
-            /*
-                For sanity and reasonable user experience:
-                * Only zoom in one axis, the one with greatest change.
-                * Avoid divide by zero.
-                * Avoid highly leveraged zooms.
-            */
             val minimumStartDelta = 30f
-            if (abs(dxNow - dxStart) > abs(dyNow - dyStart))
-                scaleFactorX = dxNow / maxOf(dxStart, minimumStartDelta)
-            else
-                scaleFactorY = dyNow / maxOf(dyStart, minimumStartDelta)
+            when (axis) {
+                SpectrogramGestureAxis.TIME ->
+                    scaleFactorX = dxNow / maxOf(dxStart, minimumStartDelta)
+
+                SpectrogramGestureAxis.FREQUENCY ->
+                    scaleFactorY = dyNow / maxOf(dyStart, minimumStartDelta)
+
+                SpectrogramGestureAxis.FREE -> {
+                    if (abs(dxNow - dxStart) > abs(dyNow - dyStart))
+                        scaleFactorX = dxNow / maxOf(dxStart, minimumStartDelta)
+                    else
+                        scaleFactorY = dyNow / maxOf(dyStart, minimumStartDelta)
+                }
+            }
 
             // Timber.d("Scale factors: $scaleFactorX, $scaleFactorY")
 
@@ -1809,14 +1827,13 @@ class UIModel(application: Application,
     }
 
     suspend fun onLongPress(
-        graph: GraphBase, displacement: Offset, size: IntSize,
-        liveMode: Boolean
+        graph: GraphBase,
+        displacement: Offset,
+        size: IntSize,
+        clampX: Boolean,
+        axis: SpectrogramGestureAxis = SpectrogramGestureAxis.FREE,
     ) {
         mutex.withLock {
-            // Adjust ranges to move the tap position to the centre of the screen
-            // maintaining the same scaling as far as possible.
-
-            // Map the screen logical coordinates map into the range of the source min..max:
             val xDstLogical: Float = displacement.x / size.width
             val yDstLogical: Float = displacement.y / size.height
             val xSrcLogical: Float =
@@ -1824,45 +1841,54 @@ class UIModel(application: Application,
             val ySrcLogical: Float =
                 logicalScaleToRange(yDstLogical, frequencyVisibleRangeFlow.value)
 
-            // We need to adjust the ranges so that the tap ends up in the middle:
             val deltaX = timeVisibleRangeFlow.value.mean() - xSrcLogical
             val deltaY = frequencyVisibleRangeFlow.value.mean() - ySrcLogical
 
-            // Apply the offset, making sure we don't end up with an invalid range:
-            val constrainedXOffset =
-                constrainOffsetForRange(-deltaX, timeVisibleRangeFlow.value)
-            var xRangeNew =
-                timeVisibleRangeFlow.value.addOffset(constrainedXOffset)
-            xRangeNew = enforceNonZeroRange(xRangeNew)
+            var xRangeNew = timeVisibleRangeFlow.value
+            if (axis != SpectrogramGestureAxis.FREQUENCY && !clampX) {
+                val constrainedXOffset =
+                    constrainOffsetForRange(-deltaX, timeVisibleRangeFlow.value)
+                xRangeNew = enforceNonZeroRange(
+                    timeVisibleRangeFlow.value.addOffset(constrainedXOffset)
+                )
+            }
 
-            val constrainedYOffset =
-                constrainOffsetForRange(-deltaY, frequencyVisibleRangeFlow.value)
-            var yRangeNew =
-                frequencyVisibleRangeFlow.value.addOffset(constrainedYOffset)
-            yRangeNew = enforceNonZeroRange(yRangeNew)
-
-            if (liveMode) {
-                // No change:
-                xRangeNew = timeVisibleRangeFlow.value
+            var yRangeNew = frequencyVisibleRangeFlow.value
+            if (axis != SpectrogramGestureAxis.TIME) {
+                val constrainedYOffset =
+                    constrainOffsetForRange(-deltaY, frequencyVisibleRangeFlow.value)
+                yRangeNew = enforceNonZeroRange(
+                    frequencyVisibleRangeFlow.value.addOffset(constrainedYOffset)
+                )
             }
 
             internalSetSpectrogramVisibleRange(xRangeNew, yRangeNew)
 
-            // Don't change the pipeline during live acquisition:
-            if (!liveMode)
+            if (!clampX)
                 graph.onVisibleRangeChange(autoBnCRequiredFlow.value)
 
             triggerBitblt()
         }
     }
 
-    suspend fun onDoubleTap(graph: GraphBase, liveMode: Boolean, shouldAutoBnC: Boolean) {
+    suspend fun onDoubleTap(
+        graph: GraphBase,
+        clampX: Boolean,
+        shouldAutoBnC: Boolean,
+        axis: SpectrogramGestureAxis = SpectrogramGestureAxis.FREE,
+    ) {
         mutex.withLock {
-            val xRange = if (liveMode) timeVisibleRangeFlow.value else FloatRange(0f, 1f)
-            internalSetSpectrogramVisibleRange(xRange, FloatRange(0f, 1f))
+            val xRange = when (axis) {
+                SpectrogramGestureAxis.FREQUENCY -> timeVisibleRangeFlow.value
+                else -> if (clampX) timeVisibleRangeFlow.value else FloatRange(0f, 1f)
+            }
+            val yRange = when (axis) {
+                SpectrogramGestureAxis.TIME -> frequencyVisibleRangeFlow.value
+                else -> FloatRange(0f, 1f)
+            }
+            internalSetSpectrogramVisibleRange(xRange, yRange)
 
-            // Don't change the pipeline during live acquisition:
-            if (!liveMode)
+            if (!clampX)
                 graph.onVisibleRangeChange(shouldAutoBnC)
 
             triggerBitblt()

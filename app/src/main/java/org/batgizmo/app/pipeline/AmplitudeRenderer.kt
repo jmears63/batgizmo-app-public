@@ -109,7 +109,10 @@ class AmplitudeRenderer(
         modifier: Modifier,
         settings: Settings
     ) {
-        Compose(modifier, settings,
-            AmplitudeSHCallback(model, model.amplitudeBitmapHolder), Modifier)
+        Compose(
+            modifier,
+            settings,
+            AmplitudeSHCallback(model, model.amplitudeBitmapHolder)
+        )
     }
 }
