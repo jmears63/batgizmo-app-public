@@ -228,7 +228,7 @@ class SettingsUI(private val model: UIModel) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     MyListSelector<Settings.LiveInputSourceOptions>(
                         Settings.LiveInputSourceOptions.entries,
-                        "Live audio Source",
+                        "Live audio source",
                         model.settings.liveInputSource
                     ) { value: Int ->
                         scope.launch {

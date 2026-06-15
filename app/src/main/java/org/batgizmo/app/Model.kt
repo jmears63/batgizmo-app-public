@@ -268,8 +268,8 @@ class UIModel(application: Application,
         }
     }
 
-    private fun createLiveInputSource(): LiveInputSource {
-        return when (settings.liveInputSource) {
+    private fun createLiveInputSource(liveInputSource: Int): LiveInputSource {
+        return when (liveInputSource) {
             Settings.LiveInputSourceOptions.PHONE_MIC.value ->
                 DeviceMicInputSource(micCaptureService)
 
@@ -283,7 +283,7 @@ class UIModel(application: Application,
         fileWriter = null
         pipeline?.shutdown()
         pipeline = null
-        connectedLiveInputSource = null
+        setConnectedLiveInputSource(null)
         liveInputSource.disconnect()
         activeLiveInputSource = null
     }
@@ -293,11 +293,12 @@ class UIModel(application: Application,
         context: Context,
         onFileWriterError: (String) -> Unit,
         resetLiveVisibleRanges: Boolean,
+        liveInputSourceSetting: Int,
     ): LiveConnectResult {
-        val liveInputSource = createLiveInputSource()
+        val liveInputSource = createLiveInputSource(liveInputSourceSetting)
         activeLiveInputSource = liveInputSource
 
-        if (settings.liveInputSource == Settings.LiveInputSourceOptions.USB.value) {
+        if (liveInputSourceSetting == Settings.LiveInputSourceOptions.USB.value) {
             // Make sure there are no pending responses:
             drainChannel(usbErrorChannel)
         }
@@ -312,7 +313,7 @@ class UIModel(application: Application,
             if (!result.connectedOK) {
                 liveInputSource.disconnect()
                 activeLiveInputSource = null
-                return result
+                return augmentUsbMicFallbackResult(result)
             }
 
             require(result.sampleRate != null)
@@ -350,7 +351,7 @@ class UIModel(application: Application,
             )
 
             pipeline = p
-            connectedLiveInputSource = settings.liveInputSource
+            setConnectedLiveInputSource(liveInputSourceSetting)
 
             if (resetLiveVisibleRanges) {
                 // Preset the time range in live mode to a value according to settings.
@@ -384,9 +385,22 @@ class UIModel(application: Application,
             cleanupPartialLiveConnect(liveInputSource)
             return LiveConnectResult(
                 connectedOK = false,
-                errorMessage = e.localizedMessage ?: "Unable to connect live input source."
+                errorMessage = e.localizedMessage ?: "Unable to connect live input source.",
+                offerInternalMicFallback =
+                    settings.liveInputSource == Settings.LiveInputSourceOptions.USB.value &&
+                    LiveConnectResult.isNoUsbMicrophoneError(e.localizedMessage)
             )
         }
+    }
+
+    private fun augmentUsbMicFallbackResult(result: LiveConnectResult): LiveConnectResult {
+        if (result.offerInternalMicFallback)
+            return result
+        if (settings.liveInputSource != Settings.LiveInputSourceOptions.USB.value)
+            return result
+        if (result.connectedOK || !LiveConnectResult.isNoUsbMicrophoneError(result.errorMessage))
+            return result
+        return result.copy(offerInternalMicFallback = true)
     }
 
     private suspend fun reconnectLiveInputSource(onFileWriterError: (String) -> Unit): LiveConnectResult {
@@ -402,7 +416,7 @@ class UIModel(application: Application,
 
         pipeline?.shutdown()
         pipeline = null
-        connectedLiveInputSource = null
+        setConnectedLiveInputSource(null)
 
         mutableMicrophoneVolumeParametersFlow.value = null
         mutableMicrophoneGainFlow.value = null
@@ -412,7 +426,8 @@ class UIModel(application: Application,
             pps,
             getApplication(),
             onFileWriterError,
-            resetLiveVisibleRanges = false
+            resetLiveVisibleRanges = false,
+            liveInputSourceSetting = settings.liveInputSource
         )
     }
 
@@ -557,7 +572,22 @@ class UIModel(application: Application,
         MicCaptureService(getApplication(), viewModelScope)
     private var activeLiveInputSource: LiveInputSource? = null
     private var connectedLiveInputSource: Int? = null
+    private var liveInputSourceOverrideSession = false
+    private val mutableConnectedLiveInputSourceFlow = MutableStateFlow<Int?>(null)
+    val connectedLiveInputSourceFlow: StateFlow<Int?> =
+        mutableConnectedLiveInputSourceFlow.asStateFlow()
     private var liveFileWriterErrorHandler: ((String) -> Unit)? = null
+
+    /** Live input source in use now; falls back to the stored preference when not connected. */
+    fun effectiveLiveInputSource(): Int =
+        connectedLiveInputSource ?: settings.liveInputSource
+
+    private fun setConnectedLiveInputSource(liveInputSourceSetting: Int?) {
+        connectedLiveInputSource = liveInputSourceSetting
+        mutableConnectedLiveInputSourceFlow.value = liveInputSourceSetting
+        liveInputSourceOverrideSession = liveInputSourceSetting != null &&
+            liveInputSourceSetting != settings.liveInputSource
+    }
 
     data class AppModeRequest(
         val mode: AppMode,
@@ -671,7 +701,12 @@ class UIModel(application: Application,
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 // Timber.d("updateStoredSettings called: audioBoostMultiplier = ${updatedSettings.audioBoostFactor}")
+                val liveInputSourceChanged =
+                    updatedSettings.liveInputSource != settings.liveInputSource
                 settings = updatedSettings
+                if (liveInputSourceChanged) {
+                    liveInputSourceOverrideSession = false
+                }
                 // Invoke edit on the datastore to update and persist the changes:
                 settingsDataStore.edit { prefs -> settings.copyToPreferences(prefs) }
             }
@@ -882,12 +917,17 @@ class UIModel(application: Application,
         }
     }
 
-    fun openLive(onFileWriterError: (String) -> Unit) {
+    fun openLive(
+        onFileWriterError: (String) -> Unit,
+        liveInputSourceOverride: Int? = null,
+    ) {
         liveFileWriterErrorHandler = onFileWriterError
         // Heavy processing in CPU worker thread:
         viewModelScope.launch(Dispatchers.Default) {
             val context: Context = getApplication()
             var liveConnectResult: LiveConnectResult? = null
+            val liveInputSourceSetting =
+                liveInputSourceOverride ?: settings.liveInputSource
 
             // Allow any previous pipeline async cleanup to complete before we create a new one,
             // to avoid overlap and races:
@@ -916,7 +956,8 @@ class UIModel(application: Application,
                         pps,
                         context,
                         onFileWriterError,
-                        resetLiveVisibleRanges = true
+                        resetLiveVisibleRanges = true,
+                        liveInputSourceSetting = liveInputSourceSetting
                     )
                 } catch (e: Exception) {
                     internalClosePipeline()
@@ -998,7 +1039,7 @@ class UIModel(application: Application,
             Timber.d("startAudio called")
 
             mutex.withLock {
-                if (settings.liveInputSource != Settings.LiveInputSourceOptions.USB.value) {
+                if (effectiveLiveInputSource() != Settings.LiveInputSourceOptions.USB.value) {
                     Timber.w("Live audio monitor is only available with a USB input source")
                     audioStartResult = LiveAudioStartResult(startedOK = false)
                 } else {
@@ -1130,7 +1171,8 @@ class UIModel(application: Application,
                 var sourceChanged = false
 
                 if (connectedLiveInputSource != null &&
-                    connectedLiveInputSource != settings.liveInputSource
+                    connectedLiveInputSource != settings.liveInputSource &&
+                    !liveInputSourceOverrideSession
                 ) {
                     val handler = liveFileWriterErrorHandler
                     if (handler == null) {
@@ -1211,7 +1253,7 @@ class UIModel(application: Application,
 
         activeLiveInputSource?.disconnect()
         activeLiveInputSource = null
-        connectedLiveInputSource = null
+        setConnectedLiveInputSource(null)
 
         pipeline?.shutdown()
         pipeline = null

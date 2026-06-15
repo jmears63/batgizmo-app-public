@@ -31,6 +31,36 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 
 @Composable
+fun ConfirmDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    title: String,
+    message: String,
+    confirmText: String = "OK",
+    dismissText: String = "Cancel",
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(confirmText)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(dismissText)
+            }
+        },
+        title = { Text(title) },
+        text = {
+            Row(Modifier.fillMaxWidth()) {
+                Text(message)
+            }
+        }
+    )
+}
+
+@Composable
 fun ErrorDialog(
     onDismiss: () -> Unit,
     errorText: String

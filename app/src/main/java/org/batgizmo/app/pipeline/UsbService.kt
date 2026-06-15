@@ -266,7 +266,7 @@ class UsbService(private val context: Context,
                 usbDevice = usbManager.deviceList.values.firstOrNull()
                 if (usbDevice == null) {
                     Timber.i("No USB device found")
-                    throw RuntimeException("No USB microphone found. Please plug one in to the phone.")
+                    throw RuntimeException(LiveConnectResult.NO_USB_MICROPHONE_MESSAGE)
                 }
 
                 usbDevice?.let { device ->

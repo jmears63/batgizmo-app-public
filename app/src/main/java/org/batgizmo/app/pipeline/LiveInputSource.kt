@@ -65,12 +65,21 @@ class UsbLiveInputSource(
         } catch (e: Exception) {
             return LiveConnectResult(
                 connectedOK = false,
-                errorMessage = e.localizedMessage ?: "Unable to connect USB microphone."
+                errorMessage = e.localizedMessage ?: "Unable to connect USB microphone.",
+                offerInternalMicFallback =
+                    LiveConnectResult.isNoUsbMicrophoneError(e.localizedMessage)
             )
         }
 
         // Part 2: suspend until the *first* response (collect would loop for ever):
-        return usbConnectFlow.first()
+        val result = usbConnectFlow.first()
+        return if (!result.connectedOK &&
+            LiveConnectResult.isNoUsbMicrophoneError(result.errorMessage)
+        ) {
+            result.copy(offerInternalMicFallback = true)
+        } else {
+            result
+        }
     }
 
     private suspend fun <T> drainConnectChannel(channel: Channel<T>) {

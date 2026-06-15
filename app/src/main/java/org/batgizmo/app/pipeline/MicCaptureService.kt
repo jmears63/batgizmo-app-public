@@ -25,9 +25,12 @@ package org.batgizmo.app.pipeline
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,9 +61,97 @@ class MicCaptureService(
     private var audioRecord: AudioRecord? = null
     private var captureJob: Job? = null
     private var paused = false
+    private val audioManager: AudioManager by lazy {
+        context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
 
     val sampleRateHz: Int
         get() = SAMPLE_RATE_HZ
+
+    private fun builtInInputDevices(): List<AudioDeviceInfo> {
+        val builtInTypes = mutableSetOf(AudioDeviceInfo.TYPE_BUILTIN_MIC)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builtInTypes.add(37) // AudioDeviceInfo.TYPE_BUILTIN_BACK_MIC
+        }
+        return audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .filter { device ->
+                device.type in builtInTypes &&
+                    (device.sampleRates.isEmpty() || SAMPLE_RATE_HZ in device.sampleRates)
+            }
+    }
+
+    private fun tryOpenAudioRecord(
+        audioSource: Int,
+        preferredDevice: AudioDeviceInfo?,
+        bufferBytes: Int,
+        channelConfig: Int,
+        encoding: Int,
+    ): AudioRecord? {
+        return try {
+            val builder = AudioRecord.Builder()
+                .setAudioSource(audioSource)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(SAMPLE_RATE_HZ)
+                        .setChannelMask(channelConfig)
+                        .setEncoding(encoding)
+                        .build()
+                )
+                .setBufferSizeInBytes(bufferBytes)
+            val record = builder.build()
+            if (record.state != AudioRecord.STATE_INITIALIZED) {
+                record.release()
+                return null
+            }
+            if (preferredDevice != null && !record.setPreferredDevice(preferredDevice)) {
+                record.release()
+                return null
+            }
+            record
+        } catch (e: Exception) {
+            Timber.w(
+                e,
+                "AudioRecord open failed source=$audioSource device=${preferredDevice?.productName}"
+            )
+            null
+        }
+    }
+
+    /**
+     * Open the phone's built-in microphone even when a USB audio device is connected.
+     * Android may otherwise route [MediaRecorder.AudioSource.MIC] to the USB device.
+     */
+    private fun openBuiltInMicrophone(
+        bufferBytes: Int,
+        channelConfig: Int,
+        encoding: Int,
+    ): AudioRecord? {
+        val builtInDevices = builtInInputDevices()
+        val sourcesToTry = listOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.CAMCORDER,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+        )
+
+        if (builtInDevices.isEmpty()) {
+            for (source in sourcesToTry) {
+                tryOpenAudioRecord(source, null, bufferBytes, channelConfig, encoding)?.let {
+                    return it
+                }
+            }
+            return null
+        }
+
+        for (device in builtInDevices) {
+            Timber.d("Trying built-in input device id=${device.id} ${device.productName}")
+            for (source in sourcesToTry) {
+                tryOpenAudioRecord(source, device, bufferBytes, channelConfig, encoding)?.let {
+                    return it
+                }
+            }
+        }
+        return null
+    }
 
     suspend fun start(): LiveConnectResult {
         return mutex.withLock {
@@ -88,25 +179,11 @@ class MicCaptureService(
             }
 
             val bufferBytes = maxOf(minBufferBytes * 2, SAMPLE_RATE_HZ * 2 * READ_CHUNK_MS / 1000)
-            val record = AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.MIC)
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setSampleRate(SAMPLE_RATE_HZ)
-                        .setChannelMask(channelConfig)
-                        .setEncoding(encoding)
-                        .build()
-                )
-                .setBufferSizeInBytes(bufferBytes)
-                .build()
-
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                record.release()
-                return LiveConnectResult(
+            val record = openBuiltInMicrophone(bufferBytes, channelConfig, encoding)
+                ?: return LiveConnectResult(
                     connectedOK = false,
-                    errorMessage = "Unable to open the phone microphone for capture."
+                    errorMessage = "Unable to open the internal microphone for capture."
                 )
-            }
 
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {

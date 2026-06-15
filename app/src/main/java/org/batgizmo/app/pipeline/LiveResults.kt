@@ -31,8 +31,18 @@ data class LiveConnectResult(
     val deviceName: String? = null,
     val manufacturerName: String? = null,
     val productName: String? = null,
-    val sampleRate: Int? = null
-)
+    val sampleRate: Int? = null,
+    val offerInternalMicFallback: Boolean = false,
+) {
+    companion object {
+        const val NO_USB_MICROPHONE_MESSAGE =
+            "No USB microphone found. Please plug one in to the phone."
+
+        fun isNoUsbMicrophoneError(errorMessage: String?): Boolean {
+            return errorMessage?.startsWith("No USB microphone found") == true
+        }
+    }
+}
 
 /**
  * Outcome of attempting to start live or viewer audio playback.

@@ -172,6 +172,7 @@ class SpectrogramUI(
         val menuExpanded: MutableState<Boolean> = mutableStateOf(false),
         val showMetadata: MutableState<Boolean> = mutableStateOf(false),
         val showErrorDialog: MutableState<Boolean> = mutableStateOf(false),
+        val showInternalMicFallbackDialog: MutableState<Boolean> = mutableStateOf(false),
         val resetUIOnErrorDialogDismissed: MutableState<Boolean> = mutableStateOf(false),
         val errorMessage: MutableState<String> = mutableStateOf(""),
         val processingFlag: MutableState<Boolean> = mutableStateOf(false),
@@ -195,6 +196,7 @@ class SpectrogramUI(
             menuExpanded.value = false
             showMetadata.value = false
             showErrorDialog.value = false
+            showInternalMicFallbackDialog.value = false
             resetUIOnErrorDialogDismissed.value = false
             errorMessage.value = ""
             processingFlag.value = false
@@ -375,6 +377,7 @@ class SpectrogramUI(
        Timber.d("SpectrogramUI.Compose called")
 
         val context = LocalContext.current
+        val scope = rememberCoroutineScope()
 
         val documentPickerLauncher = DocumentHelper.composeDocumentPickerLauncher(
             model.documentHelper,
@@ -422,6 +425,8 @@ class SpectrogramUI(
                     || uiState.audioMode.intValue == AudioMode.ON.value)
         }
 
+        val connectedLiveInputSource by model.connectedLiveInputSourceFlow.collectAsState()
+
         /**
          * Handle the case when data streaming has started.
          */
@@ -429,6 +434,7 @@ class SpectrogramUI(
             appMode.intValue,
             uiState.liveMode.intValue,
             uiState.dataPresent.value,
+            connectedLiveInputSource,
             model.settings.liveInputSource
         ) {
             updateAudioButtonEnabled(appMode.intValue)
@@ -571,6 +577,7 @@ class SpectrogramUI(
         onExitApp: () -> Unit
     ) {
         // Timber.d("ComposeMiddle called")
+        val scope = rememberCoroutineScope()
         Row {
             /*
                 zIndex is set for the following two sibling elements. This is so that
@@ -710,6 +717,19 @@ class SpectrogramUI(
                     }
                 },
                 uiState.errorMessage.value
+            )
+        }
+
+        if (uiState.showInternalMicFallbackDialog.value) {
+            ConfirmDialog(
+                onDismiss = { uiState.showInternalMicFallbackDialog.value = false },
+                onConfirm = {
+                    uiState.showInternalMicFallbackDialog.value = false
+                    switchToInternalMicAndConnect(scope)
+                },
+                title = "No USB microphone",
+                message = "No suitable USB microphone was detected. " +
+                    "Would you like to use the internal device microphone instead?",
             )
         }
     }
@@ -900,7 +920,7 @@ class SpectrogramUI(
         val isLiveAndStreaming = appModeInt == AppMode.LIVE.value &&
             uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
         val isUsbLiveSource =
-            model.settings.liveInputSource == Settings.LiveInputSourceOptions.USB.value
+            model.effectiveLiveInputSource() == Settings.LiveInputSourceOptions.USB.value
         val isViewingAndDataLoaded =
             appModeInt == AppMode.VIEWER.value && uiState.dataPresent.value
         buttonState.audioEnabled.value =
@@ -1581,11 +1601,24 @@ class SpectrogramUI(
             uiState.liveMode.intValue = LiveMode.OFF.value
             uiState.title.value = null
             uiState.samplingRateHz.value = null
-            if (lcr.errorMessage != null) {
+            if (lcr.offerInternalMicFallback) {
+                uiState.showInternalMicFallbackDialog.value = true
+            } else if (lcr.errorMessage != null) {
                 val msg = lcr.errorMessage
                 uiState.errorMessage.value = "Unable to connect live.\n\n$msg"
                 uiState.showErrorDialog.value = true
             }
+        }
+    }
+
+    private fun switchToInternalMicAndConnect(scope: CoroutineScope) {
+        scope.launch {
+            uiState.liveMode.intValue = LiveMode.CONNECTING.value
+            buttonState.acquisitionChecked.value = true
+            model.openLive(
+                ::fileWriterErrorHandler,
+                Settings.LiveInputSourceOptions.PHONE_MIC.value
+            )
         }
     }
 
