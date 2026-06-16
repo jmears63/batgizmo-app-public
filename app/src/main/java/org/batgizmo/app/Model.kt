@@ -1057,7 +1057,8 @@ class UIModel(application: Application,
                         else
                             null,
                         settings.audioBoostFactor,
-                        playbackMode == Settings.AudioPlaybackModeOptions.DIRECT.value
+                        // Direct playback is viewer-only; live monitor would cause feedback.
+                        false
                     )
                     audioStartResult = LiveAudioStartResult(startedOK = true)
                 }

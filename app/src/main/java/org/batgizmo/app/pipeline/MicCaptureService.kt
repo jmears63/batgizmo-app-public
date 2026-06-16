@@ -133,6 +133,7 @@ class MicCaptureService(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
         )
 
+        // Pick the first audio source that matches our criteria:
         if (builtInDevices.isEmpty()) {
             for (source in sourcesToTry) {
                 tryOpenAudioRecord(source, null, bufferBytes, channelConfig, encoding)?.let {

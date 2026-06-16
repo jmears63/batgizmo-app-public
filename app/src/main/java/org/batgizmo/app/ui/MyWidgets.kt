@@ -78,7 +78,7 @@ import kotlin.enums.EnumEntries
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun <T> MyListSelector(
-    enumEntries: EnumEntries<T>,
+    enumEntries: List<T>,
     description: String,
     selectedValue: Int,
     onChange: (Int) -> Unit

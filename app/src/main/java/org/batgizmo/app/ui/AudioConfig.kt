@@ -47,6 +47,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -114,12 +115,35 @@ class AudioConfig {
         val constrainedRef1kHz = constrainFrequency(settings.heterodyneRef1kHz, 0.33f)
         val constrainedRef2kHz = constrainFrequency(settings.heterodyneRef2kHz, 0.66f)
 
+        fun coercePlaybackModeForAppMode(mode: Int): Int {
+            if (appMode != AppMode.VIEWER.value &&
+                mode == Settings.AudioPlaybackModeOptions.DIRECT.value
+            ) {
+                return Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+            }
+            return mode
+        }
+
+        val playbackModeOptions =
+            if (appMode == AppMode.VIEWER.value)
+                Settings.AudioPlaybackModeOptions.entries
+            else
+                Settings.AudioPlaybackModeOptions.entries.filter {
+                    it != Settings.AudioPlaybackModeOptions.DIRECT
+                }
+
         // State
-        val initialPlaybackMode = if (settings.audioPlaybackModePersisted)
-            settings.audioPlaybackMode
-        else
-            settings.defaultAudioPlaybackModeForSampleRate(sampleRateHz)
+        val initialPlaybackMode = coercePlaybackModeForAppMode(
+            if (settings.audioPlaybackModePersisted)
+                settings.audioPlaybackMode
+            else
+                settings.defaultAudioPlaybackModeForSampleRate(sampleRateHz)
+        )
         val audioPlaybackMode = rememberSaveable { mutableIntStateOf(initialPlaybackMode) }
+
+        LaunchedEffect(appMode) {
+            audioPlaybackMode.intValue = coercePlaybackModeForAppMode(audioPlaybackMode.intValue)
+        }
         val audioRef1kHz = rememberSaveable { mutableIntStateOf(constrainedRef1kHz) }
         val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz) }
         val loopedPlayback = rememberSaveable { mutableStateOf(settings.loopedAudioPlayback) }
@@ -166,7 +190,7 @@ class AudioConfig {
                         )
 
                         MyListSelector<Settings.AudioPlaybackModeOptions>(
-                            Settings.AudioPlaybackModeOptions.entries,
+                            playbackModeOptions,
                             "Playback mode",
                             audioPlaybackMode.intValue
                         ) { value ->
