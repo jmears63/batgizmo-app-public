@@ -65,6 +65,11 @@ class MicCaptureService(
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
 
+    @Volatile
+    var liveAudioMonitorEnabled: Boolean = false
+
+    var feedLiveAudioSamples: ((ShortArray, Int, Int) -> Unit)? = null
+
     val sampleRateHz: Int
         get() = SAMPLE_RATE_HZ
 
@@ -163,7 +168,7 @@ class MicCaptureService(
             ) {
                 return LiveConnectResult(
                     connectedOK = false,
-                    errorMessage = "Microphone permission is required. Grant it in app settings."
+                    errorMessage = "Microphone permission is required to use the internal microphone."
                 )
             }
 
@@ -211,8 +216,11 @@ class MicCaptureService(
 
                     val samplesRead = recorder.read(readBuffer, 0, readBuffer.size)
                     when {
-                        samplesRead > 0 ->
+                        samplesRead > 0 -> {
                             LiveDataBridge.onHeapDataBufferReady(readBuffer, 0, samplesRead)
+                            if (liveAudioMonitorEnabled)
+                                feedLiveAudioSamples?.invoke(readBuffer, 0, samplesRead)
+                        }
 
                         samplesRead < 0 ->
                             Timber.e("AudioRecord.read failed: $samplesRead")
@@ -235,6 +243,7 @@ class MicCaptureService(
     }
 
     private suspend fun stopLocked() {
+        liveAudioMonitorEnabled = false
         captureJob?.cancelAndJoin()
         captureJob = null
 

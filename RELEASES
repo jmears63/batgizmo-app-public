@@ -1,5 +1,10 @@
 Version     Date            Description
 
+1.6.0                       Added support for using the internal device microphone.
+                            When a pan or zoom gesture starts over an axis, the range of the other axis is fixed.
+                            Panning and zooming is now possible in the amplitude graph when visible.
+                            Build for API version 37.
+
 1.5.0       2026-03-09      Rebuild targeting API version 36, Android 16 Baklava.
 
 1.4.0       2025-12-19      Added a slider for setting microphone sensitivity for microphones that

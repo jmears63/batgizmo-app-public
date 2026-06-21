@@ -755,6 +755,47 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromStream(JNIEnv *env, jobje
 }
 
 extern "C"
+JNIEXPORT jboolean JNICALL
+Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromLiveInput(JNIEnv *env, jobject thiz,
+                                                                 jint audio_device_id,
+                                                                 jint sample_rate,
+                                                                 jint heterodyne1_kHz,
+                                                                 jint heterodyne2_kHz,
+                                                                 jfloat audio_boost_factor,
+                                                                 jboolean direct_playback) {
+
+    pthread_mutex_lock(&s_mutex);
+
+    stop_audio_output(env);
+    calc_audio_out_parameters(sample_rate);
+    jboolean rc = initialise_audio_data(heterodyne1_kHz, heterodyne2_kHz,
+                                        audio_boost_factor, sample_rate / 1000,
+                                        direct_playback);
+    rc = rc && start_audio_output(audio_device_id);
+
+    pthread_mutex_unlock(&s_mutex);
+
+    return rc;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_batgizmo_app_pipeline_NativeUSB_feedLiveAudioSamples(JNIEnv *env, jobject thiz,
+                                                              jshortArray buffer,
+                                                              jint offset,
+                                                              jint count) {
+    if (count <= 0)
+        return;
+
+    jshort *samples = env->GetShortArrayElements(buffer, nullptr);
+    pthread_mutex_lock(&s_mutex);
+    if (s_android_stream)
+        write_audio_output((data_t *) (samples + offset), (uint32_t) count, 1);
+    pthread_mutex_unlock(&s_mutex);
+    env->ReleaseShortArrayElements(buffer, samples, JNI_ABORT);
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_org_batgizmo_app_pipeline_NativeUSB_stopAudio(JNIEnv *env, jobject thiz) {
     pthread_mutex_lock(&s_mutex);

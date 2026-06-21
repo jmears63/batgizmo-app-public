@@ -22,8 +22,10 @@
 
 package org.batgizmo.app.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
 import android.system.ErrnoException
@@ -31,6 +33,8 @@ import android.system.Os
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -93,6 +97,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowHeightSizeClass
@@ -224,6 +229,12 @@ class SpectrogramUI(
         uiState.heterodyneRef1kHz, uiState.heterodyneRef2kHz)
 
     private val audioConfig = AudioConfig()
+
+    /** Set from [Compose] to request [Manifest.permission.RECORD_AUDIO] before internal mic use. */
+    private var openLiveWithPermissions: ((Int?) -> Unit)? = null
+
+    private var pendingLiveInputSourceOverride: Int? = null
+    private var pendingLiveUseSettingsSource: Boolean = false
 
 
     /**
@@ -379,6 +390,31 @@ class SpectrogramUI(
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
 
+        val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            val override = if (pendingLiveUseSettingsSource) null else pendingLiveInputSourceOverride
+            pendingLiveInputSourceOverride = null
+            pendingLiveUseSettingsSource = false
+            if (granted) {
+                model.openLive(::fileWriterErrorHandler, override)
+            } else {
+                buttonState.acquisitionChecked.value = false
+                uiState.liveMode.intValue = LiveMode.OFF.value
+                uiState.errorMessage.value =
+                    "Microphone permission is required to use the internal microphone."
+                uiState.showErrorDialog.value = true
+            }
+        }
+
+        openLiveWithPermissions = { liveInputSourceOverride ->
+            ensureRecordAudioAndOpenLive(
+                context,
+                recordAudioPermissionLauncher,
+                liveInputSourceOverride
+            )
+        }
+
         val documentPickerLauncher = DocumentHelper.composeDocumentPickerLauncher(
             model.documentHelper,
             onSelection = { uriData: DocumentHelper.UriData ->
@@ -444,15 +480,12 @@ class SpectrogramUI(
          * Logic to enable/disable auto BnC.
          */
         LaunchedEffect(appMode.intValue, model.settings.autoBnCEnabledLive, model.settings.autoBnCEnabledViewer) {
-            // Logic to determine if auto BnC should be applied. This happens asynchronously so
-            // there may be races.
-            val required = if (appMode.intValue == AppMode.LIVE.value)
-                model.settings.autoBnCEnabledLive
-            else
-                model.settings.autoBnCEnabledViewer
+            // This effect reliably re-runs on app mode changes (appMode is observable). Settings
+            // changes are handled separately in onSettingsUpdate, because model.settings is a plain
+            // var that Compose does not observe.
 
             // Set the value via the model - which exposes back to us as autoBnCRequiredFlow.
-            model.setAutoBnCRequired(required)
+            model.setAutoBnCRequired(autoBnCRequired(appMode.intValue, model.settings))
         }
 
         /**
@@ -922,22 +955,11 @@ class SpectrogramUI(
     private fun updateAudioButtonEnabled(appModeInt: Int) {
         val isLiveAndStreaming = appModeInt == AppMode.LIVE.value &&
             uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
-        val isUsbLiveSource =
-            model.effectiveLiveInputSource() == Settings.LiveInputSourceOptions.USB.value
         val isViewingAndDataLoaded =
             appModeInt == AppMode.VIEWER.value && uiState.dataPresent.value
-        buttonState.audioEnabled.value =
-            (isLiveAndStreaming && isUsbLiveSource) || isViewingAndDataLoaded
+        buttonState.audioEnabled.value = isLiveAndStreaming || isViewingAndDataLoaded
         buttonState.manualRecordingEnabled.value = isLiveAndStreaming
         buttonState.triggeredRecordingEnabled.value = isLiveAndStreaming
-
-        if (isLiveAndStreaming && !isUsbLiveSource &&
-            uiState.audioMode.intValue != AudioMode.OFF.value
-        ) {
-            model.stopAudio()
-            uiState.audioMode.intValue = AudioMode.OFF.value
-            buttonState.audioChecked.value = false
-        }
     }
 
     private fun updateHeterodyneUIState() {
@@ -1262,7 +1284,7 @@ class SpectrogramUI(
 
                     // Start live data acquisition asynchronously:
                     liveMode.intValue = LiveMode.CONNECTING.value
-                    model.openLive(::fileWriterErrorHandler)
+                    openLiveCheckingPermissions()
                 }
                 else {
                     // Unchecked and already OFF, no action.
@@ -1566,6 +1588,34 @@ class SpectrogramUI(
         }
     }
 
+    private fun openLiveCheckingPermissions(liveInputSourceOverride: Int? = null) {
+        openLiveWithPermissions?.invoke(liveInputSourceOverride)
+            ?: model.openLive(::fileWriterErrorHandler, liveInputSourceOverride)
+    }
+
+    private fun ensureRecordAudioAndOpenLive(
+        context: Context,
+        permissionLauncher: ManagedActivityResultLauncher<String, Boolean>,
+        liveInputSourceOverride: Int?,
+    ) {
+        val liveInputSource = liveInputSourceOverride ?: model.settings.liveInputSource
+        if (liveInputSource != Settings.LiveInputSourceOptions.PHONE_MIC.value) {
+            model.openLive(::fileWriterErrorHandler, liveInputSourceOverride)
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            model.openLive(::fileWriterErrorHandler, liveInputSourceOverride)
+            return
+        }
+
+        pendingLiveUseSettingsSource = liveInputSourceOverride == null
+        pendingLiveInputSourceOverride = liveInputSourceOverride
+        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
     private fun onLiveConnected(
         lcr: LiveConnectResult,
         appMode: MutableIntState
@@ -1618,10 +1668,7 @@ class SpectrogramUI(
         scope.launch {
             uiState.liveMode.intValue = LiveMode.CONNECTING.value
             buttonState.acquisitionChecked.value = true
-            model.openLive(
-                ::fileWriterErrorHandler,
-                Settings.LiveInputSourceOptions.PHONE_MIC.value
-            )
+            openLiveCheckingPermissions(Settings.LiveInputSourceOptions.PHONE_MIC.value)
         }
     }
 
@@ -1698,8 +1745,21 @@ class SpectrogramUI(
             }
         }
 
+        // model.settings is a plain var (not observed by Compose), so the auto BnC LaunchedEffect
+        // does not re-run when the auto BnC toggles change. Refresh the required state here, before
+        // reload, so both the manual slider's enabled state and the render use the new value.
+        model.setAutoBnCRequired(
+            autoBnCRequired(model.topLevelUIState.appMode.intValue, newSettings)
+        )
+
         model.onSettingsUpdate(newSettings, previousSettings, uiState.rawPageRange.value)
     }
+
+    private fun autoBnCRequired(appModeInt: Int, settings: Settings): Boolean =
+        if (appModeInt == AppMode.LIVE.value)
+            settings.autoBnCEnabledLive
+        else
+            settings.autoBnCEnabledViewer
 
     private fun closeLive() {
         model.stopAudio()       // Idempotent.
@@ -1770,7 +1830,7 @@ class SpectrogramUI(
         model.locationTracker.startPeriodicUpdates()
 
         if (streaming)
-            model.openLive(::fileWriterErrorHandler)
+            openLiveCheckingPermissions()
     }
     
     private fun fileWriterErrorHandler(msg: String) {

@@ -94,6 +94,12 @@ class NativeUSB {
     external fun startAudioFromStream(audioDeviceId: Int, heterodynekHz: Int,
                                       heterodyne2kHz: Int, audioBoostFactor: Float,
                                       directPlayback: Boolean): Boolean
+    external fun startAudioFromLiveInput(
+        audioDeviceId: Int, sampleRateHz: Int,
+        heterodynekHz: Int, heterodyne2kHz: Int, audioBoostFactor: Float,
+        directPlayback: Boolean
+    ): Boolean
+    external fun feedLiveAudioSamples(buffer: ShortArray, offset: Int, count: Int)
     external fun startAudioFromBuffer(
         audioDeviceId: Int, samplingRateHz: Int,
         heterodynekHz: Int, heterodyne2kHz: Int,
@@ -1281,6 +1287,30 @@ class UsbService(private val context: Context,
                         heterodyne2kHz ?: 0, audioBoostFactor, directPlayback)
             }
         }
+    }
+
+    /**
+     * Heterodyne live monitor for non-USB sources (phone microphone). Samples are
+     * pushed via [feedLiveAudioSamples] from the capture thread.
+     */
+    suspend fun startLiveInputAudio(
+        sampleRateHz: Int,
+        heterodyne1kHz: Int,
+        heterodyne2kHz: Int?,
+        audioBoostFactor: Float,
+        directPlayback: Boolean,
+    ): Boolean {
+        return mutex.withLock {
+            Timber.i("startLiveInputAudio: sampleRateHz = $sampleRateHz heterodynekHz = $heterodyne1kHz")
+            nativeUsb.startAudioFromLiveInput(
+                AAUDIO_UNSPECIFIED, sampleRateHz,
+                heterodyne1kHz, heterodyne2kHz ?: 0, audioBoostFactor, directPlayback
+            )
+        }
+    }
+
+    fun feedLiveAudioSamples(buffer: ShortArray, offset: Int, count: Int) {
+        nativeUsb.feedLiveAudioSamples(buffer, offset, count)
     }
 
     /**

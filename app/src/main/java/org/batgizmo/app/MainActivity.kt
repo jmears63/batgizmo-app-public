@@ -70,11 +70,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-    private val requestRecordAudioPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            Timber.i("Record audio permission granted: $granted")
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
 
         enableEdgeToEdge()
@@ -90,7 +85,8 @@ class MainActivity : ComponentActivity() {
         val model = ViewModelProvider(this, factory).get(UIModel::class.java)
 
         requestLocationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        requestRecordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+
+        // RECORD_AUDIO is requested when the user connects with the internal microphone.
 
         // Tell Android we'll manage insets:
         WindowCompat.setDecorFitsSystemWindows(window, false)

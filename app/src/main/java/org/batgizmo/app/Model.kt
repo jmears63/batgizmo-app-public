@@ -570,7 +570,9 @@ class UIModel(application: Application,
     private val usbService =
         UsbService(getApplication(), this, usbConnectChannel, usbErrorChannel, viewModelScope)
     private val micCaptureService =
-        MicCaptureService(getApplication(), viewModelScope)
+        MicCaptureService(getApplication(), viewModelScope).also { mic ->
+            mic.feedLiveAudioSamples = usbService::feedLiveAudioSamples
+        }
     private var activeLiveInputSource: LiveInputSource? = null
     private var connectedLiveInputSource: Int? = null
     private var liveInputSourceOverrideSession = false
@@ -1040,27 +1042,44 @@ class UIModel(application: Application,
             Timber.d("startAudio called")
 
             mutex.withLock {
-                if (effectiveLiveInputSource() != Settings.LiveInputSourceOptions.USB.value) {
-                    Timber.w("Live audio monitor is only available with a USB input source")
-                    audioStartResult = LiveAudioStartResult(startedOK = false)
-                } else {
-                    val sampleRateHz = requireNotNull(pipeline?.sampleRateHz()) {
-                        "Pipeline sample rate required for live audio"
-                    }
-                    val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
-                    usbService.startAudio(
-                        settings.heterodyneRef1kHz,
-                        if (playbackMode ==
-                            Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+                val sampleRateHz = requireNotNull(pipeline?.sampleRateHz()) {
+                    "Pipeline sample rate required for live audio"
+                }
+                val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
+                val heterodyne2kHz =
+                    if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
+                        settings.heterodyneRef2kHz
+                    else
+                        null
+
+                when (effectiveLiveInputSource()) {
+                    Settings.LiveInputSourceOptions.USB.value -> {
+                        usbService.startAudio(
+                            settings.heterodyneRef1kHz,
+                            heterodyne2kHz,
+                            settings.audioBoostFactor,
+                            // Direct playback is viewer-only; live monitor would cause feedback.
+                            false
                         )
-                            settings.heterodyneRef2kHz
-                        else
-                            null,
-                        settings.audioBoostFactor,
-                        // Direct playback is viewer-only; live monitor would cause feedback.
-                        false
-                    )
-                    audioStartResult = LiveAudioStartResult(startedOK = true)
+                        audioStartResult = LiveAudioStartResult(startedOK = true)
+                    }
+
+                    Settings.LiveInputSourceOptions.PHONE_MIC.value -> {
+                        val started = usbService.startLiveInputAudio(
+                            sampleRateHz,
+                            settings.heterodyneRef1kHz,
+                            heterodyne2kHz,
+                            settings.audioBoostFactor,
+                            false
+                        )
+                        micCaptureService.liveAudioMonitorEnabled = started
+                        audioStartResult = LiveAudioStartResult(startedOK = started)
+                    }
+
+                    else -> {
+                        Timber.w("Live audio monitor is not available for this input source")
+                        audioStartResult = LiveAudioStartResult(startedOK = false)
+                    }
                 }
             }
 
@@ -1120,7 +1139,7 @@ class UIModel(application: Application,
     fun stopAudio() {
         viewModelScope.launch(Dispatchers.Default) {
             mutex.withLock {
-                // Timber.d("Model: stopAudio called")
+                micCaptureService.liveAudioMonitorEnabled = false
                 usbService.stopAudio()
             }
         }
