@@ -53,6 +53,7 @@ data class Settings(
     var audioPlaybackMode: Int = AudioPlaybackModeOptions.SINGLE_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
     var loopedAudioPlayback: Boolean = false,
+    var suppressAudioFeedbackWarning: Boolean = false,
     var includeLocationInFile: Boolean = true,
     var audioBoostFactor: Float = 4f,
     var preTriggerTimeMs: Int = PreTriggerTimeOptions.PRETRIGGER_TIME_500MS.value,
@@ -244,6 +245,7 @@ data class Settings(
     private val keyAutoTriggerRangeStartkHz = floatPreferencesKey("autoTriggerRangeStartkHz")
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
     private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
+    private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -279,6 +281,7 @@ data class Settings(
         prefs[keyAutoTriggerRangeStartkHz] = autoTriggerRangeMinkHz
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
         prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
+        prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -339,6 +342,8 @@ data class Settings(
             autoTriggerRangeMaxkHz = requireNotNull(prefs[keyAutoTriggerRangeEndkHz])
         if (prefs[keyLoopedAudioPlayback] != null)
             loopedAudioPlayback = requireNotNull(prefs[keyLoopedAudioPlayback])
+        if (prefs[keySuppressAudioFeedbackWarning] != null)
+            suppressAudioFeedbackWarning = requireNotNull(prefs[keySuppressAudioFeedbackWarning])
     }
 }
 

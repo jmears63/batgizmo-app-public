@@ -404,9 +404,12 @@ class UIModel(application: Application,
         return result.copy(offerInternalMicFallback = true)
     }
 
-    private suspend fun reconnectLiveInputSource(onFileWriterError: (String) -> Unit): LiveConnectResult {
+    private suspend fun reconnectLiveInputSource(
+        onFileWriterError: (String) -> Unit,
+        targetSource: Int = settings.liveInputSource
+    ): LiveConnectResult {
         Timber.i(
-            "Live input source changed from $connectedLiveInputSource to ${settings.liveInputSource}; reconnecting"
+            "Live input source changing from $connectedLiveInputSource to $targetSource; reconnecting"
         )
 
         activeLiveInputSource?.disconnect()
@@ -428,7 +431,7 @@ class UIModel(application: Application,
             getApplication(),
             onFileWriterError,
             resetLiveVisibleRanges = false,
-            liveInputSourceSetting = settings.liveInputSource
+            liveInputSourceSetting = targetSource
         )
     }
 
@@ -1191,9 +1194,12 @@ class UIModel(application: Application,
             mutex.withLock {
                 var sourceChanged = false
 
+                // We need to (re)connect a different source if what is connected no longer matches
+                // the preferred source in settings. This covers two cases: the user changed the
+                // setting while paused, and an override session (running a fallback source because
+                // the preferred source was missing when acquisition started).
                 if (connectedLiveInputSource != null &&
-                    connectedLiveInputSource != settings.liveInputSource &&
-                    !liveInputSourceOverrideSession
+                    connectedLiveInputSource != settings.liveInputSource
                 ) {
                     val handler = liveFileWriterErrorHandler
                     if (handler == null) {
@@ -1205,9 +1211,34 @@ class UIModel(application: Application,
                         return@withLock
                     }
                     sourceChanged = true
-                    reconnectResult = reconnectLiveInputSource(handler)
-                    if (!reconnectResult!!.connectedOK) {
-                        return@withLock
+
+                    if (liveInputSourceOverrideSession) {
+                        // Running on a fallback source. Re-probe the preferred source and switch to
+                        // it if it is now available; otherwise keep running on the fallback source
+                        // without surfacing an error (so a missing USB mic doesn't stop acquisition).
+                        val fallbackSource = connectedLiveInputSource!!
+                        val preferredResult = reconnectLiveInputSource(handler, settings.liveInputSource)
+                        if (preferredResult.connectedOK) {
+                            reconnectResult = preferredResult
+                        } else {
+                            Timber.i(
+                                "Preferred live input ${settings.liveInputSource} still unavailable; " +
+                                    "continuing on fallback source $fallbackSource"
+                            )
+                            val fallbackResult = reconnectLiveInputSource(handler, fallbackSource)
+                            if (!fallbackResult.connectedOK) {
+                                // The fallback failed too, so this is a genuine failure to report.
+                                reconnectResult = fallbackResult
+                                return@withLock
+                            }
+                            // Continue silently on the fallback source (no UI churn or re-prompt).
+                        }
+                    } else {
+                        // The user changed the preferred source in settings while paused.
+                        reconnectResult = reconnectLiveInputSource(handler)
+                        if (!reconnectResult!!.connectedOK) {
+                            return@withLock
+                        }
                     }
                 }
 

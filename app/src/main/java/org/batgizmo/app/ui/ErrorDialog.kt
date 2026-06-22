@@ -22,12 +22,15 @@
 
 package org.batgizmo.app.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 
 @Composable
@@ -38,6 +41,9 @@ fun ConfirmDialog(
     message: String,
     confirmText: String = "OK",
     dismissText: String = "Cancel",
+    checkboxLabel: String? = null,
+    checkboxChecked: Boolean = false,
+    onCheckboxChange: ((Boolean) -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -53,8 +59,17 @@ fun ConfirmDialog(
         },
         title = { Text(title) },
         text = {
-            Row(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth()) {
                 Text(message)
+                if (checkboxLabel != null && onCheckboxChange != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = checkboxChecked,
+                            onCheckedChange = onCheckboxChange
+                        )
+                        Text(checkboxLabel)
+                    }
+                }
             }
         }
     )

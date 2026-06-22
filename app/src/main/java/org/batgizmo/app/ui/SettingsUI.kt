@@ -444,9 +444,24 @@ class SettingsUI(private val model: UIModel) {
             }
             item {
                 HorizontalDivider(thickness = 2.dp)
-                Text("DiagnosticLogger")
+                Text("Warnings")
             }
 
+            item {
+                MyCheckbox(
+                    "Suppress UI warnings", model.settings.suppressAudioFeedbackWarning
+                ) { value: Boolean ->
+                    // Signal the updated settings values:
+                    scope.launch {
+                        model.updateStoredSettings(model.settings.copy(suppressAudioFeedbackWarning = value))
+                    }
+                }
+            }
+
+            item {
+                HorizontalDivider(thickness = 2.dp)
+                Text("Diagnostic logging")
+            }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
 

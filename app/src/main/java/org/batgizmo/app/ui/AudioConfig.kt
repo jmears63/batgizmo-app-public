@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -70,27 +69,55 @@ class AudioConfig {
         value: Int,
         onValueChange: (Int) -> Unit,
         range: IntRange,
+        stackLabel: Boolean,
         steps: Int = 0 // optional number of discrete steps; 0 = continuous
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Label and current value
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(label)
-                Text("${value} kHz") // You can remove "kHz" if not needed
-            }
+        val valueText = "$value kHz"
 
-            // Slider
+        // Factored out so the slider is defined once; the caller supplies the width modifier.
+        val slider: @Composable (Modifier) -> Unit = { sliderModifier ->
             Slider(
                 value = value.toFloat(),
                 onValueChange = { newValue -> onValueChange(newValue.roundToInt()) },
                 valueRange = range.first.toFloat()..range.last.toFloat(),
                 steps = if (steps > 0) steps - 1 else 0, // Compose expects steps = number of steps between min and max
-                modifier = Modifier.fillMaxWidth()
+                modifier = sliderModifier
             )
+        }
+
+        if (stackLabel) {
+            // Portrait: label and value share the top row (value at the right end); the
+            // slider uses the full width on its own row below.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(label)
+                    Text(valueText)
+                }
+                slider(Modifier.fillMaxWidth())
+            }
+        } else {
+            // Landscape: label, slider and value on a single row to minimise height.
+            // The value has a fixed width so the slider does not reflow as its digit count changes.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(label, modifier = Modifier.padding(end = 8.dp))
+                slider(
+                    Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
+                )
+                Text(
+                    text = valueText,
+                    modifier = Modifier.width(60.dp),
+                    textAlign = TextAlign.End
+                )
+            }
         }
     }
 
@@ -163,7 +190,7 @@ class AudioConfig {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp),
+                    .padding(8.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Surface(
@@ -178,9 +205,9 @@ class AudioConfig {
                     val scrollState = rememberScrollState()
                     Column(
                         modifier = Modifier
-                            .padding(20.dp)
+                            .padding(12.dp)
                             .verticalScroll(scrollState),
-                        verticalArrangement = spacedBy(12.dp)
+                        verticalArrangement = spacedBy(8.dp)
                     ) {
                         Text(
                             text = "Audio Settings",
@@ -224,7 +251,8 @@ class AudioConfig {
                                 label = "Reference",
                                 value = audioRef1kHz.intValue,
                                 onValueChange = { audioRef1kHz.intValue = it },
-                                range = heterodyneRange
+                                range = heterodyneRange,
+                                stackLabel = !isLandscape
                             )
 
                             if (isDualHeterodyne) {
@@ -232,12 +260,11 @@ class AudioConfig {
                                     label = "Reference 2",
                                     value = audioRef2kHz.intValue,
                                     onValueChange = { audioRef2kHz.intValue = it },
-                                    range = heterodyneRange
+                                    range = heterodyneRange,
+                                    stackLabel = !isLandscape
                                 )
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(16.dp))
 
                         // Buttons
                         Row(

@@ -189,6 +189,7 @@ class SpectrogramUI(
         val liveMode: MutableIntState = mutableIntStateOf(LiveMode.OFF.value),
         val audioMode: MutableIntState = mutableIntStateOf(AudioMode.OFF.value),
         val showAudioConfig: MutableState<Boolean> = mutableStateOf(false),
+        val showAudioFeedbackWarning: MutableState<Boolean> = mutableStateOf(false),
         val audioSettingsAlreadyShown: MutableState<Boolean> = mutableStateOf(false),
         val heterodyneRef1kHz: MutableState<Int?> = mutableStateOf(null),
         val heterodyneRef2kHz: MutableState<Int?> = mutableStateOf(null),
@@ -213,6 +214,7 @@ class SpectrogramUI(
             liveMode.intValue = LiveMode.OFF.value
             audioMode.intValue = AudioMode.OFF.value
             showAudioConfig.value = false
+            showAudioFeedbackWarning.value = false
             audioSettingsAlreadyShown.value = false
             heterodyneRef1kHz.value = null
             heterodyneRef2kHz.value = null
@@ -766,6 +768,37 @@ class SpectrogramUI(
                 title = "No USB microphone",
                 message = "No suitable USB microphone was detected. " +
                     "Would you like to use the internal device microphone instead?",
+            )
+        }
+
+        if (uiState.showAudioFeedbackWarning.value) {
+            val dontShowAgain = remember { mutableStateOf(false) }
+            ConfirmDialog(
+                onDismiss = {
+                    // They declined, so revert the audio UI state.
+                    uiState.showAudioFeedbackWarning.value = false
+                    uiState.audioMode.intValue = AudioMode.OFF.value
+                    buttonState.audioChecked.value = false
+                },
+                onConfirm = {
+                    uiState.showAudioFeedbackWarning.value = false
+                    if (dontShowAgain.value) {
+                        // Persist the preference so the warning is not shown again.
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(suppressAudioFeedbackWarning = true)
+                            )
+                        }
+                    }
+                    startAudioNow(appMode)
+                },
+                title = "Feedback warning",
+                message = "Using the internal microphone can result in audio feedback. " +
+                    "You may need to reduce the speaker volume, or use headphones.",
+                confirmText = "Continue",
+                checkboxLabel = "Don't show this warning again",
+                checkboxChecked = dontShowAgain.value,
+                onCheckboxChange = { dontShowAgain.value = it },
             )
         }
     }
@@ -1356,6 +1389,20 @@ class SpectrogramUI(
     }
 
     private fun startAudio(appMode: MutableIntState) {
+        // Monitoring the internal microphone live risks acoustic feedback via the speaker,
+        // so warn the user before starting. The warning's confirm path calls startAudioNow.
+        if (appMode.intValue == AppMode.LIVE.value &&
+            model.effectiveLiveInputSource() == Settings.LiveInputSourceOptions.PHONE_MIC.value &&
+            !model.settings.suppressAudioFeedbackWarning
+        ) {
+            uiState.showAudioFeedbackWarning.value = true
+            return
+        }
+
+        startAudioNow(appMode)
+    }
+
+    private fun startAudioNow(appMode: MutableIntState) {
         // Kick off live audio asynchronously. We will get notified later with the outcome:
         when (appMode.intValue) {
             AppMode.LIVE.value -> model.startLiveAudio()
