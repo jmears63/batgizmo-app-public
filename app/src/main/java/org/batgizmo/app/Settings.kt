@@ -184,7 +184,10 @@ data class Settings(
         PRETRIGGER_TIME_0MS(0, "none"),
         PRETRIGGER_TIME_200MS(200, "0.2s"),
         PRETRIGGER_TIME_500MS(500, "0.5s"),
-        PRETRIGGER_TIME_MAX(1000, "1s");
+        PRETRIGGER_TIME_1000MS(1000, "1s"),
+        PRETRIGGER_TIME_2000MS(2000, "2s"),
+        PRETRIGGER_TIME_5000MS(5000, "5s"),
+        PRETRIGGER_TIME_MAX(10000, "10s");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label

@@ -1,5 +1,7 @@
 Version     Date            Description
 
+1.7.0                       Possible pretrigger settings are extended to include 2, 5 and 10s.
+
 1.6.0       2026-06-22      Added support for using the internal device microphone.
                             When a pan or zoom gesture starts over an axis, the range of the other axis is fixed.
                             Panning and zooming is now possible in the amplitude graph when visible.

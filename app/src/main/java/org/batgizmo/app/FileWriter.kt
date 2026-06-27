@@ -134,9 +134,22 @@ class FileWriter(
      * a trigger, without losing any data.
      */
     private val bufferPaddingTimeMs = 1000
-    private val bufferSizeEntries =
-        sampleRate * (Settings.PreTriggerTimeOptions.PRETRIGGER_TIME_MAX.value + bufferPaddingTimeMs) / 1000
-    private val buffer = ShortArray(bufferSizeEntries)
+
+    /**
+     * Compute the ring buffer size needed to hold the given pre-trigger duration plus padding.
+     * The padding gives time to open the file after a trigger without losing data, and also acts
+     * as a floor so the buffer is never pathologically small when little or no pre-trigger is set.
+     */
+    private fun computeBufferSizeEntries(preTriggerTimeMs: Int): Int =
+        sampleRate * (maxOf(preTriggerTimeMs, 0) + bufferPaddingTimeMs) / 1000
+
+    /**
+     * The ring buffer holding recent live data, sized for the currently configured pre-trigger
+     * time. It is reallocated by the data-reading coroutine (the only writer of buffer contents)
+     * when that setting changes, while no file is being written. See [maybeResizeBuffer].
+     */
+    private var bufferSizeEntries = computeBufferSizeEntries(model.settings.preTriggerTimeMs)
+    private var buffer = ShortArray(bufferSizeEntries)
 
     /**
      * Used to signal that new raw data is available in the buffer.
@@ -187,6 +200,13 @@ class FileWriter(
     private val cancelled = AtomicBoolean(false)
     private val triggerEventChannel = Channel<Unit>(Channel.CONFLATED)  // Combine multiple triggers into one.
 
+    /**
+     * True while a file write sequence is in progress. Used to avoid reallocating the ring buffer
+     * (which the reader is concurrently consuming) during recording.
+     */
+    @Volatile
+    private var fileWriteActive = false
+
     val batgizmoNamespace = "BatGizmo|App"  // As recommended by David Riggs, riggsd/guano-spec.
 
 
@@ -198,6 +218,31 @@ class FileWriter(
     private var mutex = Mutex()
 
     private val nativeUSB = NativeUSB()
+
+    /**
+     * Reallocate the ring buffer if the configured pre-trigger time implies a different size.
+     * Only safe to call from the data-reading coroutine (the sole writer of buffer contents) and
+     * only while no file is being written, so there is no concurrent reader of the buffer.
+     */
+    private suspend fun maybeResizeBuffer() {
+        if (fileWriteActive)
+            return
+        val required = computeBufferSizeEntries(model.settings.preTriggerTimeMs)
+        if (required == bufferSizeEntries)
+            return
+        mutex.withLock {
+            // Re-check under the lock: a recording may have started since the check above.
+            if (fileWriteActive)
+                return@withLock
+            Timber.d("Resizing pre-trigger buffer from $bufferSizeEntries to $required entries")
+            buffer = ShortArray(required)
+            bufferSizeEntries = required
+            // Discard any buffered pre-roll; it refills within the new pre-trigger window.
+            nextWriteIndex = 0
+            nextReadIndex = 0
+            entriesAvailable = 0
+        }
+    }
 
     private fun createChannelJob(): Job {
         return scope.launch(context = Dispatchers.IO) {
@@ -219,6 +264,10 @@ class FileWriter(
                 for (bufferDescriptor in LiveDataBridge.fileWriterChannel) {
 
                     // New live data is available.
+
+                    // Resize the ring buffer first if the pre-trigger setting has changed. This is
+                    // the only place buffer contents are written, so resizing here avoids races.
+                    maybeResizeBuffer()
 
                     // We will always read as much data into the buffer as we can even if
                     // we overtake the reader and overwrite, so that valid pre trigger data is always available:
@@ -614,6 +663,8 @@ class FileWriter(
         try {
             // Signal to the UI that we are writing to file:
             signalCurrentlyWriting(true)
+            // Prevent the ring buffer being reallocated while we are reading from it.
+            fileWriteActive = true
             do {
                 val s = mutex.withLock {
                     // Open the temp file to write to. The first time around we reset
@@ -648,6 +699,7 @@ class FileWriter(
         }
         finally {
             Timber.d("Finally executed")
+            fileWriteActive = false
             signalCurrentlyWriting(false)
         }
     }
