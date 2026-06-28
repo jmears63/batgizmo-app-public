@@ -22,19 +22,26 @@
 
 package org.batgizmo.app.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -45,10 +52,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -111,6 +122,18 @@ class SettingsUI(private val model: UIModel) {
         var liveInputSource by rememberSaveable { mutableStateOf(model.settings.liveInputSource) }
         var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
 
+        // Expand/collapse state for each collapsible section, indexed by SettingsSection.ordinal.
+        // Held here (rather than inside the list items) so the LazyColumn can gate which sections'
+        // rows are emitted, and saved so the open/closed state survives configuration changes.
+        val expandedSections = rememberSaveable(
+            saver = listSaver(
+                save = { it.toList() },
+                restore = { it.toMutableStateList() }
+            )
+        ) {
+            SettingsSection.entries.map { it == SettingsSection.APPEARANCE }.toMutableStateList()
+        }
+
         val enableShareDiagnostics = remember { derivedStateOf { diagnosticsExist.value || loggingEnabled.value} }
         val enableClearDiagnostics = remember { derivedStateOf { diagnosticsExist.value && !loggingEnabled.value } }
 
@@ -123,101 +146,97 @@ class SettingsUI(private val model: UIModel) {
         ) {
             // TODO review hard coded left margin
 
-            item {
-                Text("General")
-            }
-
-            item {
-                MyCheckbox(
-                    "Dark theme", model.settings.useDarkTheme
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(useDarkTheme = value))
-                    }
-                }
-            }
-
-            item {
-                MyCheckbox(
-                    "Show parameter overlay", model.settings.showParameterOverlay
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(showParameterOverlay = value))
-                    }
-                }
-            }
-
-            item {
-                MyCheckbox(
-                    "Show grid", model.settings.showGrid
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(showGrid = value))
-                    }
-                }
-            }
-
-            item {
-                MyCheckbox(
-                    "Buttons on the left", model.settings.leftHandButtons
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(leftHandButtons = value))
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.VisibilityOptions>(
-                        Settings.VisibilityOptions.entries,
-                        "Display amplitude pane",
-                        model.settings.amplitudePaneVisibility
-                    ) { value: Int ->
+            settingsSection(SettingsSection.APPEARANCE, expandedSections) {
+                item {
+                    MyCheckbox(
+                        "Dark theme", model.settings.useDarkTheme
+                    ) { value: Boolean ->
                         // Signal the updated settings values:
                         scope.launch {
-                            model.updateStoredSettings(model.settings.copy(amplitudePaneVisibility = value))
+                            model.updateStoredSettings(model.settings.copy(useDarkTheme = value))
                         }
                     }
                 }
-            }
 
-            item {
-                HorizontalDivider(thickness = 2.dp)
-                Text("Audio Source")
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.LiveInputSourceOptions>(
-                        Settings.LiveInputSourceOptions.entries,
-                        "Live audio source",
-                        model.settings.liveInputSource
-                    ) { value: Int ->
-                        liveInputSource = value
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(liveInputSource = value))
-                        }
-                    }
-                }
-            }
-
-            // Microphone selection is only relevant when the internal microphone is the source.
-            if (liveInputSource == Settings.LiveInputSourceOptions.PHONE_MIC.value) {
                 item {
-                    // Discover the available internal microphones when this section is shown.
-                    val micOptions = remember(liveInputSource) {
+                    MyCheckbox(
+                        "Show parameter overlay", model.settings.showParameterOverlay
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(showParameterOverlay = value))
+                        }
+                    }
+                }
+
+                item {
+                    MyCheckbox(
+                        "Show grid", model.settings.showGrid
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(showGrid = value))
+                        }
+                    }
+                }
+
+                item {
+                    MyCheckbox(
+                        "Buttons on the left", model.settings.leftHandButtons
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(leftHandButtons = value))
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.VisibilityOptions>(
+                            Settings.VisibilityOptions.entries,
+                            "Display amplitude pane",
+                            model.settings.amplitudePaneVisibility
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(amplitudePaneVisibility = value))
+                            }
+                        }
+                    }
+                }
+            }
+
+            settingsSection(SettingsSection.AUDIO_SOURCE, expandedSections) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.LiveInputSourceOptions>(
+                            Settings.LiveInputSourceOptions.entries,
+                            "Live audio source",
+                            model.settings.liveInputSource
+                        ) { value: Int ->
+                            liveInputSource = value
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(liveInputSource = value))
+                            }
+                        }
+                    }
+                }
+
+                // Microphone selection is only relevant when the internal microphone is the
+                // source, but the selector stays visible (greyed and disabled) otherwise.
+                item {
+                    val micEnabled = liveInputSource == Settings.LiveInputSourceOptions.PHONE_MIC.value
+                    // Discover the available internal microphones for the selector.
+                    val micOptions = remember {
                         model.availableInternalMics().map { it.id to it.label }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         MyDynamicSelector(
                             options = micOptions,
                             description = "Internal microphone",
-                            selectedValue = internalMicId
+                            selectedValue = internalMicId,
+                            enabled = micEnabled
                         ) { value: String ->
                             internalMicId = value
                             scope.launch {
@@ -228,309 +247,364 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
 
-            item {
-                HorizontalDivider(thickness = 2.dp)
-                Text("Auto Brightness/Contrast")
-            }
-
-            item {
-                MyCheckbox(
-                    "Viewer mode", model.settings.autoBnCEnabledViewer
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(autoBnCEnabledViewer = value))
-                    }
-                }
-            }
-
-            item {
-                MyCheckbox(
-                    "Live mode", model.settings.autoBnCEnabledLive
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(autoBnCEnabledLive = value))
-                    }
-                }
-            }
-
-            item {
-                MyCheckbox(
-                    "Noise profile correction", model.settings.autoBaselineEnabled
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(autoBaselineEnabled = value))
-                    }
-                }
-            }
-
-            item {
-                HorizontalDivider(thickness = 2.dp)
-                Text("Rendering")
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.DefaultLiveTimeSpanOptions>(
-                        Settings.DefaultLiveTimeSpanOptions.entries,
-                        "Live acquisition time span",
-                        model.settings.defaultLiveTimeSpanS
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(defaultLiveTimeSpanS = value))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.PagingOverlapOptions>(
-                        Settings.PagingOverlapOptions.entries,
-                        "Large file paging overlap",
-                        model.settings.pageOverlapPercent
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(pageOverlapPercent = value))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.NFftOptions>(
-                        Settings.NFftOptions.entries,
-                        "FFT window size",
-                        model.settings.pipelineParameters.nFft
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(
-                                pipelineParameters = model.settings.pipelineParameters.copy(nFft = value)))
-
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.FftOverlapOptions>(
-                        Settings.FftOverlapOptions.entries,
-                        "FFT window overlap",
-                        model.settings.pipelineParameters.fftOverlapPercent
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(
-                                pipelineParameters = model.settings.pipelineParameters.copy(fftOverlapPercent = value)))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.DataBufferTimeSpanOptions>(
-                        Settings.DataBufferTimeSpanOptions.entries,
-                        "Maximum viewable time span (restart needed)",
-                        model.settings.pipelineParameters.dataPageTimeSpanS
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(
-                                pipelineParameters = model.settings.pipelineParameters.copy(dataPageTimeSpanS = value)))
-                        }
-                    }
-                }
-            }
-
-            item {
-                HorizontalDivider(thickness = 2.dp)
-                Text("Recording")
-            }
-
-            item {
-                MyCheckbox(
-                    "Include location in files", model.settings.includeLocationInFile
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(includeLocationInFile = value))
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.PreTriggerTimeOptions>(
-                        Settings.PreTriggerTimeOptions.entries,
-                        "Pre trigger",
-                        model.settings.preTriggerTimeMs
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(preTriggerTimeMs = value))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.PostTriggerTimeOptions>(
-                        Settings.PostTriggerTimeOptions.entries,
-                        "Post trigger",
-                        model.settings.postTriggerTimeMs
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(postTriggerTimeMs = value))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyListSelector<Settings.MaxFileTimeOptions>(
-                        Settings.MaxFileTimeOptions.entries,
-                        "Maximum file length",
-                        model.settings.maxFileTimeMs
-                    ) { value: Int ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(maxFileTimeMs = value))
-                        }
-                    }
-                }
-            }
-
-            item {
-                HorizontalDivider(thickness = 2.dp)
-
-                // Remember a coroutine scope tied to Compose lifecycle
-                val scope = rememberCoroutineScope()
-
-                // State to hold the current color
-                var color by remember { mutableStateOf(androidx.compose.ui.graphics.Color.DarkGray) }
-
-                // Collect events from the channel in a LaunchedEffect
-                LaunchedEffect(model.triggerMonitorChannel) {
-                    var redTimeoutJob: Job? = null
-
-                    for (event in model.triggerMonitorChannel) {
-                        // Set color to red immediately
-                        color = androidx.compose.ui.graphics.Color.Red
-
-                        // Cancel any existing timeout job
-                        redTimeoutJob?.cancel()
-
-                        // Start a new timeout coroutine to reset color after 500ms
-                        redTimeoutJob = launch {
-                            delay(500)
-                            color = androidx.compose.ui.graphics.Color.DarkGray
-                        }
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Trigger")
-                    MyLamp2(20.dp, color)
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyFloatSlider("Trigger threshold (dB)", "%.1f",
-                        model.settings.autoTriggerThresholdDb, -25f..70f) {
-                        value: Float ->
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(autoTriggerThresholdDb = value))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    MyFloatRangeSlider("Trigger range (kHz)", "%.1f",
-                        model.settings.autoTriggerRangeMinkHz,
-                        model.settings.autoTriggerRangeMaxkHz,
-                        10f..120f) {
-                            range: ClosedFloatingPointRange<Float> ->
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(
-                                autoTriggerRangeMinkHz = range.start, autoTriggerRangeMaxkHz = range.endInclusive))
-                        }
-                    }
-                }
-            }
-            item {
-                HorizontalDivider(thickness = 2.dp)
-                Text("Warnings")
-            }
-
-            item {
-                MyCheckbox(
-                    "Suppress UI warnings", model.settings.suppressAudioFeedbackWarning
-                ) { value: Boolean ->
-                    // Signal the updated settings values:
-                    scope.launch {
-                        model.updateStoredSettings(model.settings.copy(suppressAudioFeedbackWarning = value))
-                    }
-                }
-            }
-
-            item {
-                HorizontalDivider(thickness = 2.dp)
-                Text("Diagnostic logging")
-            }
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-
+            settingsSection(SettingsSection.AUTO_BNC, expandedSections) {
+                item {
                     MyCheckbox(
-                        "Enable diagnostic logging", model.settings.enableLogging
-                    ) { checked: Boolean ->
-                        loggingEnabled.value = checked
+                        "Viewer mode", model.settings.autoBnCEnabledViewer
+                    ) { value: Boolean ->
                         // Signal the updated settings values:
                         scope.launch {
-                            model.updateStoredSettings(model.settings.copy(enableLogging = checked))
+                            model.updateStoredSettings(model.settings.copy(autoBnCEnabledViewer = value))
+                        }
+                    }
+                }
+
+                item {
+                    MyCheckbox(
+                        "Live mode", model.settings.autoBnCEnabledLive
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(autoBnCEnabledLive = value))
+                        }
+                    }
+                }
+
+                item {
+                    MyCheckbox(
+                        "Noise profile correction", model.settings.autoBaselineEnabled
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(autoBaselineEnabled = value))
                         }
                     }
                 }
             }
 
-            item {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-
-                    Button(
-                        onClick = {
-                            diagnosticLogger.shareDiagnosticsLog(context)
-                            diagnosticsExist.value = diagnosticLogger.logFileExists(context)
-                        },
-                        enabled = enableShareDiagnostics.value
-                    ) {
-                        Text("Share Data")
+            settingsSection(SettingsSection.RENDERING, expandedSections) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.DefaultLiveTimeSpanOptions>(
+                            Settings.DefaultLiveTimeSpanOptions.entries,
+                            "Live acquisition time span",
+                            model.settings.defaultLiveTimeSpanS
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(defaultLiveTimeSpanS = value))
+                            }
+                        }
                     }
-                    Button(
-                        onClick = {
-                            diagnosticLogger.clearData(context)
-                            diagnosticsExist.value = diagnosticLogger.logFileExists(context)
-                        },
-                        enabled = enableClearDiagnostics.value
-                    ) {
-                        Text("Clear Data")
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.PagingOverlapOptions>(
+                            Settings.PagingOverlapOptions.entries,
+                            "Large file paging overlap",
+                            model.settings.pageOverlapPercent
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(pageOverlapPercent = value))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.NFftOptions>(
+                            Settings.NFftOptions.entries,
+                            "FFT window size",
+                            model.settings.pipelineParameters.nFft
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(
+                                    pipelineParameters = model.settings.pipelineParameters.copy(nFft = value)))
+
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.FftOverlapOptions>(
+                            Settings.FftOverlapOptions.entries,
+                            "FFT window overlap",
+                            model.settings.pipelineParameters.fftOverlapPercent
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(
+                                    pipelineParameters = model.settings.pipelineParameters.copy(fftOverlapPercent = value)))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.DataBufferTimeSpanOptions>(
+                            Settings.DataBufferTimeSpanOptions.entries,
+                            "Maximum viewable time span (restart needed)",
+                            model.settings.pipelineParameters.dataPageTimeSpanS
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(
+                                    pipelineParameters = model.settings.pipelineParameters.copy(dataPageTimeSpanS = value)))
+                            }
+                        }
                     }
                 }
             }
+
+            settingsSection(SettingsSection.RECORDING, expandedSections) {
+                item {
+                    MyCheckbox(
+                        "Include location in files", model.settings.includeLocationInFile
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(includeLocationInFile = value))
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.PreTriggerTimeOptions>(
+                            Settings.PreTriggerTimeOptions.entries,
+                            "Pre trigger",
+                            model.settings.preTriggerTimeMs
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(preTriggerTimeMs = value))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.PostTriggerTimeOptions>(
+                            Settings.PostTriggerTimeOptions.entries,
+                            "Post trigger",
+                            model.settings.postTriggerTimeMs
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(postTriggerTimeMs = value))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.MaxFileTimeOptions>(
+                            Settings.MaxFileTimeOptions.entries,
+                            "Maximum file length",
+                            model.settings.maxFileTimeMs
+                        ) { value: Int ->
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(maxFileTimeMs = value))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    HorizontalDivider(thickness = 2.dp)
+
+                    // Remember a coroutine scope tied to Compose lifecycle
+                    val scope = rememberCoroutineScope()
+
+                    // State to hold the current color
+                    var color by remember { mutableStateOf(androidx.compose.ui.graphics.Color.DarkGray) }
+
+                    // Collect events from the channel in a LaunchedEffect
+                    LaunchedEffect(model.triggerMonitorChannel) {
+                        var redTimeoutJob: Job? = null
+
+                        for (event in model.triggerMonitorChannel) {
+                            // Set color to red immediately
+                            color = androidx.compose.ui.graphics.Color.Red
+
+                            // Cancel any existing timeout job
+                            redTimeoutJob?.cancel()
+
+                            // Start a new timeout coroutine to reset color after 500ms
+                            redTimeoutJob = launch {
+                                delay(500)
+                                color = androidx.compose.ui.graphics.Color.DarkGray
+                            }
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Trigger")
+                        MyLamp2(20.dp, color)
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyFloatSlider("Trigger threshold (dB)", "%.1f",
+                            model.settings.autoTriggerThresholdDb, -25f..70f) {
+                            value: Float ->
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(autoTriggerThresholdDb = value))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyFloatRangeSlider("Trigger range (kHz)", "%.1f",
+                            model.settings.autoTriggerRangeMinkHz,
+                            model.settings.autoTriggerRangeMaxkHz,
+                            10f..120f) {
+                                range: ClosedFloatingPointRange<Float> ->
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(
+                                    autoTriggerRangeMinkHz = range.start, autoTriggerRangeMaxkHz = range.endInclusive))
+                            }
+                        }
+                    }
+                }
+            }
+
+            settingsSection(SettingsSection.OTHER, expandedSections) {
+                item {
+                    MyCheckbox(
+                        "Suppress UI warnings", model.settings.suppressAudioFeedbackWarning
+                    ) { value: Boolean ->
+                        // Signal the updated settings values:
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(suppressAudioFeedbackWarning = value))
+                        }
+                    }
+                }
+
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+
+                        MyCheckbox(
+                            "Enable diagnostic logging", model.settings.enableLogging
+                        ) { checked: Boolean ->
+                            loggingEnabled.value = checked
+                            // Signal the updated settings values:
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(enableLogging = checked))
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+
+                        Button(
+                            onClick = {
+                                diagnosticLogger.shareDiagnosticsLog(context)
+                                diagnosticsExist.value = diagnosticLogger.logFileExists(context)
+                            },
+                            enabled = enableShareDiagnostics.value
+                        ) {
+                            Text("Share Data")
+                        }
+                        Button(
+                            onClick = {
+                                diagnosticLogger.clearData(context)
+                                diagnosticsExist.value = diagnosticLogger.logFileExists(context)
+                            },
+                            enabled = enableClearDiagnostics.value
+                        ) {
+                            Text("Clear Data")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The collapsible sections shown in the settings screen, in display order. */
+private enum class SettingsSection(val title: String) {
+    APPEARANCE("Appearance"),
+    AUDIO_SOURCE("Audio Source"),
+    AUTO_BNC("Auto Brightness/Contrast"),
+    RENDERING("Rendering"),
+    RECORDING("Recording"),
+    OTHER("Other"),
+}
+
+/**
+ * Emit a collapsible settings [section]: a clickable header row followed by [content]'s items,
+ * the latter only while the section is expanded. [expandedState] holds one flag per section,
+ * indexed by [SettingsSection.ordinal].
+ */
+private fun LazyListScope.settingsSection(
+    section: SettingsSection,
+    expandedState: SnapshotStateList<Boolean>,
+    content: LazyListScope.() -> Unit
+) {
+    item(key = section.name) {
+        SettingsSectionHeader(
+            title = section.title,
+            expanded = expandedState[section.ordinal]
+        ) {
+            // Accordion behaviour: expanding a section collapses all others; tapping the
+            // currently-open section just closes it.
+            val willExpand = !expandedState[section.ordinal]
+            for (i in expandedState.indices) {
+                expandedState[i] = i == section.ordinal && willExpand
+            }
+        }
+    }
+    if (expandedState[section.ordinal]) {
+        content()
+    }
+}
+
+/** A clickable section header with a chevron that rotates to indicate expanded/collapsed state. */
+@Composable
+private fun SettingsSectionHeader(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    // Animate the chevron between pointing down (collapsed) and up (expanded).
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        label = "chevronRotation"
+    )
+    Column {
+        HorizontalDivider(thickness = 2.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse $title" else "Expand $title",
+                modifier = Modifier.rotate(chevronRotation)
+            )
         }
     }
 }

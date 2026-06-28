@@ -147,9 +147,15 @@ fun MyDynamicSelector(
     options: List<Pair<String, String>>,
     description: String,
     selectedValue: String,
+    enabled: Boolean = true,
     onChange: (String) -> Unit
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
+
+    // Never leave the menu open if the control becomes disabled.
+    if (!enabled && expanded) {
+        expanded = false
+    }
 
     // Derive the displayed label from the current selection, falling back to the first option
     // (typically "Automatic") if the selected value is no longer available:
@@ -159,12 +165,13 @@ fun MyDynamicSelector(
 
     ExposedDropdownMenuBox(
         expanded = expanded,
-        onExpandedChange = { expanded = !expanded }
+        onExpandedChange = { if (enabled) expanded = !expanded }
     ) {
         TextField(
             value = selectedText,
             onValueChange = { },
             readOnly = true,
+            enabled = enabled,
             label = { Text(description) },
             modifier = Modifier
                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
