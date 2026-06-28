@@ -113,9 +113,11 @@ class WavFileReader(private val ctx: Context) {
                 throw IllegalArgumentException("Support is currently limited to 16 bit PCM - found ${safeWavChunks.fmtChunk.bitsPerSample} bit data.")
             }
 
-            if (safeWavChunks.fmtChunk.numChannels != 1.toShort()) {
-                // Various parts of the code of this app assume a single channel, such as audio playback.
-                throw IllegalArgumentException("Support is currently limited to one channel. ${safeWavChunks.fmtChunk.numChannels} channels are present.")
+            // Multi-channel files are downmixed to mono when read (see WavFileParser.readData), so
+            // any sane channel count can be viewed. Guard against absurd values from a corrupt header.
+            val maxSupportedChannels = 8
+            if (safeWavChunks.fmtChunk.numChannels.toInt() !in 1..maxSupportedChannels) {
+                throw IllegalArgumentException("Support is limited to 1 to $maxSupportedChannels channels; ${safeWavChunks.fmtChunk.numChannels} are present.")
             }
 
             if (safeWavChunks.fmtChunk.sampleRateHz <= 0) {

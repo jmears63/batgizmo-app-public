@@ -188,16 +188,19 @@ class WavFileParser {
         dataBuffer: ShortArray,
         bufferOffset: Int = 0
     ): Int {
+        val numChannels = fmtChunk.numChannels.toInt()
         val bytesPerValue = (fmtChunk.bitsPerSample / 8).toInt()
-        val bytesPerSample = bytesPerValue * fmtChunk.numChannels
+        // A "frame" is one sample across all channels (interleaved in the file):
+        val bytesPerFrame = bytesPerValue * numChannels
 
         val (start, end) = range
-        val sampleCount = end - start
-        val valueCount = sampleCount * fmtChunk.numChannels
+        // Ranges are expressed in frames (mono-equivalent samples), not interleaved values:
+        val frameCount = end - start
+        val valueCount = frameCount * numChannels
 
-        // Seek to the data we are interested in:
+        // Seek to the frame we are interested in:
         check(startOfData != null)
-        startOfData?.let { raFile.seek(it + start * bytesPerSample) }
+        startOfData?.let { raFile.seek(it + start.toLong() * bytesPerFrame) }
 
         /**
          * Read the data.
@@ -207,7 +210,7 @@ class WavFileParser {
          * amount of data in the file.
          */
 
-        val byteArray = ByteArray(valueCount * 2)
+        val byteArray = ByteArray(valueCount * bytesPerValue)
         try {
             // Throws EOFException when we hit the end of the file. This is intentional
             // to read the number of bytes we want.
@@ -217,32 +220,35 @@ class WavFileParser {
             // on this call or the next one.
         }
 
-        val actualValuesRead = (byteArray.size / 2).toInt()
-        // This will be different from actualValuesRead when we do channels != 1:
-        val actualSamplesRead = actualValuesRead
+        val actualValuesRead = byteArray.size / bytesPerValue
+        // We only emit whole frames: a multi-channel file stores one value per channel per frame.
+        val actualFramesRead = actualValuesRead / numChannels
+
         // Access the ByteArray as a Buffer:
-        val byteBuffer = ByteBuffer.wrap(byteArray).order(ByteOrder.LITTLE_ENDIAN)
-        // Create a ShortArray of the right size:
-        // val shortArray = ShortArray(actualValuesRead)
-        // Populate the shortArray using a bulk get for efficiency:
-        byteBuffer.asShortBuffer().get(dataBuffer, bufferOffset, valueCount)
+        val shortBuffer = ByteBuffer.wrap(byteArray).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
 
-        /*
-        // Future: support for multiple channels.
-        if (fmtChunk.numChannels > 1) {
-            /*
-                if self._fmt_header.num_channels > 1:
-                    actual_samples_read = int(actual_values_read / self._fmt_header.num_channels)
-                    data = data.reshape((actual_samples_read, self._fmt_header.num_channels))
-             */
+        if (numChannels == 1) {
+            // Mono fast path: copy the samples straight into the output buffer.
+            shortBuffer.get(dataBuffer, bufferOffset, actualFramesRead)
+        } else {
+            // Downmix to mono by averaging the channels of each frame. Accumulate in an Int to
+            // avoid 16-bit overflow when summing channels before dividing.
+            var src = 0
+            for (i in 0 until actualFramesRead) {
+                var sum = 0
+                for (c in 0 until numChannels) {
+                    sum += shortBuffer.get(src)
+                    src++
+                }
+                dataBuffer[bufferOffset + i] = (sum / numChannels).toShort()
+            }
         }
-         */
 
-        if ((actualSamplesRead * bytesPerSample) % 2 == 1) {
+        if ((actualFramesRead.toLong() * bytesPerFrame) % 2 == 1L) {
             raFile.skipBytes(1)
         }
 
-        return actualSamplesRead
+        return actualFramesRead
     }
 
     private fun skimDataChunk(raFile: RandomAccessFile, filename: String, fmtChunk: FmtChunkInfo)
@@ -264,8 +270,9 @@ class WavFileParser {
         val portionSize = 50000 // # 50000 x 2 bytes is about 100K
         var samplesRead = 0
 
-        // Preallocate a buffer that is big enough:
-        val dataBuffer = ShortArray(portionSize * fmtChunk.numChannels)
+        // Preallocate a buffer big enough for one portion. readData downmixes to mono, so we
+        // need room for one (mono) value per frame:
+        val dataBuffer = ShortArray(portionSize)
 
         while (samplesRead < expectedSampleCount) {
             var count = minOf(expectedSampleCount - samplesRead, portionSize)
