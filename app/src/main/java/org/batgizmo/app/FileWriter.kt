@@ -139,9 +139,13 @@ class FileWriter(
      * Compute the ring buffer size needed to hold the given pre-trigger duration plus padding.
      * The padding gives time to open the file after a trigger without losing data, and also acts
      * as a floor so the buffer is never pathologically small when little or no pre-trigger is set.
+     *
+     * The multiplication is done in Long to avoid Int overflow: at high sample rates (e.g. 384 kHz)
+     * and longer pre-trigger times, sampleRate * totalMs exceeds Int.MAX_VALUE even though the final
+     * entry count (after dividing by 1000) comfortably fits in an Int.
      */
     private fun computeBufferSizeEntries(preTriggerTimeMs: Int): Int =
-        sampleRate * (maxOf(preTriggerTimeMs, 0) + bufferPaddingTimeMs) / 1000
+        (sampleRate.toLong() * (maxOf(preTriggerTimeMs, 0) + bufferPaddingTimeMs) / 1000).toInt()
 
     /**
      * The ring buffer holding recent live data, sized for the currently configured pre-trigger
