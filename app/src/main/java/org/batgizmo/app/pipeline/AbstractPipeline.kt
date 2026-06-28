@@ -59,6 +59,8 @@ abstract class AbstractPipeline(
     protected val mutableDetailsTextFlow: MutableStateFlow<String?>,
     protected val sampleRate: Int,
     protected val sampleCount: Int,
+    protected val numChannels: Int,
+    protected val bitsPerSample: Int,
     protected val preserveRawDataBuffer: Boolean,
     private val showCursor: Boolean,
     protected val onTrigger: () -> Unit = {}
@@ -757,11 +759,13 @@ abstract class AbstractPipeline(
                 doCalculations(pipelineParametersSnapshot, sampleRate, sampleCount, fftParameters, rawPageRange)
 
             // Update the UI with details of the transform:
-            mutableDetailsTextFlow.value = "%.1fs at %d kHz\nFFT window %d, overlap %d".format(
-                calcs.rawTotalDataLength.toFloat() / calcs.rawSampleRate,
-                (calcs.rawSampleRate / 1000f).toInt(),
-                calcs.fftWindowSize, calcs.fftOverlap
-            )
+            mutableDetailsTextFlow.value =
+                "%.1fs at %d kHz, %d ch, %d-bit\nFFT window %d, overlap %d".format(
+                    calcs.rawTotalDataLength.toFloat() / calcs.rawSampleRate,
+                    (calcs.rawSampleRate / 1000f).toInt(),
+                    numChannels, bitsPerSample,
+                    calcs.fftWindowSize, calcs.fftOverlap
+                )
 
             Timber.d("Calculations: fftWindowSize = ${calcs.fftWindowSize}, " +
                 "fftWindowSize = ${calcs.fftOverlap}, " +

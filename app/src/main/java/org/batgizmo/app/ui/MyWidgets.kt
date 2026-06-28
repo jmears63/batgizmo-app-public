@@ -136,6 +136,61 @@ fun <T> MyListSelector(
     }
 }
 
+/**
+ * A dropdown selector over a dynamic list of (value, label) pairs, for cases where the options are
+ * not a fixed enum (e.g. the set of microphones discovered at runtime). If [selectedValue] is not
+ * among [options] the first option is displayed instead.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MyDynamicSelector(
+    options: List<Pair<String, String>>,
+    description: String,
+    selectedValue: String,
+    onChange: (String) -> Unit
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    // Derive the displayed label from the current selection, falling back to the first option
+    // (typically "Automatic") if the selected value is no longer available:
+    val selectedText = options.firstOrNull { it.first == selectedValue }?.second
+        ?: options.firstOrNull()?.second
+        ?: ""
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        TextField(
+            value = selectedText,
+            onValueChange = { },
+            readOnly = true,
+            label = { Text(description) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = ExposedDropdownMenuDefaults.textFieldColors()
+        )
+
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        expanded = false
+                        onChange(value)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun <T> MySliderSelector(
     enumEntries: EnumEntries<T>,

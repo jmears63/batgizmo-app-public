@@ -31,6 +31,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
+import androidx.annotation.RequiresPermission
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +56,20 @@ class MicCaptureService(
         const val SAMPLE_RATE_HZ = 48_000
         /** Read interval; ~40 Hz matches the USB live update cadence. */
         private const val READ_CHUNK_MS = 10
+
+        /** Sentinel for [preferredInternalMicId] meaning "let the app choose". */
+        const val AUTOMATIC_MIC_ID = ""
+
+        // AudioDeviceInfo.TYPE_BUILTIN_BACK_MIC; the constant is only defined from API 31.
+        private const val TYPE_BUILTIN_BACK_MIC = 37
     }
+
+    /**
+     * A selectable internal microphone. [id] is a stable descriptor suitable for persistence and
+     * matching (the dynamically assigned AudioDeviceInfo.id is deliberately not used, as it is not
+     * stable across sessions). [label] is a human-friendly name for the UI.
+     */
+    data class MicOption(val id: String, val label: String)
 
     private val mutex = Mutex()
     private var audioRecord: AudioRecord? = null
@@ -64,6 +78,10 @@ class MicCaptureService(
     private val audioManager: AudioManager by lazy {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     }
+
+    /** Stable descriptor of the microphone the user chose, or [AUTOMATIC_MIC_ID] for automatic. */
+    @Volatile
+    var preferredInternalMicId: String = AUTOMATIC_MIC_ID
 
     @Volatile
     var liveAudioMonitorEnabled: Boolean = false
@@ -76,7 +94,7 @@ class MicCaptureService(
     private fun builtInInputDevices(): List<AudioDeviceInfo> {
         val builtInTypes = mutableSetOf(AudioDeviceInfo.TYPE_BUILTIN_MIC)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builtInTypes.add(37) // AudioDeviceInfo.TYPE_BUILTIN_BACK_MIC
+            builtInTypes.add(TYPE_BUILTIN_BACK_MIC)
         }
         return audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
             .filter { device ->
@@ -85,6 +103,45 @@ class MicCaptureService(
             }
     }
 
+    /**
+     * A stable identifier for a device, used for persistence and matching. The runtime
+     * AudioDeviceInfo.id is reassigned between sessions, so we derive a descriptor from the
+     * device type and (where available) its address, which are stable.
+     */
+    private fun deviceDescriptor(device: AudioDeviceInfo): String =
+        "${device.type}:${device.address.orEmpty()}"
+
+    private fun deviceLabel(device: AudioDeviceInfo): String =
+        when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Built-in microphone"
+            TYPE_BUILTIN_BACK_MIC -> "Back microphone"
+            else -> "Microphone"
+        }
+
+    /**
+     * The internal microphones that can be selected. The first entry is always "Automatic", which
+     * lets the app choose. Returns at most the built-in mics the platform exposes; on many devices
+     * this is a single entry.
+     */
+    fun availableInternalMics(): List<MicOption> {
+        val automatic = MicOption(AUTOMATIC_MIC_ID, "Automatic")
+
+        val devices = builtInInputDevices().map { device ->
+            MicOption(deviceDescriptor(device), deviceLabel(device))
+        }
+
+        // Disambiguate duplicate labels (e.g. several mics of the same type with no address):
+        val deduped = devices
+            .groupBy { it.label }
+            .flatMap { (_, group) ->
+                if (group.size == 1) group
+                else group.mapIndexed { i, opt -> opt.copy(label = "${opt.label} ${i + 1}") }
+            }
+
+        return listOf(automatic) + deduped
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun tryOpenAudioRecord(
         audioSource: Int,
         preferredDevice: AudioDeviceInfo?,
@@ -122,15 +179,19 @@ class MicCaptureService(
         }
     }
 
+    /** An opened capture device together with a human-friendly label for it. */
+    private data class OpenedMic(val record: AudioRecord, val label: String)
+
     /**
      * Open the phone's built-in microphone even when a USB audio device is connected.
      * Android may otherwise route [MediaRecorder.AudioSource.MIC] to the USB device.
      */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun openBuiltInMicrophone(
         bufferBytes: Int,
         channelConfig: Int,
         encoding: Int,
-    ): AudioRecord? {
+    ): OpenedMic? {
         val builtInDevices = builtInInputDevices()
         val sourcesToTry = listOf(
             MediaRecorder.AudioSource.MIC,
@@ -138,21 +199,31 @@ class MicCaptureService(
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
         )
 
+        // Try the user's chosen microphone first (if present), then fall back to the others so a
+        // saved-but-absent selection never prevents capture:
+        val orderedDevices = if (preferredInternalMicId != AUTOMATIC_MIC_ID) {
+            val (preferred, others) =
+                builtInDevices.partition { deviceDescriptor(it) == preferredInternalMicId }
+            preferred + others
+        } else {
+            builtInDevices
+        }
+
         // Pick the first audio source that matches our criteria:
-        if (builtInDevices.isEmpty()) {
+        if (orderedDevices.isEmpty()) {
             for (source in sourcesToTry) {
                 tryOpenAudioRecord(source, null, bufferBytes, channelConfig, encoding)?.let {
-                    return it
+                    return OpenedMic(it, "Internal microphone")
                 }
             }
             return null
         }
 
-        for (device in builtInDevices) {
+        for (device in orderedDevices) {
             Timber.d("Trying built-in input device id=${device.id} ${device.productName}")
             for (source in sourcesToTry) {
                 tryOpenAudioRecord(source, device, bufferBytes, channelConfig, encoding)?.let {
-                    return it
+                    return OpenedMic(it, deviceLabel(device))
                 }
             }
         }
@@ -185,11 +256,12 @@ class MicCaptureService(
             }
 
             val bufferBytes = maxOf(minBufferBytes * 2, SAMPLE_RATE_HZ * 2 * READ_CHUNK_MS / 1000)
-            val record = openBuiltInMicrophone(bufferBytes, channelConfig, encoding)
+            val opened = openBuiltInMicrophone(bufferBytes, channelConfig, encoding)
                 ?: return LiveConnectResult(
                     connectedOK = false,
                     errorMessage = "Unable to open the internal microphone for capture."
                 )
+            val record = opened.record
 
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -230,7 +302,7 @@ class MicCaptureService(
 
             LiveConnectResult(
                 connectedOK = true,
-                productName = "Internal Microphone",
+                productName = opened.label,
                 sampleRate = SAMPLE_RATE_HZ
             )
         }

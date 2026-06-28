@@ -47,7 +47,9 @@ class FileViewerPipeline(
     mutableYAxisRangeFlow: MutableStateFlow<FloatRange>,
     mutableDetailsTextFlow: MutableStateFlow<String?>,
     sampleRate: Int,
-    sampleCount: Int
+    sampleCount: Int,
+    numChannels: Int,
+    bitsPerSample: Int
 ) : AbstractPipeline(
     pipelineParameters,
     scope,
@@ -60,6 +62,8 @@ class FileViewerPipeline(
     mutableDetailsTextFlow,
     sampleRate,
     sampleCount,
+    numChannels,
+    bitsPerSample,
     preserveRawDataBuffer = false,
     showCursor = false
 ) {

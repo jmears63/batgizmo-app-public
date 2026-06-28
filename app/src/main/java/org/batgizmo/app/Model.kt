@@ -271,13 +271,20 @@ class UIModel(application: Application,
 
     private fun createLiveInputSource(liveInputSource: Int): LiveInputSource {
         return when (liveInputSource) {
-            Settings.LiveInputSourceOptions.PHONE_MIC.value ->
+            Settings.LiveInputSourceOptions.PHONE_MIC.value -> {
+                // Apply the user's chosen internal microphone before capture starts.
+                micCaptureService.preferredInternalMicId = settings.internalMicId
                 DeviceMicInputSource(micCaptureService)
+            }
 
             else ->
                 UsbLiveInputSource(usbService, usbConnectChannel, usbConnectFlow)
         }
     }
+
+    /** The internal microphones the user can choose between (first entry is "Automatic"). */
+    fun availableInternalMics(): List<MicCaptureService.MicOption> =
+        micCaptureService.availableInternalMics()
 
     private suspend fun cleanupPartialLiveConnect(liveInputSource: LiveInputSource) {
         fileWriter?.shutdown()
@@ -785,7 +792,8 @@ class UIModel(application: Application,
                         context, model,
                         spectrogramBitmapHolder, amplitudeBitmapHolder,
                         mutableTimeAxisRangeFlow, mutableFrequencyAxisRangeFlow,
-                        mutableDetailsTextFlow, wfi.sampleRate, wfi.sampleCount
+                        mutableDetailsTextFlow, wfi.sampleRate, wfi.sampleCount,
+                        wfi.numChannels.toInt(), wfi.bytesPerValue * 8
                     )
                     // Assume square if we don't know yet:
                     val fftParameters = p.getDefaultFftParameters(
@@ -1194,12 +1202,18 @@ class UIModel(application: Application,
             mutex.withLock {
                 var sourceChanged = false
 
-                // We need to (re)connect a different source if what is connected no longer matches
-                // the preferred source in settings. This covers two cases: the user changed the
-                // setting while paused, and an override session (running a fallback source because
-                // the preferred source was missing when acquisition started).
+                // We need to (re)connect if what is connected no longer matches the preferred source
+                // in settings. This covers: the user changed the source while paused, an override
+                // session (running a fallback because the preferred source was missing at start), and
+                // the user changing which internal microphone to use while paused.
+                val phoneMic = Settings.LiveInputSourceOptions.PHONE_MIC.value
+                val internalMicChanged =
+                    connectedLiveInputSource == phoneMic &&
+                        settings.liveInputSource == phoneMic &&
+                        micCaptureService.preferredInternalMicId != settings.internalMicId
+
                 if (connectedLiveInputSource != null &&
-                    connectedLiveInputSource != settings.liveInputSource
+                    (connectedLiveInputSource != settings.liveInputSource || internalMicChanged)
                 ) {
                     val handler = liveFileWriterErrorHandler
                     if (handler == null) {

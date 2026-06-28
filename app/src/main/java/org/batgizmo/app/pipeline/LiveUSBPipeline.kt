@@ -59,6 +59,8 @@ class LiveUSBPipeline(
     mutableDetailsTextFlow,
     sampleRate,
     sampleCount,
+    numChannels = 1,                // Live capture is downmixed to mono 16-bit.
+    bitsPerSample = 16,
     preserveRawDataBuffer = true,    // So we can rebuild the pipeline without loss of data.,
     showCursor = true,              // Display a moving cursor.
     onTrigger

@@ -759,16 +759,34 @@ class SpectrogramUI(
         }
 
         if (uiState.showInternalMicFallbackDialog.value) {
-            ConfirmDialog(
-                onDismiss = { uiState.showInternalMicFallbackDialog.value = false },
-                onConfirm = {
-                    uiState.showInternalMicFallbackDialog.value = false
-                    switchToInternalMicAndConnect(scope)
-                },
-                title = "No USB microphone",
-                message = "No suitable USB microphone was detected. " +
-                    "Would you like to use the internal device microphone instead?",
-            )
+            val micOptions = remember { model.availableInternalMics().map { it.id to it.label } }
+            if (micOptions.size > 1) {
+                // Real internal microphones are available, so let the user choose one.
+                MicSelectionDialog(
+                    title = "No USB microphone",
+                    message = "No suitable USB microphone was detected. " +
+                        "Select an internal microphone to use instead.",
+                    options = micOptions,
+                    initialSelectedId = model.settings.internalMicId,
+                    onDismiss = { uiState.showInternalMicFallbackDialog.value = false },
+                    onConfirm = { micId ->
+                        uiState.showInternalMicFallbackDialog.value = false
+                        switchToInternalMicAndConnect(scope, micId)
+                    },
+                )
+            } else {
+                // No selectable microphones were enumerated; fall back to a simple confirmation.
+                ConfirmDialog(
+                    onDismiss = { uiState.showInternalMicFallbackDialog.value = false },
+                    onConfirm = {
+                        uiState.showInternalMicFallbackDialog.value = false
+                        switchToInternalMicAndConnect(scope)
+                    },
+                    title = "No USB microphone",
+                    message = "No suitable USB microphone was detected. " +
+                        "Would you like to use the internal device microphone instead?",
+                )
+            }
         }
 
         if (uiState.showAudioFeedbackWarning.value) {
@@ -1711,8 +1729,12 @@ class SpectrogramUI(
         }
     }
 
-    private fun switchToInternalMicAndConnect(scope: CoroutineScope) {
+    private fun switchToInternalMicAndConnect(scope: CoroutineScope, micId: String? = null) {
         scope.launch {
+            // Persist the chosen microphone (awaited) before connecting so the fallback uses it.
+            if (micId != null) {
+                model.updateStoredSettings(model.settings.copy(internalMicId = micId))
+            }
             uiState.liveMode.intValue = LiveMode.CONNECTING.value
             buttonState.acquisitionChecked.value = true
             openLiveCheckingPermissions(Settings.LiveInputSourceOptions.PHONE_MIC.value)

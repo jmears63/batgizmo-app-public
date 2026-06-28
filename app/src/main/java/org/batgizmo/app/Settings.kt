@@ -27,6 +27,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 
 /**
  * There are two kinds of settings:
@@ -40,6 +41,8 @@ data class Settings(
     var showGrid: Boolean = true,
     var defaultLiveTimeSpanS: Int = DefaultLiveTimeSpanOptions.DEFAULTLIVETIMESPAN_3S.value,
     var liveInputSource: Int = LiveInputSourceOptions.USB.value,
+    // Stable descriptor of the chosen internal microphone, or "" for automatic selection.
+    var internalMicId: String = "",
     var pageOverlapPercent: Int = PagingOverlapOptions.PAGINGOVERLAP_25.value,                  // *
     var autoBnCEnabledViewer: Boolean = true,
     var autoBnCEnabledLive: Boolean = true,
@@ -232,6 +235,7 @@ data class Settings(
     private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
     private val keyDefaultLiveTimeSpanS = intPreferencesKey("keyDefaultLiveTimeSpanS")
     private val keyLiveInputSource = intPreferencesKey("liveInputSource")
+    private val keyInternalMicId = stringPreferencesKey("internalMicId")
     private val keyPageOverlapPercent = intPreferencesKey("keyPageOverlapPercent")
     private val keyLeftHandedMode = booleanPreferencesKey("keyLeftHandedMode")
     private val keyEnableLogging = booleanPreferencesKey("enableLogging")
@@ -266,6 +270,7 @@ data class Settings(
         prefs[keyAutoBaselineEnabled] = autoBaselineEnabled
         prefs[keyDefaultLiveTimeSpanS] = defaultLiveTimeSpanS
         prefs[keyLiveInputSource] = liveInputSource
+        prefs[keyInternalMicId] = internalMicId
         prefs[keyPageOverlapPercent] = pageOverlapPercent
         prefs[keyLeftHandedMode] = leftHandButtons
         prefs[keyEnableLogging] = enableLogging
@@ -309,6 +314,8 @@ data class Settings(
             defaultLiveTimeSpanS = requireNotNull(prefs[keyDefaultLiveTimeSpanS])
         if (prefs[keyLiveInputSource] != null)
             liveInputSource = requireNotNull(prefs[keyLiveInputSource])
+        if (prefs[keyInternalMicId] != null)
+            internalMicId = requireNotNull(prefs[keyInternalMicId])
         if (prefs[keyPageOverlapPercent] != null)
             pageOverlapPercent = requireNotNull(prefs[keyPageOverlapPercent])
         if (prefs[keyLeftHandedMode] != null)

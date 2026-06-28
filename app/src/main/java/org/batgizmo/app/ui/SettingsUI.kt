@@ -106,6 +106,11 @@ class SettingsUI(private val model: UIModel) {
         var diagnosticsExist = rememberSaveable { mutableStateOf(diagnosticLogger.logFileExists(context)) }
         var loggingEnabled = rememberSaveable { mutableStateOf(model.settings.enableLogging) }
 
+        // Track the live input source locally so the microphone selector can show/hide reactively
+        // (model.settings is a plain var and does not trigger recomposition on its own):
+        var liveInputSource by rememberSaveable { mutableStateOf(model.settings.liveInputSource) }
+        var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
+
         val enableShareDiagnostics = remember { derivedStateOf { diagnosticsExist.value || loggingEnabled.value} }
         val enableClearDiagnostics = remember { derivedStateOf { diagnosticsExist.value && !loggingEnabled.value } }
 
@@ -193,8 +198,31 @@ class SettingsUI(private val model: UIModel) {
                         "Live audio source",
                         model.settings.liveInputSource
                     ) { value: Int ->
+                        liveInputSource = value
                         scope.launch {
                             model.updateStoredSettings(model.settings.copy(liveInputSource = value))
+                        }
+                    }
+                }
+            }
+
+            // Microphone selection is only relevant when the internal microphone is the source.
+            if (liveInputSource == Settings.LiveInputSourceOptions.PHONE_MIC.value) {
+                item {
+                    // Discover the available internal microphones when this section is shown.
+                    val micOptions = remember(liveInputSource) {
+                        model.availableInternalMics().map { it.id to it.label }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyDynamicSelector(
+                            options = micOptions,
+                            description = "Internal microphone",
+                            selectedValue = internalMicId
+                        ) { value: String ->
+                            internalMicId = value
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(internalMicId = value))
+                            }
                         }
                     }
                 }
