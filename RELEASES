@@ -1,6 +1,19 @@
 Version     Date            Description
 
-1.7.0                       Possible pretrigger settings are extended to include 2, 5 and 10s.
+1.7.0       2026-06-29      Features:
+                                Possible pretrigger settings are extended to include 2, 5 and 10s.
+                                The user can now select a specific internal microphone, or allow automatic selection.
+                                The viewer can now open and display spectrograms from stereo wav files.
+                                Tidied the Settings dialog using a concertina model.
+                                Expanded the list of MIME types the viewer can open.
+
+                            Fixes:
+                                Screen size changes are debounced to avoid unnecessary screen re-renders, such as
+                                    resulting from the internal microphone privacy indication animation.
+                                Made the wav file parser a little more tolerant so that the EMT2 sample files with incorrect
+                                    wamd chunk length can be loaded.
+                                The time resolution is now automatically reduced on devices with large screens
+                                    and low spec GPUs, such as Galaxy A50. This avoids an out of memory crash.
 
 1.6.0       2026-06-22      Added support for using the internal device microphone.
                             When a pan or zoom gesture starts over an axis, the range of the other axis is fixed.

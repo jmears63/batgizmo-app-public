@@ -13,14 +13,14 @@ android {
         }
     }
     namespace = "uk.org.gimell.batgimzoapp"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 30
         targetSdk = 37
-        versionCode = 24
-        versionName = "1.6.0"
+        versionCode = 25
+        versionName = "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
