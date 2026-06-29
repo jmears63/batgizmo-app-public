@@ -89,39 +89,56 @@ class WavFileParser {
         /**
          * So far so good. Now there will be a series of chunks in no particular order.
          * Keep trying to read chunks as long as there is unconsumed input.
+         *
+         * Some encoders (e.g. EMT2's "wamd" chunk) can write a chunk whose declared length
+         * is shorter than the data actually present, leaving stray bytes that the loop
+         * then tries (and fails) to interpret as a further chunk. Once we have successfully read the
+         * essential fmt and data chunks, treat any subsequent parsing error as the end of
+         * useful input rather than failing the whole file.
          */
         while (raFile.filePointer < fileLength) {
-            val subChunkId = readTextBytes(raFile, filename, 4, "SubchunkID")
-            if (subChunkId == "fmt ") {        // Note: the space is important.
-                if (fmtChunk != null) {
-                    Timber.i("Ignoring extra fmt chunk")
-                    skipChunk(raFile, filename)
-                }
-                else
-                    fmtChunk = readFormatChunk(raFile, filename)
-            } else if (subChunkId == "data") {
-                if (dataChunk != null) {
-                    Timber.i("Ignoring extra data chunk")
-                    skipChunk(raFile, filename)
-                }
-                else {
-                    if (fmtChunk != null)
-                        dataChunk = skimDataChunk(raFile, filename, fmtChunk)
-                    else {
-                        throw WavFileException("Data chunk found without fmt header.")
+            try {
+                val subChunkId = readTextBytes(raFile, filename, 4, "SubchunkID")
+                if (subChunkId == "fmt ") {        // Note: the space is important.
+                    if (fmtChunk != null) {
+                        Timber.i("Ignoring extra fmt chunk")
+                        skipChunk(raFile, filename)
                     }
-                }
-            } else if (subChunkId == "guan") {
-                if (guanoChunk != null) {
-                    Timber.i("Ignoring extra guano chunk.")
+                    else
+                        fmtChunk = readFormatChunk(raFile, filename)
+                } else if (subChunkId == "data") {
+                    if (dataChunk != null) {
+                        Timber.i("Ignoring extra data chunk")
+                        skipChunk(raFile, filename)
+                    }
+                    else {
+                        if (fmtChunk != null)
+                            dataChunk = skimDataChunk(raFile, filename, fmtChunk)
+                        else {
+                            throw WavFileException("Data chunk found without fmt header.")
+                        }
+                    }
+                } else if (subChunkId == "guan") {
+                    if (guanoChunk != null) {
+                        Timber.i("Ignoring extra guano chunk.")
+                        skipChunk(raFile, filename)
+                    }
+                    else {
+                        guanoChunk = readGuanoChunk(raFile, filename)
+                    }
+                } else {
+                    Timber.i("Ignoring unknown wav file chunk $subChunkId.")
                     skipChunk(raFile, filename)
                 }
-                else {
-                    guanoChunk = readGuanoChunk(raFile, filename)
+            } catch (e: Exception) {
+                // If the essential chunks are already in hand, tolerate a malformed
+                // trailing chunk by stopping here. Otherwise the file is unusable, so
+                // rethrow to report the problem.
+                if (fmtChunk != null && dataChunk != null) {
+                    Timber.w(e, "Ignoring error parsing trailing wav chunk in $filename; using fmt and data read so far.")
+                    break
                 }
-            } else {
-                Timber.i("Ignoring unknown wav file chunk $subChunkId.")
-                skipChunk(raFile, filename)
+                throw e
             }
         }
 
