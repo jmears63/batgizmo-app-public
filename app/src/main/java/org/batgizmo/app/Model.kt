@@ -45,6 +45,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -559,6 +560,16 @@ class UIModel(application: Application,
     private var amplitudeSizeDp: DpSize? = null
     private var sizeGeneration =
         -1          // Track the UI Compose generation that sizes relate to.
+
+    // The pane sizes the pipeline was last (re)built for, so a transient relayout that settles
+    // back to the same size does not trigger a needless, disruptive rebuild:
+    private var lastBuiltSpectrogramSizeDp: DpSize? = null
+    private var lastBuiltAmplitudeSizeDp: DpSize? = null
+    // Pending debounced pipeline rebuild triggered by pane size changes:
+    private var sizeChangeJob: Job? = null
+    // How long to wait for pane sizes to settle before rebuilding, long enough to absorb a
+    // transient system relayout (e.g. the microphone privacy indicator appearing then leaving):
+    private val sizeChangeDebounceMs = 1200L
 
     // Single global instance of the bitmap holder we will use for rendering the
     // spectrogram and amplitude:
@@ -1530,6 +1541,9 @@ class UIModel(application: Application,
                 sizeGeneration = generation
                 this.spectrogramSizeDp = null
                 this.amplitudeSizeDp = null
+                // Force the next settled size to rebuild, even if it matches a previous generation:
+                lastBuiltSpectrogramSizeDp = null
+                lastBuiltAmplitudeSizeDp = null
             }
 
             // Some deduping logic to avoid unnecessary redraws, as this gets called multiple times with the
@@ -1546,12 +1560,34 @@ class UIModel(application: Application,
             }
 
             if (changed && this.spectrogramSizeDp != null) {
-                Timber.d(
-                    "onUISizeChange applying UI size: $generation ${this.spectrogramSizeDp}, ${this.amplitudeSizeDp}"
-                )
-                viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
+                /*
+                 * Debounce the rebuild. Transient relayouts - notably the system microphone
+                 * privacy indicator briefly changing the window insets when the internal mic
+                 * starts - make the pane size wobble and settle back to its original value.
+                 * Rebuilding on each intermediate size resets a live spectrogram to the start,
+                 * so we wait for the size to settle and only rebuild if it has actually changed
+                 * from the size the pipeline was last built for.
+                 */
+                sizeChangeJob?.cancel()
+                sizeChangeJob = viewModelScope.launch(
+                    Dispatchers.Default + CoroutineName("onRescale coroutine")
+                ) {
+                    delay(sizeChangeDebounceMs)
                     mutex.withLock {
-                        reload(settings, rawPageRange, autoBnCRequiredFlow.value)
+                        val settledSpectrogramSize = this@UIModel.spectrogramSizeDp
+                        val settledAmplitudeSize = this@UIModel.amplitudeSizeDp
+                        if (settledSpectrogramSize != null &&
+                            (settledSpectrogramSize != lastBuiltSpectrogramSizeDp ||
+                                settledAmplitudeSize != lastBuiltAmplitudeSizeDp)
+                        ) {
+                            lastBuiltSpectrogramSizeDp = settledSpectrogramSize
+                            lastBuiltAmplitudeSizeDp = settledAmplitudeSize
+                            Timber.d(
+                                "onUISizeChange applying UI size: $generation " +
+                                    "$settledSpectrogramSize, $settledAmplitudeSize"
+                            )
+                            reload(settings, rawPageRange, autoBnCRequiredFlow.value)
+                        }
                     }
                 }
             }
