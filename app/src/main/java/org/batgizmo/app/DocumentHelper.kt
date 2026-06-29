@@ -1,12 +1,16 @@
 package org.batgizmo.app
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import timber.log.Timber
 
@@ -15,6 +19,20 @@ class DocumentHelper {
     data class UriData(val uri: Uri, val previousAvailable: Boolean, val nextAvailable: Boolean)
 
     companion object {
+
+        // SAF provider that exposes shared/external storage; used to hint an initial folder.
+        private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
+
+        /**
+         * A documents-provider URI pointing at the app's public recordings folder under Documents,
+         * suitable as an EXTRA_INITIAL_URI hint for the document picker. The folder need not exist:
+         * if it doesn't, the picker silently ignores the hint and opens at its default location.
+         */
+        private fun appRecordingsFolderUri(): Uri {
+            val documentId =
+                "primary:${Environment.DIRECTORY_DOCUMENTS}/${FileWriter.PUBLIC_FOLDER_NAME}"
+            return DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, documentId)
+        }
 
         /**
          * Get the display name for a file given its Uri.
@@ -52,10 +70,15 @@ class DocumentHelper {
              * be browsed, and as a "select all" feature that does the job of opening
              * the entire folder.
              */
+            // Hint the picker to open at the app's recordings folder, but only the first time it
+            // is launched in this app run; subsequent launches let the picker reopen wherever the
+            // user last browsed:
+            val initialUri = remember { appRecordingsFolderUri() }
+
             val launcher = rememberLauncherForActivityResult(
                 // We use OpenDocument rather then GetContent is it allows multiple
                 // MIME types:
-                contract = ActivityResultContracts.OpenMultipleDocuments()
+                contract = InitialFolderOpenDocuments(documentHelper, initialUri)
             ) { list: List<Uri> ->
 
                 // Timber.d("rememberLauncherForActivityResult callback invoked: list.size = ${list.size}")
@@ -73,10 +96,39 @@ class DocumentHelper {
 
             return launcher
         }
+
+        /**
+         * An OpenMultipleDocuments contract that hints the picker to start at [initialUri] the
+         * first time it is launched in this app run (see [consumeInitialFolderHint]).
+         */
+        private class InitialFolderOpenDocuments(
+            private val documentHelper: DocumentHelper,
+            private val initialUri: Uri
+        ) : ActivityResultContracts.OpenMultipleDocuments() {
+            override fun createIntent(context: Context, input: Array<String>): Intent {
+                val intent = super.createIntent(context, input)
+                if (documentHelper.consumeInitialFolderHint()) {
+                    intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+                }
+                return intent
+            }
+        }
     }
 
     private var uriList: List<Uri>? = null
     private var currentIndex: Int? = null
+
+    // True until the document picker has been launched once in this app run, so we only steer it
+    // to the app folder on first use and respect the picker's own memory afterwards:
+    private var initialFolderHintPending = true
+
+    /** Returns true at most once per app run, the first time the document picker is launched. */
+    private fun consumeInitialFolderHint(): Boolean {
+        if (!initialFolderHintPending)
+            return false
+        initialFolderHintPending = false
+        return true
+    }
 
     init {
         reset()

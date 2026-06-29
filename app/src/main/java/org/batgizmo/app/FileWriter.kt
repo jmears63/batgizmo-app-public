@@ -66,6 +66,9 @@ class FileWriter(
 ) {
 
     companion object {
+        /** Top-level public folder (under Documents) that recordings are saved into. No slashes. */
+        const val PUBLIC_FOLDER_NAME = "BatGizmo"
+
         public fun prettyFloat3Dps(value: Float) : String {
             return "%.3f".format(value).trimEnd('0').trimEnd('.')
         }
@@ -94,7 +97,7 @@ class FileWriter(
     )
 
     private val rawDataFileName = "filewriter.raw"      // Temporary data storage.
-    private val publicFolderName = "BatGizmo"           // Don't include a /
+    private val publicFolderName = PUBLIC_FOLDER_NAME
 
     private var rawFile: File? = null
     private var rawStream: FileOutputStream? = null
