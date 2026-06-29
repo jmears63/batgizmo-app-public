@@ -1140,12 +1140,7 @@ class SpectrogramUI(
             DropdownMenuItem(
                 text = { Text("View file(s)...") },
                 onClick = {
-                    documentPickerLauncher.launch(
-                        arrayOf(
-                            "audio/wav",
-                            "audio/x-wav"
-                        )
-                    )
+                    documentPickerLauncher.launch(DocumentHelper.WAV_MIME_TYPES)
                 },
                 leadingIcon = { Icon(
                     painter = painterResource(id = R.drawable.outline_audio_file_24),

@@ -24,6 +24,19 @@ class DocumentHelper {
         private const val EXTERNAL_STORAGE_AUTHORITY = "com.android.externalstorage.documents"
 
         /**
+         * MIME types for WAV files used to filter the document picker. SAF derives a file's MIME
+         * from its extension using the device's own extension->MIME table, which varies by OEM, so
+         * we list every common .wav variant. Otherwise, on devices that map .wav to a type we don't
+         * list, the files (and hence the folder containing them) are filtered out of the picker.
+         */
+        val WAV_MIME_TYPES = arrayOf(
+            "audio/wav",
+            "audio/x-wav",
+            "audio/wave",
+            "audio/vnd.wave"
+        )
+
+        /**
          * A documents-provider URI pointing at the app's public recordings folder under Documents,
          * suitable as an EXTRA_INITIAL_URI hint for the document picker. The folder need not exist:
          * if it doesn't, the picker silently ignores the hint and opens at its default location.
