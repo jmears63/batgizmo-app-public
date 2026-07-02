@@ -131,7 +131,7 @@ class SettingsUI(private val model: UIModel) {
                 restore = { it.toMutableStateList() }
             )
         ) {
-            SettingsSection.entries.map { it == SettingsSection.APPEARANCE }.toMutableStateList()
+            SettingsSection.entries.map { false }.toMutableStateList()
         }
 
         val enableShareDiagnostics = remember { derivedStateOf { diagnosticsExist.value || loggingEnabled.value} }
