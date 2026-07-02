@@ -1,5 +1,7 @@
 Version     Date            Description
 
+1.7.1       2026-07-02      Fixed bug in audio playback distorted very quiet recordings in direct playback.
+
 1.7.0       2026-06-29      Features:
                                 Possible pretrigger settings are extended to include 2, 5 and 10s.
                                 The user can now select a specific internal microphone, or allow automatic selection.
