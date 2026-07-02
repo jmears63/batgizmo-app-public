@@ -1028,14 +1028,19 @@ static int do_signal_processing(const data_t *pBuffer, uint32_t sample_count,
                 mixed += pBuffer[i] * s_reference_data[s_reference2_index];
         }
 
-        // Apply a low pass antialiasing filter. This is important to prevent audio feedback:
+        // Apply a low-pass antialiasing filter before decimation. Not needed for direct
+        // playback when the output rate matches the source (decimation factor 1): the fixed-
+        // point IIR rounds tiny amplitudes to zero and sounds distorted on very quiet files.
         int64_t filtered = mixed;
-        for (int order = 0; order < DOWNSAMPLING_AA_STAGES; order++) {
-            filtered = (int64_t) s_downsampling_iir_coefficient * filtered +
-                       (int64_t) ((1LL << 31) - s_downsampling_iir_coefficient) *
-                       s_downsampling_filter_state.previous[order];
-            filtered >>= 31;
-            s_downsampling_filter_state.previous[order] = (int32_t) filtered;
+        const bool skip_antialiasing = s_direct_playback && decimation_factor == 1;
+        if (!skip_antialiasing) {
+            for (int order = 0; order < DOWNSAMPLING_AA_STAGES; order++) {
+                filtered = (int64_t) s_downsampling_iir_coefficient * filtered +
+                           (int64_t) ((1LL << 31) - s_downsampling_iir_coefficient) *
+                           s_downsampling_filter_state.previous[order];
+                filtered >>= 31;
+                s_downsampling_filter_state.previous[order] = (int32_t) filtered;
+            }
         }
 
         // Down sample:
