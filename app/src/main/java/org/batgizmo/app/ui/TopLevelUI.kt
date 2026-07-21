@@ -106,6 +106,8 @@ class TopLevelUI(private val model: UIModel) {
         val amplitudePaneVisibility =
             rememberSaveable { mutableIntStateOf(model.settings.amplitudePaneVisibility) }
         val showGrid = rememberSaveable { mutableStateOf(model.settings.showGrid) }
+        val showParameterOverlay =
+            rememberSaveable { mutableStateOf(model.settings.showParameterOverlay) }
         val leftHandedMode = rememberSaveable { mutableStateOf(model.settings.leftHandButtons) }
 
         // Have we received the settings values yet?
@@ -131,6 +133,7 @@ class TopLevelUI(private val model: UIModel) {
             useDarkTheme.value = model.settings.useDarkTheme
             amplitudePaneVisibility.intValue = model.settings.amplitudePaneVisibility
             showGrid.value = model.settings.showGrid
+            showParameterOverlay.value = model.settings.showParameterOverlay
             leftHandedMode.value = model.settings.leftHandButtons
 
             // It's OK to draw the full UI now:
@@ -189,6 +192,7 @@ class TopLevelUI(private val model: UIModel) {
                             model,
                             amplitudePaneVisibility.intValue,
                             leftHandedMode.value,
+                            showParameterOverlay.value,
                             settingsVisible,
                             orientation,
                             appMode,

@@ -103,6 +103,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.batgizmo.app.DocumentHelper
@@ -112,6 +113,7 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.OpenWavFileResult
 import org.batgizmo.app.PipelineParameters
 import org.batgizmo.app.Settings
+import org.batgizmo.app.SunriseSunset
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.AbstractPipeline
@@ -122,8 +124,11 @@ import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import uk.org.gimell.batgimzoapp.R
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.floor
+import kotlin.time.Duration.Companion.milliseconds
 
 class SpectrogramUI(
     private val model: UIModel
@@ -382,6 +387,7 @@ class SpectrogramUI(
         viewModel: UIModel,
         amplitudePaneVisibility: Int,
         leftHandedMode: Boolean,
+        showParameterOverlay: Boolean,
         settingsVisible: MutableState<Boolean>,
         orientation: MutableIntState,
         appMode: MutableIntState,
@@ -592,6 +598,7 @@ class SpectrogramUI(
                 viewModel,
                 amplitudePaneVisibility,
                 leftHandedMode,
+                showParameterOverlay,
                 settingsVisible,
                 uiState.liveMode,
                 documentPickerLauncher,
@@ -609,6 +616,7 @@ class SpectrogramUI(
         viewModel: UIModel,
         amplitudePaneVisibility: Int,
         leftHandedMode: Boolean,
+        showParameterOverlay: Boolean,
         settingsVisible: MutableState<Boolean>,
         liveMode: MutableIntState,
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
@@ -652,7 +660,9 @@ class SpectrogramUI(
                         amplitudePaneVisibility = amplitudePaneVisibility,
                         title = title,
                         { modifier: Modifier ->
-                            ComposeOverlay(modifier, buttonState, detailsText)
+                            ComposeOverlay(
+                                modifier, buttonState, detailsText, appMode, showParameterOverlay
+                            )
                         }
                     )
 
@@ -825,7 +835,9 @@ class SpectrogramUI(
     private fun ComposeOverlay(
         modifier: Modifier,
         buttonState: ButtonState,
-        detailsText: State<String?>
+        detailsText: State<String?>,
+        appMode: MutableIntState,
+        showParameterOverlay: Boolean
     ) {
         // A box so we can have two layers.
         Box(modifier = modifier
@@ -973,11 +985,66 @@ class SpectrogramUI(
                     Column(
                         Modifier.weight(1f)
                     ) {
-                        if (model.settings.showParameterOverlay) {
-                            val text = detailsText.value
-                            if (text != null) {
+                        if (showParameterOverlay) {
+                            val isLiveMode = appMode.intValue == AppMode.LIVE.value
+                            // Clock + sunset only in live mode; updates once a second so
+                            // the minute flips promptly without needing a pipeline rebuild.
+                            val clockFormatter = remember {
+                                DateTimeFormatter.ofPattern("hh:mm a")
+                            }
+                            var currentTimeText by remember {
+                                mutableStateOf(LocalTime.now().format(clockFormatter).lowercase(Locale.getDefault()))
+                            }
+                            val location by model.locationFlow.collectAsStateWithLifecycle()
+                            var sunsetText by remember { mutableStateOf<String?>(null) }
+                            LaunchedEffect(isLiveMode) {
+                                if (!isLiveMode) return@LaunchedEffect
+                                while (true) {
+                                    currentTimeText =
+                                        LocalTime.now().format(clockFormatter).lowercase(Locale.getDefault())
+                                    delay(1_000.milliseconds)
+                                }
+                            }
+                            LaunchedEffect(location, isLiveMode) {
+                                if (!isLiveMode) {
+                                    sunsetText = null
+                                    return@LaunchedEffect
+                                }
+                                val loc = location
+                                if (loc == null) {
+                                    sunsetText = null
+                                    return@LaunchedEffect
+                                }
+                                // Refresh periodically so sunset updates after local midnight
+                                // without waiting for another GPS fix.
+                                while (true) {
+                                    val times = SunriseSunset.forLocation(
+                                        loc.latitude, loc.longitude
+                                    )
+                                    sunsetText = times.sunset
+                                        ?.format(clockFormatter)
+                                        ?.lowercase(Locale.getDefault())
+                                    delay(60_000.milliseconds)
+                                }
+                            }
+                            val details = detailsText.value
+                            val timeLine = if (isLiveMode) {
+                                if (sunsetText != null)
+                                    "$currentTimeText (sunset $sunsetText)"
+                                else
+                                    currentTimeText
+                            } else {
+                                null
+                            }
+                            val overlayText = when {
+                                timeLine != null && details != null -> "$timeLine\n$details"
+                                timeLine != null -> timeLine
+                                details != null -> details
+                                else -> null
+                            }
+                            if (overlayText != null) {
                                 Text(
-                                    text,
+                                    overlayText,
                                     overflow = TextOverflow.Ellipsis,
                                     style = TextStyle(
                                         fontSize = textHeightSp,
@@ -1791,7 +1858,6 @@ class SpectrogramUI(
         previousSettings?.let {
             if (newSettings.pageOverlapPercent != previousSettings.pageOverlapPercent
                 || newSettings.pipelineParameters.dataPageTimeSpanS != previousSettings.pageOverlapPercent
-                || newSettings.showParameterOverlay != previousSettings.showParameterOverlay
             )
                 resetPaging = true
         }
