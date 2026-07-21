@@ -1,5 +1,7 @@
 Version     Date            Description
 
+1.8.0       2026-07-21      Included the current time and sunset time in the parameter overlay.
+
 1.7.1       2026-07-02      Fixed bug in audio playback distorted very quiet recordings in direct playback.
 
 1.7.0       2026-06-29      Features:
