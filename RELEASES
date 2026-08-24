@@ -1,5 +1,8 @@
 Version     Date            Description
 
+                            Add alternative spectrogram colour mappings that can be selected in Settings.
+                            Fixed minor bug in the format of wav files generated.
+
 1.8.0       2026-07-21      Included the current time and sunset time in the parameter overlay.
 
 1.7.1       2026-07-02      Fixed bug in audio playback distorted very quiet recordings in direct playback.

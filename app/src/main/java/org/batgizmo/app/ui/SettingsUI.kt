@@ -181,6 +181,20 @@ class SettingsUI(private val model: UIModel) {
                 }
 
                 item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.ColourMapOptions>(
+                            Settings.ColourMapOptions.entries,
+                            "Spectrogram colour map",
+                            model.settings.colourMap
+                        ) { value: Int ->
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(colourMap = value))
+                            }
+                        }
+                    }
+                }
+
+                item {
                     MyCheckbox(
                         "Buttons on the left", model.settings.leftHandButtons
                     ) { value: Boolean ->

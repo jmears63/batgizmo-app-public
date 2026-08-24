@@ -48,6 +48,8 @@ data class Settings(
     var autoBnCEnabledLive: Boolean = true,
     var autoBaselineEnabled: Boolean = false,
     var showParameterOverlay: Boolean = true,
+    /** Selected spectrogram colour map; see [ColourMapOptions]. */
+    var colourMap: Int = ColourMapOptions.KINDLMANN.value,
     var leftHandButtons: Boolean = false,
     var enableLogging: Boolean = false,
     var heterodyneDual: Boolean = false,
@@ -80,6 +82,32 @@ data class Settings(
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
+    }
+
+    enum class ColourMapOptions(
+        val value: Int,
+        val label: String,
+        val assetFilename: String
+    ) : EnumHelper {
+        KINDLMANN(0, "Kindlmann", "kindlmann-256.csv"),
+        EXTENDED_KINDLMANN(1, "Extended Kindlmann", "extended-kindlmann-256.csv"),
+        BLACK_BODY(2, "Black body", "black-body-256.csv"),
+        INFERNO(3, "Inferno", "inferno-256.csv"),
+        GREYSCALE(4, "Greyscale", "greyscale-256.csv"),
+        BLACK_RED_YELLOW_WHITE(5, "Black-Red-Yellow-White", "cet-l03-256.csv"),
+        BLUE_PINK_LIGHT_PINK(6, "Blue-Pink-Light Pink", "cet-l07-256.csv"),
+        BLUE_MAGENTA_YELLOW(7, "Blue-Magenta-Yellow", "cet-l08-256.csv"),
+        BLUE_GREEN_YELLOW(8, "Blue-Green-Yellow", "cet-l09-256.csv"),
+        BLACK_BLUE_GREEN_YELLOW_WHITE(9, "Black-Blue-Green-Yellow-White", "cet-l16-256.csv"),
+        BLACK_BLUE_GREEN_ORANGE_YELLOW(10, "Black-Blue-Green-Orange-Yellow", "cet-l20-256.csv");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+
+        companion object {
+            fun fromValue(value: Int): ColourMapOptions =
+                entries.firstOrNull { it.value == value } ?: KINDLMANN
+        }
     }
 
     enum class NFftOptions(val value: Int, val label: String) : EnumHelper {
@@ -233,6 +261,7 @@ data class Settings(
     private val keyAutoBnCLive = booleanPreferencesKey("autoBnCLive")
     private val keyAutoBaselineEnabled = booleanPreferencesKey("autoBaselineEnabled")
     private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
+    private val keyColourMap = intPreferencesKey("colourMap")
     private val keyDefaultLiveTimeSpanS = intPreferencesKey("keyDefaultLiveTimeSpanS")
     private val keyLiveInputSource = intPreferencesKey("liveInputSource")
     private val keyInternalMicId = stringPreferencesKey("internalMicId")
@@ -262,6 +291,7 @@ data class Settings(
         // Copy the settings data into the preferences datastore:
         prefs[keyUseDarkTheme] = useDarkTheme
         prefs[keyShowParameterOverlay] = showParameterOverlay
+        prefs[keyColourMap] = colourMap
         prefs[keyAmplitudePaneVisibility] = amplitudePaneVisibility
         prefs[keyShowGrid] = showGrid
         prefs[keyAutoBnCViewer] = autoBnCEnabledViewer
@@ -300,6 +330,8 @@ data class Settings(
             useDarkTheme = requireNotNull(prefs[keyUseDarkTheme])
         if (prefs[keyShowParameterOverlay] != null)
             showParameterOverlay = requireNotNull(prefs[keyShowParameterOverlay])
+        if (prefs[keyColourMap] != null)
+            colourMap = requireNotNull(prefs[keyColourMap])
         if (prefs[keyAmplitudePaneVisibility] != null)
             amplitudePaneVisibility = requireNotNull(prefs[keyAmplitudePaneVisibility])
         if (prefs[keyShowGrid] != null)

@@ -31,7 +31,7 @@ class ColourMapStep(
     private val rangedTransformedDataBuffer: AbstractPipeline.RangedFloatDataBuffer,
     private val bitmap: Bitmap,
     private val noiseBaselineHolder: AbstractPipeline.NoiseBaselineHolder,
-    private val colourMapSize: Int?,
+    private val colourMapSizeProvider: () -> Int?,
     private val settings: Settings
 ) : AbstractStep() {
 
@@ -125,6 +125,7 @@ class ColourMapStep(
      * The normalized BnC range is 0..1 corresponding to the dbLimits.
      */
     private fun calculate(bnCLogicalRange: FloatRange): Pair<Float, Float> {
+        val colourMapSize = colourMapSizeProvider()
         require(colourMapSize != null) { "the colour map must be loaded before it can be used" }
 
         /**

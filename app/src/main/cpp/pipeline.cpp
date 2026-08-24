@@ -44,6 +44,29 @@ static uint16_t *s_colourMapData = nullptr;
 static int s_colourMapDataSize = 0;
 static uint16_t s_amplitude_graph_colour = 0xFFFF;
 
+static jint installColourMap(JNIEnv *env, jshortArray colour_map, jint colour_map_size) {
+    if (colour_map == nullptr || colour_map_size <= 0)
+        return -1;
+
+    jshort *pData = env->GetShortArrayElements(colour_map, nullptr);
+    if (pData == nullptr)
+        return -1;
+
+    if (s_colourMapData != nullptr) {
+        delete [] s_colourMapData;
+        s_colourMapData = nullptr;
+        s_colourMapDataSize = 0;
+    }
+
+    s_colourMapDataSize = colour_map_size;
+    s_colourMapData = new uint16_t[s_colourMapDataSize];
+    for (int i = 0; i < s_colourMapDataSize; i++)
+        s_colourMapData[i] = static_cast<uint16_t>(pData[i]);
+
+    env->ReleaseShortArrayElements(colour_map, pData, JNI_ABORT);
+    return 0;
+}
+
 /**
  * This is invoked from the ViewModel so should only get called once, regardless of
  * screen reconfiguration etc. So one off leaks from this function are OK.
@@ -60,31 +83,21 @@ Java_org_batgizmo_app_UIModel_00024Companion_nativeInitialize(JNIEnv *env, jobje
 
     // This is called from onCreate() so can get called multiple times from the UI layer:
     if (s_already_initialized) {
-        s_already_initialized = true;
         return rc;
     }
+    s_already_initialized = true;
 
-    jshort *pData = env->GetShortArrayElements(colour_map, nullptr);
-    if (pData != nullptr) {
-        if (s_colourMapData != nullptr) {
-            // Paranoia.
-            delete [] s_colourMapData;
-        }
-
-        // Make our own copy to use later:
-        s_colourMapDataSize = colour_map_size;
-        s_colourMapData = new uint16_t[s_colourMapDataSize];
-        for (int i = 0; i < s_colourMapDataSize; i++)
-            s_colourMapData[i] = pData[i];
-
-        // JNI_ABORT means don't copy elements back, just free the memory:
-        env->ReleaseShortArrayElements(colour_map, pData, JNI_ABORT);
-    }
-    else {
-        rc = -1;
-    }
-
+    rc = installColourMap(env, colour_map, colour_map_size);
     return rc;
+}
+
+/** Replace the spectrogram colour map used by doColourMapping. Safe to call after init. */
+extern "C"
+JNIEXPORT jint JNICALL
+Java_org_batgizmo_app_UIModel_00024Companion_nativeSetColourMap(JNIEnv *env, jobject thiz,
+                                                                jshortArray colour_map,
+                                                                jint colour_map_size) {
+    return installColourMap(env, colour_map, colour_map_size);
 }
 
 

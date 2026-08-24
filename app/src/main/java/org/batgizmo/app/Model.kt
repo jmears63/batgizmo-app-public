@@ -197,6 +197,11 @@ class UIModel(application: Application,
             amplitudeGraphColour: Short
         ): Int
 
+        private external fun nativeSetColourMap(
+            colourMap: ShortArray,
+            mapEntries: Int
+        ): Int
+
         private const val minSrcDeltaLogical: Float = 0.001f
 
         /**
@@ -534,6 +539,8 @@ class UIModel(application: Application,
     val audioProgressFlow = audioProgressChannel.receiveAsFlow()
 
     var colourMapSize: Int? = null
+    /** Colour map id currently installed in native code; null until first apply. */
+    private var appliedColourMapId: Int? = null
 
     // Used to notify back to the UI that an attempt at opening a file
     // is either successful or not.
@@ -684,45 +691,16 @@ class UIModel(application: Application,
         // Initialize the UI to a known mode.
         resetUIMode(requestedMode = AppMode.LIVE)
 
-        var mapRows = readColourMap("kindlmann-256.csv")
-        require(mapRows.size >= 64) { "the colour map contains too few colours" }
-
-        // It's prudent to sort the rows into ascending order:
-        mapRows = mapRows.sortedBy { it[0] as Float }
-
-        /**
-         * Convert the colour map to a simpler format for more
-         * efficient use in native code.
-         */
-        val colourMap = ShortArray(mapRows.size)     // JNI doesn't support UShort.
-        for ((i, entry) in mapRows.withIndex()) {
-            val r: Int = entry[1] as Int
-            val g: Int = entry[2] as Int
-            val b: Int = entry[3] as Int
-            val rgb565 = rgbToRGB565(r, g, b)
-            colourMap[i] = rgb565
-        }
-
-        colourMapSize = mapRows.size
-
-        // Select a colour to use for the amplitude graph. It looks nice
-        // if this is one of the colours used by the spectrogram:
-
+        val amplitudeGraphColour: Short = rgbToRGB565(0, 0xFF, 0xFF)
+        val colourMap = loadColourMapRgb565(settings.colourMap)
+        colourMapSize = colourMap.size
+        appliedColourMapId = settings.colourMap
         Timber.d(
             "Setting colourMapSize to $colourMapSize on model instance ${
                 System.identityHashCode(this)
             }."
         )
-
-        val size = colourMapSize
-        // val amplitudeGraphColour: Short =
-        //    (if (size != null) colourMap[(size * 0.5f).toInt()] else 0xFFFF) as Short
-
-        val amplitudeGraphColour: Short = rgbToRGB565(0, 0xFF, 0xFF)
-
-        // The JNI layer doesn't seem to support UShortArray, so we have to make
-        // a copy of the colour which is a ShortArray:
-        val rc = nativeInitialize(colourMap, mapRows.size, amplitudeGraphColour)
+        val rc = nativeInitialize(colourMap, colourMap.size, amplitudeGraphColour)
         check(rc == 0) { "native layer initialization must succeed" }
 
         /**
@@ -735,7 +713,13 @@ class UIModel(application: Application,
         // Kick off reading the settings in a coroutine, which will therefore happen in a bit:
         viewModelScope.launch(Dispatchers.IO) {
             flow.collect { prefs ->
-                settings.copyFromPreferences(prefs)
+                mutex.withLock {
+                    settings.copyFromPreferences(prefs)
+                    if (applyColourMap(settings.colourMap)) {
+                        pipeline?.applyBnC(mutableBnCRangeFlow.value)
+                        triggerBitblt()
+                    }
+                }
                 // Signal to the UI that the settings values are ready:
                 settingsReadyChannel.send(Unit)
             }
@@ -751,14 +735,57 @@ class UIModel(application: Application,
                 // Timber.d("updateStoredSettings called: audioBoostMultiplier = ${updatedSettings.audioBoostFactor}")
                 val liveInputSourceChanged =
                     updatedSettings.liveInputSource != settings.liveInputSource
+                val colourMapChanged = updatedSettings.colourMap != settings.colourMap
                 settings = updatedSettings
                 if (liveInputSourceChanged) {
                     liveInputSourceOverrideSession = false
                 }
                 // Invoke edit on the datastore to update and persist the changes:
                 settingsDataStore.edit { prefs -> settings.copyToPreferences(prefs) }
+                if (colourMapChanged && applyColourMap(settings.colourMap)) {
+                    pipeline?.applyBnC(mutableBnCRangeFlow.value)
+                    triggerBitblt()
+                }
             }
         }
+    }
+
+    /**
+     * Load a colour-map CSV and convert it to RGB565 entries for native code.
+     */
+    private fun loadColourMapRgb565(colourMapId: Int): ShortArray {
+        val filename = Settings.ColourMapOptions.fromValue(colourMapId).assetFilename
+        var mapRows = readColourMap(filename)
+        require(mapRows.size >= 64) { "the colour map contains too few colours" }
+
+        // It's prudent to sort the rows into ascending order:
+        mapRows = mapRows.sortedBy { it[0] as Float }
+
+        val colourMap = ShortArray(mapRows.size)     // JNI doesn't support UShort.
+        for ((i, entry) in mapRows.withIndex()) {
+            val r: Int = entry[1] as Int
+            val g: Int = entry[2] as Int
+            val b: Int = entry[3] as Int
+            colourMap[i] = rgbToRGB565(r, g, b)
+        }
+        return colourMap
+    }
+
+    /**
+     * Install [colourMapId] into Kotlin state and native code.
+     * Caller must hold [mutex]. Returns true if the installed map changed.
+     */
+    private fun applyColourMap(colourMapId: Int): Boolean {
+        if (appliedColourMapId == colourMapId && colourMapSize != null)
+            return false
+
+        val colourMap = loadColourMapRgb565(colourMapId)
+        colourMapSize = colourMap.size
+        appliedColourMapId = colourMapId
+        val rc = nativeSetColourMap(colourMap, colourMap.size)
+        check(rc == 0) { "nativeSetColourMap must succeed" }
+        Timber.d("Applied colour map id=$colourMapId size=$colourMapSize")
+        return true
     }
 
     /**

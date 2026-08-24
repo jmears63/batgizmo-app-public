@@ -864,7 +864,7 @@ abstract class AbstractPipeline(
             // Create a step to map the transformed data (spectral intensities) to colours:
             val colourMapStep =
                 ColourMapStep(transformedDataBuffer, spectrogramBitmap, noiseBaselineHolder,
-                    model.colourMapSize, model.settings)
+                    { model.colourMapSize }, model.settings)
             // Use the existing BnC range, so this is preserved when a new file is loaded:
             colourMapStep.params =
                 ColourMapStep.Params(calcs = calcs, bnCRangeLogical = model.bnCRangeFlow.value)
