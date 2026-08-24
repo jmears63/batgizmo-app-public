@@ -1171,8 +1171,8 @@ class FileWriter(
         val blockAlign = channels * bitsPerSample / 8
         val totalAudioLen = dataEntries * 2
 
-        // Total = PCM data + standard header (36) + Guano chunk + data header (8) + guano header (8)
-        val totalDataLen = 36 + 8 + totalAudioLen + 8 + guanoDataLength
+        // Total = standard header (36-8) + data header (8) + PCM data + guano header (8) + Guano chunk
+        val totalDataLen = 24 + 8 + totalAudioLen + 8 + guanoDataLength
 
         val header = ByteArray(44)
 
@@ -1202,7 +1202,7 @@ class FileWriter(
 
         var offset = 36
 
-        // --- data chunk (must come after Guano) ---
+        // Data chunk
         header[offset] = 'd'.code.toByte()
         header[offset + 1] = 'a'.code.toByte()
         header[offset + 2] = 't'.code.toByte()
