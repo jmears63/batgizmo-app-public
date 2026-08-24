@@ -1171,8 +1171,12 @@ class FileWriter(
         val blockAlign = channels * bitsPerSample / 8
         val totalAudioLen = dataEntries * 2
 
-        // Total = standard header (36-8) + data header (8) + PCM data + guano header (8) + Guano chunk
-        val totalDataLen = 24 + 8 + totalAudioLen + 8 + guanoDataLength
+        // RIFF cksize = file size − 8 (everything after the "RIFF" id and this size field).
+        // For mono PCM with a trailing guan chunk that is already even-length:
+        //   WAVE id (4) + fmt chunk (24) + data header (8) + PCM + guan header (8) + guan payload
+        // = 36 + totalAudioLen + 8 + guanoDataLength
+        // (McGill WAVE: cksize = 4 + 24 + (8 + M·Nc·Ns) [+ further chunks].)
+        val totalDataLen = 36 + totalAudioLen + 8 + guanoDataLength
 
         val header = ByteArray(44)
 
