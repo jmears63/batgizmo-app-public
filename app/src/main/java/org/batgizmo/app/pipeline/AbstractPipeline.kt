@@ -591,6 +591,16 @@ abstract class AbstractPipeline(
     }
 
     /**
+     * Re-run the pipeline from the data source so spectrogram and amplitude both
+     * pick up a newly installed colour map (amplitude stroke colour included).
+     */
+    suspend fun fullRenderFromSource() {
+        mutex.withLock {
+            pipelineData?.dataSourceStep?.fullRender()
+        }
+    }
+
+    /**
      * Call this method on a worker thread.
      *
      * Map the logical visible range to the data in transformed data buffer, and

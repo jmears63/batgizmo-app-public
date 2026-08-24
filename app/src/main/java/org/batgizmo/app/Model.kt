@@ -199,8 +199,12 @@ class UIModel(application: Application,
 
         private external fun nativeSetColourMap(
             colourMap: ShortArray,
-            mapEntries: Int
+            mapEntries: Int,
+            amplitudeGraphColour: Short
         ): Int
+
+        /** Index into the colour map used for the amplitude-graph stroke colour. */
+        private const val AMPLITUDE_GRAPH_COLOUR_MAP_INDEX = 180
 
         private const val minSrcDeltaLogical: Float = 0.001f
 
@@ -691,7 +695,6 @@ class UIModel(application: Application,
         // Initialize the UI to a known mode.
         resetUIMode(requestedMode = AppMode.LIVE)
 
-        val amplitudeGraphColour: Short = rgbToRGB565(0, 0xFF, 0xFF)
         val colourMap = loadColourMapRgb565(settings.colourMap)
         colourMapSize = colourMap.size
         appliedColourMapId = settings.colourMap
@@ -700,7 +703,11 @@ class UIModel(application: Application,
                 System.identityHashCode(this)
             }."
         )
-        val rc = nativeInitialize(colourMap, colourMap.size, amplitudeGraphColour)
+        val rc = nativeInitialize(
+            colourMap,
+            colourMap.size,
+            amplitudeColourFromMap(colourMap)
+        )
         check(rc == 0) { "native layer initialization must succeed" }
 
         /**
@@ -716,7 +723,7 @@ class UIModel(application: Application,
                 mutex.withLock {
                     settings.copyFromPreferences(prefs)
                     if (applyColourMap(settings.colourMap)) {
-                        pipeline?.applyBnC(mutableBnCRangeFlow.value)
+                        pipeline?.fullRenderFromSource()
                         triggerBitblt()
                     }
                 }
@@ -743,7 +750,7 @@ class UIModel(application: Application,
                 // Invoke edit on the datastore to update and persist the changes:
                 settingsDataStore.edit { prefs -> settings.copyToPreferences(prefs) }
                 if (colourMapChanged && applyColourMap(settings.colourMap)) {
-                    pipeline?.applyBnC(mutableBnCRangeFlow.value)
+                    pipeline?.fullRenderFromSource()
                     triggerBitblt()
                 }
             }
@@ -782,11 +789,18 @@ class UIModel(application: Application,
         val colourMap = loadColourMapRgb565(colourMapId)
         colourMapSize = colourMap.size
         appliedColourMapId = colourMapId
-        val rc = nativeSetColourMap(colourMap, colourMap.size)
+        val rc = nativeSetColourMap(
+            colourMap,
+            colourMap.size,
+            amplitudeColourFromMap(colourMap)
+        )
         check(rc == 0) { "nativeSetColourMap must succeed" }
         Timber.d("Applied colour map id=$colourMapId size=$colourMapSize")
         return true
     }
+
+    private fun amplitudeColourFromMap(colourMap: ShortArray): Short =
+        colourMap[minOf(AMPLITUDE_GRAPH_COLOUR_MAP_INDEX, colourMap.lastIndex)]
 
     /**
      * Convert an 8 bit RGB colour to RGB565.

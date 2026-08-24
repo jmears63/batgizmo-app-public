@@ -96,7 +96,9 @@ extern "C"
 JNIEXPORT jint JNICALL
 Java_org_batgizmo_app_UIModel_00024Companion_nativeSetColourMap(JNIEnv *env, jobject thiz,
                                                                 jshortArray colour_map,
-                                                                jint colour_map_size) {
+                                                                jint colour_map_size,
+                                                                jshort amplitude_graph_colour) {
+    s_amplitude_graph_colour = amplitude_graph_colour;
     return installColourMap(env, colour_map, colour_map_size);
 }
 
