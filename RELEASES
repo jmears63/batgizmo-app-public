@@ -1,6 +1,6 @@
 Version     Date            Description
 
-                            Add alternative spectrogram colour mappings that can be selected in Settings.
+1.9.0       2026-08-25      Added alternative spectrogram colour mappings, selectable in Settings.
                             Fixed minor bug in the format of wav files generated.
 
 1.8.0       2026-07-21      Included the current time and sunset time in the parameter overlay.
