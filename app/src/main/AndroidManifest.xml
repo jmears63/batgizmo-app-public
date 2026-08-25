@@ -19,7 +19,7 @@
         android:roundIcon="@mipmap/ic_batgizmo_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.BatgizmoApp"
-        tools:targetApi="36">
+        tools:targetApi="37">
 
         <!-- profileable android:enabled="true" /-->        <!-- included in debug builds -->
 
