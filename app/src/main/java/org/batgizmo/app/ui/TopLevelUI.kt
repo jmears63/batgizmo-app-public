@@ -185,6 +185,11 @@ class TopLevelUI(private val model: UIModel) {
                     CompositionLocalProvider(spectrogramUI.localShowGrid provides showGrid.value) {
                         val configuration = LocalConfiguration.current
                         val orientation = remember { mutableIntStateOf(configuration.orientation) }
+                        // Keep in sync across configuration changes; remember alone only
+                        // captures the initial orientation.
+                        LaunchedEffect(configuration.orientation) {
+                            orientation.intValue = configuration.orientation
+                        }
 
                         // Always display the main UI, so that state is preserved behind the
                         // settings UI:

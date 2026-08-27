@@ -17,10 +17,10 @@ android {
 
     defaultConfig {
         applicationId = "uk.org.gimell.batgizmoapp"
-        minSdk = 30
+        minSdk = 29
         targetSdk = 37
-        versionCode = 28
-        versionName = "1.9.0"
+        versionCode = 29
+        versionName = "1.9.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {

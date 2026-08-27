@@ -27,8 +27,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -39,6 +37,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
@@ -108,12 +108,16 @@ class MainActivity : ComponentActivity() {
         /*
          * Important: this code must come *after* setContent to avoid a null pointer
          * exception. Me neither.
+         *
+         * Use AndroidX WindowInsetsControllerCompat so this works on API 29 as well
+         * as API 30+ (platform WindowInsetsController is API 30-only).
          */
-        window.insetsController?.let { controller ->
+        WindowCompat.getInsetsController(window, window.decorView).apply {
             // Avoid annoying bounce of the app display on first display, and return
             // from the document selector:
-            controller.hide(WindowInsets.Type.systemBars())  // Hides navigation & status bars
-            controller.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
     }
 

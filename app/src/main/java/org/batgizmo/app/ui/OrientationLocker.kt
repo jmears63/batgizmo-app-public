@@ -24,9 +24,9 @@ class ScreenOrientationLocker() {
         }
 
         fun unlock(activity: Activity) {
-            // SCREEN_ORIENTATION_FULL_USER allows inverted portrait, useful with dongle type
-            // microphone:
-            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            // fullSensor: follow the orientation sensor (all four rotations), ignoring the
+            // system auto-rotate lock. The in-app lock button replaces that system setting.
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
         }
     }
 }
