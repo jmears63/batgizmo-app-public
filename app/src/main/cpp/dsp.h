@@ -1,0 +1,62 @@
+/*
+ * Copyright (c) 2025-2026 John Mears
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+#ifndef BATGIZMO_DSP_H
+#define BATGIZMO_DSP_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Mutable continuity across dsp_process chunks (per live or viewer stream). */
+typedef struct {
+    int32_t decimation_counter;
+    struct {
+        int32_t previous[4];  /* Must match DOWNSAMPLING_AA_STAGES in dsp.cpp. */
+    } downsampling_filter;
+    int reference1_index;
+    int reference2_index;
+} dsp_state_t;
+
+int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
+                             int16_t *downsampled_buffer, dsp_state_t *state);
+
+/* Returns the AAudio output rate on success, or 0 on failure. */
+int dsp_configure(int sample_rate,
+                  int heterodyne1_kHz, int heterodyne2_kHz,
+                  float audio_boost_factor, int samples_per_frame,
+                  bool direct_playback, dsp_state_t *state);
+
+void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz);
+
+void dsp_set_audio_boost(float boost_factor);
+
+int dsp_get_decimation_factor(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* BATGIZMO_DSP_H */
