@@ -60,7 +60,8 @@ data class Settings(
     var loopedAudioPlayback: Boolean = false,
     var suppressAudioFeedbackWarning: Boolean = false,
     var includeLocationInFile: Boolean = true,
-    var audioBoostFactor: Float = 4f,
+    var audioBoostFactor: Float = DEFAULT_AUDIO_BOOST_FACTOR,
+    var audioAGCEnabled: Boolean = true,
     var preTriggerTimeMs: Int = PreTriggerTimeOptions.PRETRIGGER_TIME_500MS.value,
     var postTriggerTimeMs: Int = PostTriggerTimeOptions.POSTTRIGGER_TIME_1000MS.value,
     var maxFileTimeMs: Int = MaxFileTimeOptions.MAX_FILE_TIME_5000MS.value,
@@ -250,6 +251,9 @@ data class Settings(
         override fun theLabel(): String = label    }
 
     companion object {
+        /** Default manual audio boost multiplier (UI slider). */
+        const val DEFAULT_AUDIO_BOOST_FACTOR = 1f
+
         /** Sample rates at or below this use direct playback when no mode is stored. */
         const val DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ = 48_000
     }
@@ -272,7 +276,8 @@ data class Settings(
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
     private val keyAudioPlaybackMode = intPreferencesKey("audioPlaybackMode")
-    private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor")
+    private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor2")
+    private val keyAudioAGCEnabled = booleanPreferencesKey("audioAGCEnabled")
     private val keyLocationInFile = booleanPreferencesKey("locationInFile")
     private val keyPreTriggerTimeMs = intPreferencesKey("preTriggerTimeMs")
     private val keyPostTriggerTimeMs = intPreferencesKey("postTriggerTimeMs")
@@ -311,6 +316,7 @@ data class Settings(
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
         prefs[keyAudioBoostFactor] = audioBoostFactor
+        prefs[keyAudioAGCEnabled] = audioAGCEnabled
         prefs[keyLocationInFile] = includeLocationInFile
         prefs[keyPreTriggerTimeMs] = preTriggerTimeMs
         prefs[keyPostTriggerTimeMs] = postTriggerTimeMs
@@ -368,6 +374,8 @@ data class Settings(
             heterodyneRef2kHz = requireNotNull(prefs[keyAudioRef2kHz])
         if (prefs[keyAudioBoostFactor] != null)
             audioBoostFactor = requireNotNull(prefs[keyAudioBoostFactor])
+        if (prefs[keyAudioAGCEnabled] != null)
+            audioAGCEnabled = requireNotNull(prefs[keyAudioAGCEnabled])
         if (prefs[keyLocationInFile] != null)
             includeLocationInFile = requireNotNull(prefs[keyLocationInFile])
         if (prefs[keyPreTriggerTimeMs] != null)

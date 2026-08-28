@@ -471,7 +471,7 @@ class UIModel(application: Application,
     }
 
     // The single source of truth for the audio boost slider value:
-    private val mutableAudioBoostFlow = MutableStateFlow(8f) // Initial value used if no setting.
+    private val mutableAudioBoostFlow = MutableStateFlow(Settings.DEFAULT_AUDIO_BOOST_FACTOR)
     val audioBoostFlow: StateFlow<Float> = mutableAudioBoostFlow.asStateFlow()
     fun setAudioBoost(boost: Float) {
         mutableAudioBoostFlow.value = boost
@@ -1549,6 +1549,7 @@ class UIModel(application: Application,
                 }
 
                 setAudioBoost(settings.audioBoostFactor)
+                usbService.setAgcEnabled(settings.audioAGCEnabled)
 
                 /*
                   For now, do a complete reload for any settings change. This could be smarter

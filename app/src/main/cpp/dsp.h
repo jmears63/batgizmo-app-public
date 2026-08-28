@@ -53,6 +53,8 @@ void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz);
 
 void dsp_set_audio_boost(float boost_factor);
 
+void dsp_set_agc_enabled(bool enabled);
+
 int dsp_get_decimation_factor(void);
 
 #ifdef __cplusplus

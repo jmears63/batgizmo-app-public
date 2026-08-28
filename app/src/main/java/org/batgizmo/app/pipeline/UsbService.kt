@@ -112,6 +112,7 @@ class NativeUSB {
     external fun stopAudio()
     external fun setHeterodyne(heterodyne1kHz: Int, heterodyne2kHz: Int)
     external fun setAudioBoostFactor(boostFactor: Float)
+    external fun setAgcEnabled(agcEnabled: Boolean)
     external fun copyURBBufferData(sourceOffset: Long, sourceSamples: Int,
                                    targetBuffer: ShortArray, targetBufferOffset: Int, targetBufferSize: Int): Int
 }
@@ -1283,6 +1284,7 @@ class UsbService(private val context: Context,
         mutex.withLock {
             if (isConnected) {
                 Timber.i("startAudio: heterodynekHz = $heterodyne1kHz")
+                nativeUsb.setAgcEnabled(model.settings.audioAGCEnabled)
                 nativeUsb.startAudioFromStream(AAUDIO_UNSPECIFIED, heterodyne1kHz,
                         heterodyne2kHz ?: 0, audioBoostFactor, directPlayback)
             }
@@ -1302,6 +1304,7 @@ class UsbService(private val context: Context,
     ): Boolean {
         return mutex.withLock {
             Timber.i("startLiveInputAudio: sampleRateHz = $sampleRateHz heterodynekHz = $heterodyne1kHz")
+            nativeUsb.setAgcEnabled(model.settings.audioAGCEnabled)
             nativeUsb.startAudioFromLiveInput(
                 AAUDIO_UNSPECIFIED, sampleRateHz,
                 heterodyne1kHz, heterodyne2kHz ?: 0, audioBoostFactor, directPlayback
@@ -1326,6 +1329,7 @@ class UsbService(private val context: Context,
         mutex.withLock {
             // Note: we can't use a lambda as the callback, it has to be a method.
             val (buffer, dataRangeExclusive) = visibleRawData
+            nativeUsb.setAgcEnabled(model.settings.audioAGCEnabled)
             nativeUsb.startAudioFromBuffer(AAUDIO_UNSPECIFIED,
                 samplingRateHz,
                 heterodyne1kHz, heterodyne2kHz ?: 0,
@@ -1357,6 +1361,12 @@ class UsbService(private val context: Context,
         mutex.withLock {
             Timber.d("Setting audio boost to $audioBoostFactor")
             nativeUsb.setAudioBoostFactor(audioBoostFactor)
+        }
+    }
+
+    suspend fun setAgcEnabled(agcEnabled: Boolean) {
+        mutex.withLock {
+            nativeUsb.setAgcEnabled(agcEnabled)
         }
     }
 

@@ -48,6 +48,7 @@ static_assert(sizeof(DownsamplingFilterState) ==
 #define BOOST_FACTOR_SCALING_SHIFT 8    // The boost factor is scaled by this amount.
 #define HETERODYNE_SCALING_SHIFT 15     // Heterodyning scales by this amount.
                                         // Why not 16? Because 0.5 x 0.5 is 0.25
+#define Q15_BITS 15                     // Q15 fixed-point: unity = 1 << Q15_BITS.
 
 static volatile int s_decimation_factor = 0;
 
@@ -55,9 +56,24 @@ static int16_t s_reference_data[MAX_REFERENCE_LEN + CANARY_COUNT];
 static int s_reference_len = 0;
 static int s_heterodyne1_kHz = 0, s_heterodyne2_kHz = 0;
 static volatile bool s_do_heterodyne = true;
+static volatile bool s_agc_enabled = true;
 
 static int s_scaled_audio_boost_factor = 1 << BOOST_FACTOR_SCALING_SHIFT;
 static int32_t s_downsampling_iir_coefficient = 0;
+
+/* AGC: peak envelope → gain in boost-scaled units (256 == unity after >> BOOST_FACTOR_SCALING_SHIFT). */
+#define AGC_TARGET_LEVEL 5000          // Target peak output amplitude (not boost-scaled).
+#define AGC_LEVEL_FLOOR 16             // Envelope floor in input amplitude (not boost-scaled).
+#define AGC_TARGET_LEVEL_SCALED (AGC_TARGET_LEVEL << BOOST_FACTOR_SCALING_SHIFT)
+#define AGC_GAIN_MIN_SCALED 26         // ~0.1× (matches UI boost floor)
+/* Max gain at envelope floor: TARGET_GAIN_SCALED / AGC_LEVEL_FLOOR. */
+#define AGC_GAIN_MAX_SCALED (AGC_TARGET_LEVEL_SCALED / AGC_LEVEL_FLOOR)
+#define AGC_ATTACK_Q15 512             // Rapid reaction to loud noise
+#define AGC_RELEASE_Q15 1              // Slow recovery from loud noises.
+
+// Start with high envelope to avoid initial loud noises:
+static int64_t s_agc_envelope_q15 = (int64_t) (AGC_TARGET_LEVEL << Q15_BITS);
+static int32_t s_agc_envelope_frac_q30 = 0;  // leftover from (diff * coeff) >> Q15_BITS
 
 /***********************************************************************************/
 /* Static helpers                                                                  */
@@ -105,7 +121,7 @@ static inline int32_t s_apply_heterodyne_reference(int16_t value, dsp_state_t *s
 }
 
 /* Stage 2: cascaded 1-pole LPF (AA before decimation / post-heterodyne). */
-static inline int64_t s_apply_lpf(int32_t value, dsp_state_t *state) {
+static inline int32_t s_apply_lpf(int32_t value, dsp_state_t *state) {
     int64_t filtered = value;
     for (int order = 0; order < DOWNSAMPLING_AA_STAGES; order++) {
         filtered = (int64_t) s_downsampling_iir_coefficient * filtered +
@@ -114,7 +130,7 @@ static inline int64_t s_apply_lpf(int32_t value, dsp_state_t *state) {
         filtered >>= 31;
         state->downsampling_filter.previous[order] = (int32_t) filtered;
     }
-    return filtered;
+    return (int32_t) filtered;
 }
 
 /* Stage 3: keep every Nth sample. */
@@ -127,11 +143,11 @@ static inline bool s_decimate_keep(int decimation_factor, dsp_state_t *state) {
 }
 
 /* Stage 4: apply boost, rescale after mix/filter, saturate to int16. */
-static inline int16_t s_apply_boost_and_saturate(int64_t value, int scale_shift) {
+static inline int16_t s_apply_boost_and_saturate(int64_t value, int scaled_boost_factor) {
     // Must use 64-bit: after heterodyning, |value| can be ~2^30 and the boost
     // multiply would overflow int32 before the shift.
-    int64_t scaled = (int64_t) value * s_scaled_audio_boost_factor;
-    scaled >>= scale_shift;
+    int64_t scaled = (int64_t) value * scaled_boost_factor;
+    scaled >>= BOOST_FACTOR_SCALING_SHIFT;
 
     if (scaled > INT16_MAX)
         scaled = INT16_MAX;
@@ -139,6 +155,54 @@ static inline int16_t s_apply_boost_and_saturate(int64_t value, int scale_shift)
         scaled = INT16_MIN;
 
     return static_cast<int16_t>(scaled);
+}
+
+static inline void s_reset_agc(void) {
+    // Start with large envelope to avoid initial loud noises:
+    s_agc_envelope_q15 = (int64_t) (AGC_TARGET_LEVEL << Q15_BITS);
+    s_agc_envelope_frac_q30 = 0;
+}
+
+/*
+ * Peak envelope follower, then apply AGC gain (256 == unity after >> BOOST_FACTOR_SCALING_SHIFT).
+ * Envelope is Q15 (int64) plus a fractional residual so slow release keeps moving.
+ */
+static inline int64_t s_apply_agc(int32_t value) {
+    int32_t abs_value = value < 0 ? -value : value;
+    if (value == INT32_MIN)
+        abs_value = INT32_MAX;
+
+    // Use q15 fixed point integers to allow for fractional calculations, needed
+    // for slow changes in envelope:
+    const int64_t abs_level_q15 = (int64_t) abs_value << Q15_BITS;
+
+    // Update the envelope, tracking increases faster than decreases:
+    int64_t diff_q15 = abs_level_q15 - s_agc_envelope_q15;
+    const int32_t coeff_q15 = diff_q15 > 0 ? AGC_ATTACK_Q15 : AGC_RELEASE_Q15;
+    // Try to use up any accumulated fractional part, accumulating any that we couldn't use:
+    int64_t env_delta_q30 = diff_q15 * coeff_q15 + s_agc_envelope_frac_q30;
+    int64_t env_delta_q15 = env_delta_q30 >> Q15_BITS;
+    // Update the envelope:
+    s_agc_envelope_q15 += env_delta_q15;
+    // Save any left over fractional part for the next time around:
+    s_agc_envelope_frac_q30 = (int32_t) (env_delta_q30 - (env_delta_q15 << Q15_BITS));
+
+    // Avoid very small envelope values that would result in very high gain:
+    const int64_t floor_q15 = (int64_t) AGC_LEVEL_FLOOR << Q15_BITS;
+    if (s_agc_envelope_q15 < floor_q15)
+        s_agc_envelope_q15 = floor_q15;
+
+    // Calculate the AGC gain we need to achieve the target gain:
+    int64_t agc_gain_scaled =
+            ((int64_t) AGC_TARGET_LEVEL_SCALED << Q15_BITS) / s_agc_envelope_q15;
+    if (agc_gain_scaled < AGC_GAIN_MIN_SCALED)
+        agc_gain_scaled = AGC_GAIN_MIN_SCALED;
+    if (agc_gain_scaled > AGC_GAIN_MAX_SCALED)
+        agc_gain_scaled = AGC_GAIN_MAX_SCALED;
+
+    int64_t result = (int64_t) value * agc_gain_scaled;
+    result >>= BOOST_FACTOR_SCALING_SHIFT;
+    return result;
 }
 
 /***********************************************************************************/
@@ -169,6 +233,7 @@ int dsp_configure(int sample_rate,
                         audio_out_rate, s_decimation_factor);
 
     s_reset_dsp_state(state);
+    s_reset_agc();
 
     s_do_heterodyne = !direct_playback;
 
@@ -221,6 +286,12 @@ void dsp_set_audio_boost(float boost_factor) {
     s_scaled_audio_boost_factor = s_scale_boost_factor(boost_factor);
 }
 
+void dsp_set_agc_enabled(bool enabled) {
+    s_agc_enabled = enabled;
+    if (enabled)
+        s_reset_agc();
+}
+
 int dsp_get_decimation_factor(void) {
     return s_decimation_factor;
 }
@@ -238,21 +309,45 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
     const bool do_heterodyne = s_do_heterodyne;
     const bool do_lpf = do_heterodyne || decimation_factor != 1;
 
-    int scale_shift = BOOST_FACTOR_SCALING_SHIFT;
-    if (do_heterodyne)
+    int scale_shift = 0;
+    if (do_heterodyne) {
         scale_shift += HETERODYNE_SCALING_SHIFT;
 
+        // In dual mode, two components are added so we need to scale down by an extra
+        // factor of 2:
+        if (s_heterodyne2_kHz != 0)
+            scale_shift += 1;
+    }
+
+    /*
+     * The following loop processes a single raw data sample at a time through each
+     * DSP stage. That isn't very efficient. It would be more efficient to process data in chunks because
+     * more state could remain in CPU registers. One day I will fix this.
+     */
+
     for (uint32_t i = 0; i < sample_count; i++) {
-        int32_t mixed = do_heterodyne ? s_apply_heterodyne_reference(pBuffer[i], state)
-                : pBuffer[i];
+        int16_t raw = pBuffer[i];           // Range of raw: INT16_MIN to INT16_MAX
+
+        int32_t mixed = do_heterodyne ? s_apply_heterodyne_reference(raw, state)
+                : raw;
+        // Range of mixed: about ±1073642282 (single heterodyne), INT32_MIN to INT32_MAX
+        // (dual heterodyne, clamped sum), else INT16_MIN to INT16_MAX
 
         int32_t filtered = do_lpf ? s_apply_lpf(mixed, state)
                 : mixed;
+        // Range of filtered: about ±1073642282 (single heterodyne), INT32_MIN to INT32_MAX
+        // (dual heterodyne), else INT16_MIN to INT16_MAX
 
-        if (s_decimate_keep(decimation_factor, state))
-            // Apply any scaling required by the user and by previous processing steps:
+        if (s_decimate_keep(decimation_factor, state)) {
+            // Apply any scaling required by previous processing steps:
+            filtered >>= scale_shift;       // Range of filtered: INT16_MIN to INT16_MAX
+
+            int64_t gained = s_agc_enabled ? s_apply_agc(filtered) : (int64_t) filtered;
+            // Range of gained: about -10240000 to 10198437 (with AGC), else INT16_MIN to INT16_MAX
+
             downsampled_buffer[resultant_sample_count++] =
-                    s_apply_boost_and_saturate(filtered, scale_shift);
+                    s_apply_boost_and_saturate(gained, s_scaled_audio_boost_factor);
+        }
     }
 
     return resultant_sample_count;

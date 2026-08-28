@@ -627,3 +627,10 @@ Java_org_batgizmo_app_pipeline_NativeUSB_setAudioBoostFactor(JNIEnv *env, jobjec
                                                              jfloat boost_factor) {
     dsp_set_audio_boost(boost_factor);
 }
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_batgizmo_app_pipeline_NativeUSB_setAgcEnabled(JNIEnv *env, jobject thiz,
+                                                       jboolean agc_enabled) {
+    dsp_set_agc_enabled(agc_enabled);
+}

@@ -221,7 +221,7 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
 
-            settingsSection(SettingsSection.AUDIO_SOURCE, expandedSections) {
+            settingsSection(SettingsSection.AUDIO_INPUT, expandedSections) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         MyListSelector<Settings.LiveInputSourceOptions>(
@@ -256,6 +256,18 @@ class SettingsUI(private val model: UIModel) {
                             scope.launch {
                                 model.updateStoredSettings(model.settings.copy(internalMicId = value))
                             }
+                        }
+                    }
+                }
+            }
+
+            settingsSection(SettingsSection.AUDIO_OUTPUT, expandedSections) {
+                item {
+                    MyCheckbox(
+                        "Auto Gain Control", model.settings.audioAGCEnabled
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(audioAGCEnabled = value))
                         }
                     }
                 }
@@ -556,7 +568,8 @@ class SettingsUI(private val model: UIModel) {
 /** The collapsible sections shown in the settings screen, in display order. */
 private enum class SettingsSection(val title: String) {
     APPEARANCE("Appearance"),
-    AUDIO_SOURCE("Audio Source"),
+    AUDIO_INPUT("Audio Source"),
+    AUDIO_OUTPUT("Audio Output"),
     AUTO_BNC("Auto Brightness/Contrast"),
     RENDERING("Rendering"),
     RECORDING("Recording"),
