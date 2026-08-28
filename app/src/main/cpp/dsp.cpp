@@ -74,6 +74,7 @@ static int32_t s_downsampling_iir_coefficient = 0;
 // Start with high envelope to avoid initial loud noises:
 static int64_t s_agc_envelope_q15 = (int64_t) (AGC_TARGET_LEVEL << Q15_BITS);
 static int32_t s_agc_envelope_frac_q30 = 0;  // leftover from (diff * coeff) >> Q15_BITS
+static int64_t s_agc_gain_scaled = AGC_GAIN_MIN_SCALED;
 
 /***********************************************************************************/
 /* Static helpers                                                                  */
@@ -157,10 +158,21 @@ static inline int16_t s_apply_boost_and_saturate(int64_t value, int scaled_boost
     return static_cast<int16_t>(scaled);
 }
 
+static inline void s_update_agc_gain_scaled(void) {
+    int64_t agc_gain_scaled =
+            ((int64_t) AGC_TARGET_LEVEL_SCALED << Q15_BITS) / s_agc_envelope_q15;
+    if (agc_gain_scaled < AGC_GAIN_MIN_SCALED)
+        agc_gain_scaled = AGC_GAIN_MIN_SCALED;
+    if (agc_gain_scaled > AGC_GAIN_MAX_SCALED)
+        agc_gain_scaled = AGC_GAIN_MAX_SCALED;
+    s_agc_gain_scaled = agc_gain_scaled;
+}
+
 static inline void s_reset_agc(void) {
     // Start with large envelope to avoid initial loud noises:
     s_agc_envelope_q15 = (int64_t) (AGC_TARGET_LEVEL << Q15_BITS);
     s_agc_envelope_frac_q30 = 0;
+    s_update_agc_gain_scaled();
 }
 
 /*
@@ -189,18 +201,15 @@ static inline int64_t s_apply_agc(int32_t value) {
 
     // Avoid very small envelope values that would result in very high gain:
     const int64_t floor_q15 = (int64_t) AGC_LEVEL_FLOOR << Q15_BITS;
+    const int64_t envelope_before_clamp_q15 = s_agc_envelope_q15;
     if (s_agc_envelope_q15 < floor_q15)
         s_agc_envelope_q15 = floor_q15;
 
-    // Calculate the AGC gain we need to achieve the target gain:
-    int64_t agc_gain_scaled =
-            ((int64_t) AGC_TARGET_LEVEL_SCALED << Q15_BITS) / s_agc_envelope_q15;
-    if (agc_gain_scaled < AGC_GAIN_MIN_SCALED)
-        agc_gain_scaled = AGC_GAIN_MIN_SCALED;
-    if (agc_gain_scaled > AGC_GAIN_MAX_SCALED)
-        agc_gain_scaled = AGC_GAIN_MAX_SCALED;
+    // Recalculate gain only when the envelope moved (skip expensive divide on steady samples):
+    if (env_delta_q15 != 0 || s_agc_envelope_q15 != envelope_before_clamp_q15)
+        s_update_agc_gain_scaled();
 
-    int64_t result = (int64_t) value * agc_gain_scaled;
+    int64_t result = (int64_t) value * s_agc_gain_scaled;
     result >>= BOOST_FACTOR_SCALING_SHIFT;
     return result;
 }
@@ -300,14 +309,15 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
                 int16_t *downsampled_buffer, dsp_state_t *state) {
 
     int resultant_sample_count = 0;
-    int decimation_factor = s_decimation_factor;
+    int decimation_factor = s_decimation_factor;    // Local copy for efficient access.
     if (decimation_factor < 1)
         decimation_factor = 1;
 
     // Without heterodyning, AA is skipped when factor is 1: the fixed-point IIR
     // rounds tiny amplitudes to zero on very quiet files.
-    const bool do_heterodyne = s_do_heterodyne;
+    const bool do_heterodyne = s_do_heterodyne;     // Local copy for efficient access.
     const bool do_lpf = do_heterodyne || decimation_factor != 1;
+    const bool agc_enabled = s_agc_enabled;         // Local copy for efficient access.
 
     int scale_shift = 0;
     if (do_heterodyne) {
@@ -342,7 +352,7 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
             // Apply any scaling required by previous processing steps:
             filtered >>= scale_shift;       // Range of filtered: INT16_MIN to INT16_MAX
 
-            int64_t gained = s_agc_enabled ? s_apply_agc(filtered) : (int64_t) filtered;
+            int64_t gained = agc_enabled ? s_apply_agc(filtered) : (int64_t) filtered;
             // Range of gained: about -10240000 to 10198437 (with AGC), else INT16_MIN to INT16_MAX
 
             downsampled_buffer[resultant_sample_count++] =
