@@ -242,7 +242,6 @@ int dsp_configure(int sample_rate,
                         audio_out_rate, s_decimation_factor);
 
     s_reset_dsp_state(state);
-    s_reset_agc();
 
     s_do_heterodyne = !direct_playback;
 
@@ -296,9 +295,11 @@ void dsp_set_audio_boost(float boost_factor) {
 }
 
 void dsp_set_agc_enabled(bool enabled) {
-    s_agc_enabled = enabled;
-    if (enabled)
+    // Reset envelope only when turning AGC on (off → on), so stop/start and
+    // re-apply of the same setting do not wipe learned gain.
+    if (enabled && !s_agc_enabled)
         s_reset_agc();
+    s_agc_enabled = enabled;
 }
 
 int dsp_get_decimation_factor(void) {
