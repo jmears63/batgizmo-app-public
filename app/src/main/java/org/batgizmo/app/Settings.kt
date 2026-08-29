@@ -159,9 +159,10 @@ data class Settings(
     }
 
     enum class AudioPlaybackModeOptions(val value: Int, val label: String) : EnumHelper {
-        SINGLE_HETERODYNE(0, "Single heterodyne"),
+        SINGLE_HETERODYNE(0, "Classic single heterodyne"),
         DUAL_HETERODYNE(1, "Dual heterodyne"),
-        DIRECT(2, "Direct playback");
+        DIRECT(2, "Direct playback"),
+        PITCH_SHIFTING(3, "Pitch shifting");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
@@ -189,6 +190,19 @@ data class Settings(
     fun isDirectPlayback(sampleRateHz: Int): Boolean =
         effectiveAudioPlaybackMode(sampleRateHz) ==
             AudioPlaybackModeOptions.DIRECT.value
+
+    fun isPitchShiftingPlayback(sampleRateHz: Int): Boolean =
+        effectiveAudioPlaybackMode(sampleRateHz) ==
+            AudioPlaybackModeOptions.PITCH_SHIFTING.value
+
+    /**
+     * Single or dual heterodyne — modes that use reference frequency UI/cursors.
+     */
+    fun isHeterodynePlayback(sampleRateHz: Int): Boolean {
+        val mode = effectiveAudioPlaybackMode(sampleRateHz)
+        return mode == AudioPlaybackModeOptions.SINGLE_HETERODYNE.value ||
+                mode == AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+    }
 
     enum class DefaultLiveTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
         DEFAULTLIVETIMESPAN_NONE(0, "Use existing"),

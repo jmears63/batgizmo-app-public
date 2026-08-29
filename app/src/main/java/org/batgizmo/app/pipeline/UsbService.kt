@@ -93,11 +93,11 @@ class NativeUSB {
     external fun resumeStream()
     external fun startAudioFromStream(audioDeviceId: Int, heterodynekHz: Int,
                                       heterodyne2kHz: Int, audioBoostFactor: Float,
-                                      directPlayback: Boolean): Boolean
+                                      playbackMode: Int): Boolean
     external fun startAudioFromLiveInput(
         audioDeviceId: Int, sampleRateHz: Int,
         heterodynekHz: Int, heterodyne2kHz: Int, audioBoostFactor: Float,
-        directPlayback: Boolean
+        playbackMode: Int
     ): Boolean
     external fun feedLiveAudioSamples(buffer: ShortArray, offset: Int, count: Int)
     external fun startAudioFromBuffer(
@@ -106,7 +106,7 @@ class NativeUSB {
         audioBoostShift: Float, buffer: ShortArray,
         startIndex: Int, endExclusiveIndex: Int,
         loopedPlayback: Boolean,
-        directPlayback: Boolean,
+        playbackMode: Int,
         progressCallback: ((Int) -> Unit)
     ): Boolean
     external fun stopAudio()
@@ -1279,13 +1279,13 @@ class UsbService(private val context: Context,
         heterodyne1kHz: Int,
         heterodyne2kHz: Int?,
         audioBoostFactor: Float,
-        directPlayback: Boolean
+        playbackMode: Int
     ) {
         mutex.withLock {
             if (isConnected) {
                 Timber.i("startAudio: heterodynekHz = $heterodyne1kHz")
                 nativeUsb.startAudioFromStream(AAUDIO_UNSPECIFIED, heterodyne1kHz,
-                        heterodyne2kHz ?: 0, audioBoostFactor, directPlayback)
+                        heterodyne2kHz ?: 0, audioBoostFactor, playbackMode)
             }
         }
     }
@@ -1299,13 +1299,13 @@ class UsbService(private val context: Context,
         heterodyne1kHz: Int,
         heterodyne2kHz: Int?,
         audioBoostFactor: Float,
-        directPlayback: Boolean,
+        playbackMode: Int,
     ): Boolean {
         return mutex.withLock {
             Timber.i("startLiveInputAudio: sampleRateHz = $sampleRateHz heterodynekHz = $heterodyne1kHz")
             nativeUsb.startAudioFromLiveInput(
                 AAUDIO_UNSPECIFIED, sampleRateHz,
-                heterodyne1kHz, heterodyne2kHz ?: 0, audioBoostFactor, directPlayback
+                heterodyne1kHz, heterodyne2kHz ?: 0, audioBoostFactor, playbackMode
             )
         }
     }
@@ -1321,7 +1321,7 @@ class UsbService(private val context: Context,
         heterodyne1kHz: Int, heterodyne2kHz: Int?, audioBoostExponent: Float,
         visibleRawData: Pair<ShortArray, HORange>, loopedPlayback: Boolean,
         samplingRateHz: Int,
-        directPlayback: Boolean,
+        playbackMode: Int,
         onAudioProgress: (Int) -> Unit
     ) {
         mutex.withLock {
@@ -1332,7 +1332,7 @@ class UsbService(private val context: Context,
                 heterodyne1kHz, heterodyne2kHz ?: 0,
                 audioBoostExponent,
                 buffer, dataRangeExclusive.start, dataRangeExclusive.exclusiveEnd,
-                loopedPlayback, directPlayback, onAudioProgress)
+                loopedPlayback, playbackMode, onAudioProgress)
         }
     }
 

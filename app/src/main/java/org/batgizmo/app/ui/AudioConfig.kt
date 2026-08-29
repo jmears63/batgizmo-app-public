@@ -175,8 +175,9 @@ class AudioConfig {
         val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz) }
         val loopedPlayback = rememberSaveable { mutableStateOf(settings.loopedAudioPlayback) }
 
-        val isDirectPlayback =
-            audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DIRECT.value
+        val isHeterodynePlayback =
+            audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value ||
+                audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
         val isDualHeterodyne =
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
 
@@ -246,7 +247,7 @@ class AudioConfig {
                             }
                         }
 
-                        if (!isDirectPlayback) {
+                        if (isHeterodynePlayback) {
                             IntegerSlider(
                                 label = "Reference",
                                 value = audioRef1kHz.intValue,

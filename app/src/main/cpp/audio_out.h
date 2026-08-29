@@ -27,6 +27,8 @@
 #include <stdbool.h>
 #include <jni.h>
 
+#include "dsp.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -48,7 +50,7 @@ bool audio_out_start_live(JNIEnv *env,
                           jint heterodyne1_kHz,
                           jint heterodyne2_kHz,
                           float audio_boost_factor,
-                          bool direct_playback);
+                          dsp_playback_mode_t playback_mode);
 
 /*
  * Stop any current output, set up viewer buffer playback, configure DSP, open AAudio
@@ -64,7 +66,7 @@ bool audio_out_start_buffer(JNIEnv *env,
                             jint start_index,
                             jint end_exclusive_index,
                             bool looped_playback,
-                            bool direct_playback,
+                            dsp_playback_mode_t playback_mode,
                             jobject progress_callback);
 
 #ifdef __cplusplus

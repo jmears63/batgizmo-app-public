@@ -30,6 +30,18 @@
 extern "C" {
 #endif
 
+/*
+ * Playback mode values must match Settings.AudioPlaybackModeOptions in Kotlin.
+ * Dual vs single heterodyne both use the heterodyne process path; dual is selected
+ * when playback_mode is DUAL or heterodyne2_kHz != 0 after configure.
+ */
+typedef enum {
+    DSP_PLAYBACK_SINGLE_HETERODYNE = 0,
+    DSP_PLAYBACK_DUAL_HETERODYNE = 1,
+    DSP_PLAYBACK_DIRECT = 2,
+    DSP_PLAYBACK_PITCH_SHIFTING = 3,
+} dsp_playback_mode_t;
+
 /* Mutable continuity across dsp_process chunks (per live or viewer stream). */
 typedef struct {
     int32_t decimation_counter;
@@ -47,7 +59,7 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
 int dsp_configure(int sample_rate,
                   int heterodyne1_kHz, int heterodyne2_kHz,
                   float audio_boost_factor, int samples_per_frame,
-                  bool direct_playback, dsp_state_t *state);
+                  dsp_playback_mode_t playback_mode, dsp_state_t *state);
 
 void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz);
 

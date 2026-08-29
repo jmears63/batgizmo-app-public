@@ -429,7 +429,7 @@ class SpectrogramUI(
             uiState.samplingRateHz.value
         ) {
             val sampleRateHz = uiState.samplingRateHz.value ?: return@LaunchedEffect
-            if (model.settings.isDirectPlayback(sampleRateHz))
+            if (!model.settings.isHeterodynePlayback(sampleRateHz))
                 return@LaunchedEffect
             uiState.heterodyneRef1kHz.value?.let { kHz1 ->
                 model.setHeterodyne(kHz1, uiState.heterodyneRef2kHz.value)
@@ -975,7 +975,7 @@ class SpectrogramUI(
     private fun updateHeterodyneUIState() {
         val sampleRateHz = uiState.samplingRateHz.value ?: return
         if (uiState.audioMode.intValue in setOf(AudioMode.ON.value) &&
-            !model.settings.isDirectPlayback(sampleRateHz)
+            model.settings.isHeterodynePlayback(sampleRateHz)
         ) {
 
             // Assigning these values makes the heterodyne cursor appear on the graph:

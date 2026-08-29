@@ -55,8 +55,16 @@ static volatile int s_decimation_factor = 0;
 static int16_t s_reference_data[MAX_REFERENCE_LEN + CANARY_COUNT];
 static int s_reference_len = 0;
 static int s_heterodyne1_kHz = 0, s_heterodyne2_kHz = 0;
-static volatile bool s_do_heterodyne = true;
 static volatile bool s_agc_enabled = true;
+
+/* Coarse process path; set in dsp_configure from Settings playback mode. */
+typedef enum {
+    DSP_MODE_HETERODYNE = 0,
+    DSP_MODE_DIRECT = 1,
+    DSP_MODE_PITCH_SHIFT = 2,
+} dsp_mode_t;
+
+static volatile dsp_mode_t s_playback_mode = DSP_MODE_HETERODYNE;
 
 static int s_scaled_audio_boost_factor = 1 << BOOST_FACTOR_SCALING_SHIFT;
 static int32_t s_downsampling_iir_coefficient = 0;
@@ -214,6 +222,76 @@ static inline int64_t s_apply_agc(int32_t value) {
     return result;
 }
 
+/* Shared post-decimation output: optional AGC then manual boost + saturate. */
+static inline int16_t s_apply_output_gain(int32_t sample, bool agc_enabled) {
+    int64_t gained = agc_enabled ? s_apply_agc(sample) : (int64_t) sample;
+    return s_apply_boost_and_saturate(gained, s_scaled_audio_boost_factor);
+}
+
+/*
+ * Direct / pitch-shift path without heterodyne: optional AA LPF when decimating,
+ * then keep every Nth sample, AGC, boost.
+ * Pitch shifting currently shares this path; OLA will replace the body of
+ * s_process_pitch_shift later.
+ */
+static inline int s_process_decimate_no_heterodyne(const int16_t *pBuffer,
+                                                   uint32_t sample_count,
+                                                   int16_t *downsampled_buffer,
+                                                   dsp_state_t *state,
+                                                   int decimation_factor,
+                                                   bool agc_enabled) {
+    int resultant_sample_count = 0;
+    const bool do_lpf = decimation_factor != 1;
+
+    for (uint32_t i = 0; i < sample_count; i++) {
+        int16_t raw = pBuffer[i];
+        int32_t filtered = do_lpf ? s_apply_lpf(raw, state) : raw;
+
+        if (s_decimate_keep(decimation_factor, state)) {
+            downsampled_buffer[resultant_sample_count++] =
+                    s_apply_output_gain(filtered, agc_enabled);
+        }
+    }
+    return resultant_sample_count;
+}
+
+static inline int s_process_direct(const int16_t *pBuffer, uint32_t sample_count,
+                                   int16_t *downsampled_buffer, dsp_state_t *state,
+                                   int decimation_factor, bool agc_enabled) {
+    return s_process_decimate_no_heterodyne(pBuffer, sample_count, downsampled_buffer,
+                                            state, decimation_factor, agc_enabled);
+}
+
+static inline int s_process_pitch_shift(const int16_t *pBuffer, uint32_t sample_count,
+                                        int16_t *downsampled_buffer, dsp_state_t *state,
+                                        int decimation_factor, bool agc_enabled) {
+    // Placeholder until fixed pitch-shift (OLA) DSP is implemented.
+    return s_process_decimate_no_heterodyne(pBuffer, sample_count, downsampled_buffer,
+                                            state, decimation_factor, agc_enabled);
+}
+
+/* Single and dual heterodyne: mix → LPF → decimate → scale → AGC → boost. */
+static inline int s_process_heterodyne(const int16_t *pBuffer, uint32_t sample_count,
+                                       int16_t *downsampled_buffer, dsp_state_t *state,
+                                       int decimation_factor, bool agc_enabled) {
+    int resultant_sample_count = 0;
+    // Dual mix is ~2× hotter; one extra shift bit restores int16-scale peaks.
+    const int scale_shift = HETERODYNE_SCALING_SHIFT + (s_heterodyne2_kHz != 0 ? 1 : 0);
+
+    for (uint32_t i = 0; i < sample_count; i++) {
+        int16_t raw = pBuffer[i];
+        int32_t mixed = s_apply_heterodyne_reference(raw, state);
+        int32_t filtered = s_apply_lpf(mixed, state);
+
+        if (s_decimate_keep(decimation_factor, state)) {
+            filtered >>= scale_shift;
+            downsampled_buffer[resultant_sample_count++] =
+                    s_apply_output_gain(filtered, agc_enabled);
+        }
+    }
+    return resultant_sample_count;
+}
+
 /***********************************************************************************/
 /* Public API                                                                      */
 /***********************************************************************************/
@@ -223,7 +301,7 @@ int dsp_configure(int sample_rate,
                   int heterodyne2_kHz,
                   float audio_boost_factor,
                   int samples_per_frame,
-                  bool direct_playback,
+                  dsp_playback_mode_t playback_mode,
                   dsp_state_t *state) {
 
     // Important: often the sample rate will be a multiple of 48kHz, but in rare
@@ -238,18 +316,30 @@ int dsp_configure(int sample_rate,
     s_downsampling_iir_coefficient = s_calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ,
                                                                sample_rate);
     __android_log_print(ANDROID_LOG_INFO, __FILE__,
-                        "Audio parameters: audio_out_rate = %d, s_decimation_factor = %d",
-                        audio_out_rate, s_decimation_factor);
+                        "Audio parameters: audio_out_rate = %d, s_decimation_factor = %d, playback_mode = %d",
+                        audio_out_rate, s_decimation_factor, playback_mode);
 
     s_reset_dsp_state(state);
 
-    s_do_heterodyne = !direct_playback;
+    switch (playback_mode) {
+        case DSP_PLAYBACK_DIRECT:
+            s_playback_mode = DSP_MODE_DIRECT;
+            break;
+        case DSP_PLAYBACK_PITCH_SHIFTING:
+            s_playback_mode = DSP_MODE_PITCH_SHIFT;
+            break;
+        case DSP_PLAYBACK_SINGLE_HETERODYNE:
+        case DSP_PLAYBACK_DUAL_HETERODYNE:
+        default:
+            s_playback_mode = DSP_MODE_HETERODYNE;
+            break;
+    }
 
     int n = samples_per_frame;
     if (n > MAX_REFERENCE_LEN)      // Paranoia.
         n = MAX_REFERENCE_LEN;
 
-    if (s_do_heterodyne) {
+    if (s_playback_mode == DSP_MODE_HETERODYNE) {
         if (heterodyne1_kHz > n || heterodyne2_kHz > n) {
             __android_log_print(ANDROID_LOG_INFO, __FILE__,
                                 "Heterodyne reference outside the valid range for the frame length (%d)",
@@ -274,7 +364,8 @@ int dsp_configure(int sample_rate,
             s_reference_len = n;
         }
         s_heterodyne1_kHz = heterodyne1_kHz;
-        s_heterodyne2_kHz = heterodyne2_kHz;
+        s_heterodyne2_kHz = (playback_mode == DSP_PLAYBACK_DUAL_HETERODYNE)
+                ? heterodyne2_kHz : 0;
     } else {
         s_heterodyne1_kHz = 0;
         s_heterodyne2_kHz = 0;
@@ -309,61 +400,23 @@ int dsp_get_decimation_factor(void) {
 int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
                 int16_t *downsampled_buffer, dsp_state_t *state) {
 
-    int resultant_sample_count = 0;
-    int decimation_factor = s_decimation_factor;    // Local copy for efficient access.
+    int decimation_factor = s_decimation_factor;
     if (decimation_factor < 1)
         decimation_factor = 1;
 
-    // Without heterodyning, AA is skipped when factor is 1: the fixed-point IIR
-    // rounds tiny amplitudes to zero on very quiet files.
-    const bool do_heterodyne = s_do_heterodyne;     // Local copy for efficient access.
-    const bool do_lpf = do_heterodyne || decimation_factor != 1;
-    const bool agc_enabled = s_agc_enabled;         // Local copy for efficient access.
+    const bool agc_enabled = s_agc_enabled;
+    const dsp_mode_t mode = s_playback_mode;
 
-    int scale_shift = 0;
-    if (do_heterodyne) {
-        scale_shift += HETERODYNE_SCALING_SHIFT;
-
-        // In dual mode, two components are added so we need to scale down by an extra
-        // factor of 2:
-        if (s_heterodyne2_kHz != 0)
-            scale_shift += 1;
+    switch (mode) {
+        case DSP_MODE_DIRECT:
+            return s_process_direct(pBuffer, sample_count, downsampled_buffer, state,
+                                    decimation_factor, agc_enabled);
+        case DSP_MODE_PITCH_SHIFT:
+            return s_process_pitch_shift(pBuffer, sample_count, downsampled_buffer, state,
+                                         decimation_factor, agc_enabled);
+        case DSP_MODE_HETERODYNE:
+        default:
+            return s_process_heterodyne(pBuffer, sample_count, downsampled_buffer, state,
+                                        decimation_factor, agc_enabled);
     }
-
-    /*
-     * The following loop processes a single raw data sample at a time through each
-     * DSP stage. That isn't very efficient. It would be more efficient to process data in chunks because
-     * more state could remain in CPU registers. One day I will fix this, starting with the pre-decimation
-     * steps that are processed most frequently.
-     */
-
-    for (uint32_t i = 0; i < sample_count; i++) {
-        int16_t raw = pBuffer[i];           // Range of raw: INT16_MIN to INT16_MAX
-
-        int32_t mixed = do_heterodyne ? s_apply_heterodyne_reference(raw, state)
-                : raw;
-        // Range of mixed: about ±1073642282 (single heterodyne), INT32_MIN to INT32_MAX
-        // (dual heterodyne, clamped sum), else INT16_MIN to INT16_MAX
-
-        int32_t filtered = do_lpf ? s_apply_lpf(mixed, state)
-                : mixed;
-        // Range of filtered: about ±1073642282 (single heterodyne), INT32_MIN to INT32_MAX
-        // (dual heterodyne), else INT16_MIN to INT16_MAX
-
-        if (s_decimate_keep(decimation_factor, state)) {
-            // This processing is post decimation to standard audio frequency so is not
-            // so efficiency critical as the previous steps.
-
-            // Apply any scaling required by previous processing steps:
-            filtered >>= scale_shift;       // Range of filtered: INT16_MIN to INT16_MAX
-
-            int64_t gained = agc_enabled ? s_apply_agc(filtered) : (int64_t) filtered;
-            // Range of gained: about -10240000 to 10198437 (with AGC), else INT16_MIN to INT16_MAX
-
-            downsampled_buffer[resultant_sample_count++] =
-                    s_apply_boost_and_saturate(gained, s_scaled_audio_boost_factor);
-        }
-    }
-
-    return resultant_sample_count;
 }

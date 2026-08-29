@@ -1149,8 +1149,7 @@ class UIModel(application: Application,
                             settings.heterodyneRef1kHz,
                             heterodyne2kHz,
                             settings.audioBoostFactor,
-                            // Direct playback is viewer-only; live monitor would cause feedback.
-                            false
+                            playbackMode
                         )
                         audioStartResult = LiveAudioStartResult(startedOK = true)
                     }
@@ -1161,7 +1160,7 @@ class UIModel(application: Application,
                             settings.heterodyneRef1kHz,
                             heterodyne2kHz,
                             settings.audioBoostFactor,
-                            false
+                            playbackMode
                         )
                         micCaptureService.liveAudioMonitorEnabled = started
                         audioStartResult = LiveAudioStartResult(startedOK = started)
@@ -1212,7 +1211,7 @@ class UIModel(application: Application,
                         settings.audioBoostFactor,
                         visibleRawData, settings.loopedAudioPlayback,
                         sampleRateHz,
-                        playbackMode == Settings.AudioPlaybackModeOptions.DIRECT.value,
+                        playbackMode,
                         ::onAudioProgress
                     )
 
