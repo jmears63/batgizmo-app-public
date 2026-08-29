@@ -1333,17 +1333,22 @@ class SpectrogramUI(
         }
     }
 
+    private fun stopAudioAndResetUi() {
+        model.stopAudio()
+        uiState.audioMode.intValue = AudioMode.OFF.value
+        model.amplitudeBitmapHolder.cursorTime = null
+    }
+
     private suspend fun onAudioProgress(position: Int) {
         // Timber.d("onAudioProgress called: $position")
 
         if (position < 0) {
             // Negative offset signals that audio playback has finished because it reached
             // the end of the data.
-
             Timber.d("Handling end of audio data: $position")
-            model.stopAudio()
-            uiState.audioMode.intValue = AudioMode.OFF.value
-            model.amplitudeBitmapHolder.cursorTime = null       // Hide the cursor
+            stopAudioAndResetUi()
+            model.rerender()
+            return
         }
 
         // Update the visible cursor position:
@@ -1453,6 +1458,7 @@ class SpectrogramUI(
         }
         else {
             fun gotoFile(uriData: DocumentHelper.UriData) {
+                stopAudioAndResetUi()
                 val filename = DocumentHelper.getFileName(context, uriData.uri)
                 model.closePipeline()
                 openFile(uriData.uri, filename ?: uriData.uri.toString())
@@ -1493,15 +1499,8 @@ class SpectrogramUI(
                         startAudio(appMode)
                 }
                 else {
-                    // Provide instant UI feedback:
-                    uiState.audioMode.intValue = AudioMode.OFF.value
-
-                    // Stop live audio asynchronously. Fire and forget.
-                    // This works for either live or viewer mode audio:
-                    model.stopAudio()
-
-                    // Hide the cursor:
-                    model.amplitudeBitmapHolder.cursorTime = null
+                    // Stop live or viewer audio and reset UI. Fire and forget.
+                    stopAudioAndResetUi()
                     scope.launch {
                         model.rerender()
                     }
@@ -1543,6 +1542,7 @@ class SpectrogramUI(
     }
 
     private fun viewUri(context: Context, viewModel: UIModel, uriData: DocumentHelper.UriData) {
+        stopAudioAndResetUi()
         val filename = DocumentHelper.getFileName(context, uriData.uri)
 
         openFile(uriData.uri, filename ?: "(unknown)")
@@ -1784,13 +1784,13 @@ class SpectrogramUI(
             settings.autoBnCEnabledViewer
 
     private fun closeLive() {
-        model.stopAudio()       // Idempotent.
+        stopAudioAndResetUi()
         model.closePipeline()   // Idempotent.
     }
 
     private fun closeViewer() {
         // Timber.d("closeViewer called")
-        model.stopAudio()       // Idempotent.
+        stopAudioAndResetUi()
         model.closePipeline()   // Idempotent.
 
         uiState.fileIsOpen.value = false
