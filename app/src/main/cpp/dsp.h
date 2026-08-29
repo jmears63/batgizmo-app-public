@@ -26,6 +26,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "dsp_heterodyne.h"  /* dsp_heterodyne_state_t */
+#include "dsp_tdola.h"       /* dsp_tdola_state_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,14 +45,17 @@ typedef enum {
     DSP_PLAYBACK_PITCH_SHIFTING = 3,
 } dsp_playback_mode_t;
 
-/* Mutable continuity across dsp_process chunks (per live or viewer stream). */
+/*
+ * Mutable continuity across dsp_process chunks (per live or viewer stream).
+ * Mode-specific fields live in nested structs defined by those modules.
+ */
 typedef struct {
     int32_t decimation_counter;
     struct {
-        int32_t previous[4];  /* Must match DOWNSAMPLING_AA_STAGES in dsp.cpp. */
+        int32_t previous[4];  /* Must match DOWNSAMPLING_AA_STAGES in dsp_internal.h. */
     } downsampling_filter;
-    int reference1_index;
-    int reference2_index;
+    dsp_heterodyne_state_t heterodyne;
+    dsp_tdola_state_t tdola;
 } dsp_state_t;
 
 int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
@@ -72,5 +78,10 @@ int dsp_get_decimation_factor(void);
 #ifdef __cplusplus
 }
 #endif
+
+/* Re-include so module APIs see the complete dsp_state_t / playback mode. */
+#define BATGIZMO_DSP_STATE_COMPLETE
+#include "dsp_heterodyne.h"
+#include "dsp_tdola.h"
 
 #endif /* BATGIZMO_DSP_H */
