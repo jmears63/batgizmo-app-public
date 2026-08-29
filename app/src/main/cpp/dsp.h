@@ -75,6 +75,9 @@ void dsp_set_agc_enabled(bool enabled);
 
 int dsp_get_decimation_factor(void);
 
+/* Input samples needed to produce output_frames (mode-aware; rational for TD-OLA). */
+int dsp_get_input_samples_for_output(int output_frames);
+
 #ifdef __cplusplus
 }
 #endif

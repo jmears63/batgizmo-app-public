@@ -133,7 +133,8 @@ static aaudio_data_callback_result_t audioCallback(
     auto local_array = (jshortArray) env->NewLocalRef(ctx->global_ref_to_buffer);
     jshort *buffer = env->GetShortArrayElements(local_array, nullptr);
 
-    int32_t inflated_frames_requested = frames_requested * dsp_get_decimation_factor();
+    int32_t inflated_frames_requested =
+            dsp_get_input_samples_for_output(frames_requested);
 
     memset(out, 0, sizeof(int16_t) * frames_requested);
 
