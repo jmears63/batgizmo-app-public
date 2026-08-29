@@ -128,7 +128,7 @@ class AudioConfig {
         appMode: Int,
         audioStarting: Boolean,
         onDismiss: () -> Unit,
-        onConfirm: (Int, Int, Int, Boolean) -> Unit,
+        onConfirm: (Int, Int, Int, Boolean, Int) -> Unit,
         heterodyneRange: IntRange,
     ) {
         // Constrain frequencies
@@ -174,12 +174,17 @@ class AudioConfig {
         val audioRef1kHz = rememberSaveable { mutableIntStateOf(constrainedRef1kHz) }
         val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz) }
         val loopedPlayback = rememberSaveable { mutableStateOf(settings.loopedAudioPlayback) }
+        val audioPitchRatio = rememberSaveable {
+            mutableIntStateOf(Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio))
+        }
 
         val isHeterodynePlayback =
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value ||
                 audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
         val isDualHeterodyne =
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
+        val isPitchShifting =
+            audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.PITCH_SHIFTING.value
 
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -223,6 +228,16 @@ class AudioConfig {
                             audioPlaybackMode.intValue
                         ) { value ->
                             audioPlaybackMode.intValue = value
+                        }
+
+                        if (isPitchShifting) {
+                            MyListSelector<Settings.AudioPitchRatioOptions>(
+                                Settings.AudioPitchRatioOptions.entries,
+                                "Pitch shift",
+                                audioPitchRatio.intValue
+                            ) { value ->
+                                audioPitchRatio.intValue = value
+                            }
                         }
 
                         if (appMode == AppMode.VIEWER.value) {
@@ -282,7 +297,8 @@ class AudioConfig {
                                         audioPlaybackMode.intValue,
                                         audioRef1kHz.intValue,
                                         audioRef2kHz.intValue,
-                                        loopedPlayback.value
+                                        loopedPlayback.value,
+                                        audioPitchRatio.intValue
                                     )
                                 }
                             ) {

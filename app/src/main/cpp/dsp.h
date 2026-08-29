@@ -65,7 +65,8 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
 int dsp_configure(int sample_rate,
                   int heterodyne1_kHz, int heterodyne2_kHz,
                   float audio_boost_factor, int samples_per_frame,
-                  dsp_playback_mode_t playback_mode, dsp_state_t *state);
+                  dsp_playback_mode_t playback_mode, int pitch_ratio,
+                  dsp_state_t *state);
 
 void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz);
 

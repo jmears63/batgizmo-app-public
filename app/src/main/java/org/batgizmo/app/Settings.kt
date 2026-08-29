@@ -57,6 +57,7 @@ data class Settings(
     var heterodyneRef2kHz: Int = 20,
     var audioPlaybackMode: Int = AudioPlaybackModeOptions.SINGLE_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
+    var audioPitchRatio: Int = AudioPitchRatioOptions.DEFAULT.value,
     var loopedAudioPlayback: Boolean = false,
     var suppressAudioFeedbackWarning: Boolean = false,
     var includeLocationInFile: Boolean = true,
@@ -166,6 +167,26 @@ data class Settings(
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
+    }
+
+    /** Pitch division ratios for TD-OLA playback (value = ÷ factor). */
+    enum class AudioPitchRatioOptions(val value: Int, val label: String) : EnumHelper {
+        PITCH_4(4, "÷4"),
+        PITCH_6(6, "÷6"),
+        PITCH_8(8, "÷8"),
+        PITCH_12(12, "÷12"),
+        PITCH_16(16, "÷16"),
+        PITCH_24(24, "÷24"),
+        PITCH_32(32, "÷32");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+
+        companion object {
+            val DEFAULT = PITCH_8
+            fun coerce(ratio: Int): Int =
+                entries.firstOrNull { it.value == ratio }?.value ?: DEFAULT.value
+        }
     }
 
     /** Sample rates at or below this use direct playback when no mode is stored. */
@@ -290,6 +311,7 @@ data class Settings(
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
     private val keyAudioPlaybackMode = intPreferencesKey("audioPlaybackMode")
+    private val keyAudioPitchRatio = intPreferencesKey("audioPitchRatio")
     private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor2")
     private val keyAudioAGCEnabled = booleanPreferencesKey("audioAGCEnabled")
     private val keyLocationInFile = booleanPreferencesKey("locationInFile")
@@ -327,6 +349,7 @@ data class Settings(
         prefs[keyAudioDualHeterodyne] = heterodyneDual
         if (audioPlaybackModePersisted)
             prefs[keyAudioPlaybackMode] = audioPlaybackMode
+        prefs[keyAudioPitchRatio] = AudioPitchRatioOptions.coerce(audioPitchRatio)
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
         prefs[keyAudioBoostFactor] = audioBoostFactor
@@ -382,6 +405,9 @@ data class Settings(
         } else {
             audioPlaybackModePersisted = false
         }
+        if (prefs[keyAudioPitchRatio] != null)
+            audioPitchRatio =
+                AudioPitchRatioOptions.coerce(requireNotNull(prefs[keyAudioPitchRatio]))
         if (prefs[keyAudioRef1kHz] != null)
             heterodyneRef1kHz = requireNotNull(prefs[keyAudioRef1kHz])
         if (prefs[keyAudioRef2kHz] != null)

@@ -616,12 +616,15 @@ class SpectrogramUI(
                         buttonState.audioChecked.value = false
                 },
                 onConfirm = { audioPlaybackMode: Int, audioRef1kHz: Int,
-                              audioRef2kHz: Int, loopedPlayback: Boolean ->
+                              audioRef2kHz: Int, loopedPlayback: Boolean,
+                              audioPitchRatio: Int ->
                     scope.launch {
                         model.updateStoredSettings(
                             model.settings.copy(
                                 audioPlaybackMode = audioPlaybackMode,
                                 audioPlaybackModePersisted = true,
+                                audioPitchRatio =
+                                    Settings.AudioPitchRatioOptions.coerce(audioPitchRatio),
                                 heterodyneDual = audioPlaybackMode ==
                                     Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value,
                                 heterodyneRef1kHz = audioRef1kHz,

@@ -69,6 +69,7 @@ static bool configure_and_start_audio(jint audio_device_id,
                                       jint heterodyne2_kHz,
                                       float audio_boost_factor,
                                       dsp_playback_mode_t playback_mode,
+                                      int pitch_ratio,
                                       dsp_state_t *state,
                                       void *aaudio_context);
 
@@ -164,11 +165,12 @@ static bool configure_and_start_audio(jint audio_device_id,
                                       jint heterodyne2_kHz,
                                       float audio_boost_factor,
                                       dsp_playback_mode_t playback_mode,
+                                      int pitch_ratio,
                                       dsp_state_t *state,
                                       void *aaudio_context) {
     int audio_out_rate = dsp_configure(sample_rate, heterodyne1_kHz, heterodyne2_kHz,
                                        audio_boost_factor, samples_per_frame,
-                                       playback_mode, state);
+                                       playback_mode, pitch_ratio, state);
     if (audio_out_rate <= 0)
         return false;
     return start_audio_output(audio_device_id, audio_out_rate, aaudio_context);
@@ -181,11 +183,12 @@ bool audio_out_start_live(JNIEnv *env,
                           jint heterodyne1_kHz,
                           jint heterodyne2_kHz,
                           float audio_boost_factor,
-                          dsp_playback_mode_t playback_mode) {
+                          dsp_playback_mode_t playback_mode,
+                          int pitch_ratio) {
     audio_out_stop(env);
     return configure_and_start_audio(audio_device_id, sample_rate, samples_per_frame,
                                      heterodyne1_kHz, heterodyne2_kHz,
-                                     audio_boost_factor, playback_mode,
+                                     audio_boost_factor, playback_mode, pitch_ratio,
                                      &s_live_dsp_state, nullptr);
 }
 
@@ -200,6 +203,7 @@ bool audio_out_start_buffer(JNIEnv *env,
                             jint end_exclusive_index,
                             bool looped_playback,
                             dsp_playback_mode_t playback_mode,
+                            int pitch_ratio,
                             jobject progress_callback) {
     audio_out_stop(env);    // Must run before new global refs.
 
@@ -214,7 +218,7 @@ bool audio_out_start_buffer(JNIEnv *env,
     return configure_and_start_audio(audio_device_id,
                                      sample_rate, sample_rate / 1000,
                                      heterodyne1_kHz, heterodyne2_kHz,
-                                     audio_boost_factor, playback_mode,
+                                     audio_boost_factor, playback_mode, pitch_ratio,
                                      &playback_context.dsp_state, &playback_context);
 }
 
