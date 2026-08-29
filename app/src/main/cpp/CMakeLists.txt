@@ -35,6 +35,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         dsp_agc.cpp
         dsp_heterodyne.cpp
         dsp_tdola.cpp
+        dsp_te.cpp
         audio_out.cpp
 )
 

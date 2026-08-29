@@ -1137,7 +1137,13 @@ class UIModel(application: Application,
                     "Pipeline sample rate required for live audio"
                 }
                 val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
-                val pitchRatio = Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio)
+                val modeFactor =
+                    if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
+                        Settings.AudioTimeExpansionFactorOptions.coerce(
+                            settings.audioTimeExpansionFactor
+                        )
+                    else
+                        Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio)
                 val heterodyne2kHz =
                     if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
                         settings.heterodyneRef2kHz
@@ -1151,7 +1157,7 @@ class UIModel(application: Application,
                             heterodyne2kHz,
                             settings.audioBoostFactor,
                             playbackMode,
-                            pitchRatio
+                            modeFactor
                         )
                         audioStartResult = LiveAudioStartResult(startedOK = true)
                     }
@@ -1163,7 +1169,7 @@ class UIModel(application: Application,
                             heterodyne2kHz,
                             settings.audioBoostFactor,
                             playbackMode,
-                            pitchRatio
+                            modeFactor
                         )
                         micCaptureService.liveAudioMonitorEnabled = started
                         audioStartResult = LiveAudioStartResult(startedOK = started)
@@ -1203,7 +1209,13 @@ class UIModel(application: Application,
                     Timber.d("Visible raw data range: ${visibleRawData.second}")
 
                     val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
-                    val pitchRatio = Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio)
+                    val modeFactor =
+                        if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
+                            Settings.AudioTimeExpansionFactorOptions.coerce(
+                                settings.audioTimeExpansionFactor
+                            )
+                        else
+                            Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio)
                     usbService.startAudioFromBuffer(
                         settings.heterodyneRef1kHz,
                         if (playbackMode ==
@@ -1216,7 +1228,7 @@ class UIModel(application: Application,
                         visibleRawData, settings.loopedAudioPlayback,
                         sampleRateHz,
                         playbackMode,
-                        pitchRatio,
+                        modeFactor,
                         ::onAudioProgress
                     )
 

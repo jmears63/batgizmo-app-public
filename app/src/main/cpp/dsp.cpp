@@ -24,6 +24,7 @@
 #include "dsp_agc.h"
 #include "dsp_heterodyne.h"
 #include "dsp_tdola.h"
+#include "dsp_te.h"
 
 #include <math.h>
 #include <string.h>
@@ -43,6 +44,7 @@ typedef enum {
     DSP_MODE_HETERODYNE = 0,
     DSP_MODE_DIRECT = 1,
     DSP_MODE_PITCH_SHIFT = 2,
+    DSP_MODE_TIME_EXPANSION = 3,
 } dsp_mode_t;
 
 static volatile dsp_mode_t s_playback_mode = DSP_MODE_HETERODYNE;
@@ -172,6 +174,14 @@ int dsp_configure(int sample_rate,
             dsp_tdola_configure(sample_rate, TARGET_AUDIO_OUT_RATE, pr);
             break;
         }
+        case DSP_PLAYBACK_TIME_EXPANSION: {
+            s_playback_mode = DSP_MODE_TIME_EXPANSION;
+            dsp_heterodyne_clear();
+            audio_out_rate = TARGET_AUDIO_OUT_RATE;
+            int e = pitch_ratio < 1 ? 8 : pitch_ratio;
+            dsp_te_configure(sample_rate, TARGET_AUDIO_OUT_RATE, e);
+            break;
+        }
         case DSP_PLAYBACK_SINGLE_HETERODYNE:
         case DSP_PLAYBACK_DUAL_HETERODYNE:
         default:
@@ -202,6 +212,8 @@ int dsp_get_input_samples_for_output(int output_frames) {
         return 0;
     if (s_playback_mode == DSP_MODE_PITCH_SHIFT)
         return dsp_tdola_input_samples_for_output(output_frames);
+    if (s_playback_mode == DSP_MODE_TIME_EXPANSION)
+        return dsp_te_input_samples_for_output(output_frames);
     int r = s_decimation_factor < 1 ? 1 : s_decimation_factor;
     return output_frames * r;
 }
@@ -223,6 +235,9 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
         case DSP_MODE_PITCH_SHIFT:
             return dsp_tdola_process(pBuffer, sample_count, downsampled_buffer, state,
                                      agc_enabled);
+        case DSP_MODE_TIME_EXPANSION:
+            return dsp_te_process(pBuffer, sample_count, downsampled_buffer, state,
+                                  agc_enabled);
         case DSP_MODE_HETERODYNE:
         default:
             return dsp_heterodyne_process(pBuffer, sample_count, downsampled_buffer, state,

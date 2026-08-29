@@ -128,7 +128,7 @@ class AudioConfig {
         appMode: Int,
         audioStarting: Boolean,
         onDismiss: () -> Unit,
-        onConfirm: (Int, Int, Int, Boolean, Int) -> Unit,
+        onConfirm: (Int, Int, Int, Boolean, Int, Int) -> Unit,
         heterodyneRange: IntRange,
     ) {
         // Constrain frequencies
@@ -143,16 +143,21 @@ class AudioConfig {
         val constrainedRef2kHz = constrainFrequency(settings.heterodyneRef2kHz, 0.66f)
 
         fun coercePlaybackModeForAppMode(mode: Int): Int {
-            if (appMode != AppMode.VIEWER.value &&
-                mode == Settings.AudioPlaybackModeOptions.DIRECT.value
-            ) {
-                return Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+            if (appMode != AppMode.VIEWER.value) {
+                if (mode == Settings.AudioPlaybackModeOptions.DIRECT.value ||
+                    mode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value
+                ) {
+                    return Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+                }
             }
             return mode
         }
 
+        // Direct is viewer-only (hidden in live). Time expansion stays visible in live but
+        // is greyed out / disabled — it only works on recorded material.
+        val isViewer = appMode == AppMode.VIEWER.value
         val playbackModeOptions =
-            if (appMode == AppMode.VIEWER.value)
+            if (isViewer)
                 Settings.AudioPlaybackModeOptions.entries
             else
                 Settings.AudioPlaybackModeOptions.entries.filter {
@@ -177,6 +182,11 @@ class AudioConfig {
         val audioPitchRatio = rememberSaveable {
             mutableIntStateOf(Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio))
         }
+        val audioTimeExpansionFactor = rememberSaveable {
+            mutableIntStateOf(
+                Settings.AudioTimeExpansionFactorOptions.coerce(settings.audioTimeExpansionFactor)
+            )
+        }
 
         val isHeterodynePlayback =
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value ||
@@ -185,6 +195,8 @@ class AudioConfig {
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
         val isPitchShifting =
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.PITCH_SHIFTING.value
+        val isTimeExpansion =
+            audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value
 
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -203,7 +215,7 @@ class AudioConfig {
                     modifier = Modifier
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 200.dp)
-                        .widthIn(max = 600.dp), // Card max width
+                        .widthIn(max = if (isLandscape) 420.dp else 600.dp),
                     shape = RoundedCornerShape(16.dp),
                     tonalElevation = 8.dp,
                     shadowElevation = 8.dp
@@ -225,7 +237,11 @@ class AudioConfig {
                         MyListSelector<Settings.AudioPlaybackModeOptions>(
                             playbackModeOptions,
                             "Playback mode",
-                            audioPlaybackMode.intValue
+                            audioPlaybackMode.intValue,
+                            optionEnabled = { option ->
+                                isViewer ||
+                                    option != Settings.AudioPlaybackModeOptions.TIME_EXPANSION
+                            }
                         ) { value ->
                             audioPlaybackMode.intValue = value
                         }
@@ -233,32 +249,20 @@ class AudioConfig {
                         if (isPitchShifting) {
                             MyListSelector<Settings.AudioPitchRatioOptions>(
                                 Settings.AudioPitchRatioOptions.entries,
-                                "Pitch shift",
+                                "Shift factor",
                                 audioPitchRatio.intValue
                             ) { value ->
                                 audioPitchRatio.intValue = value
                             }
                         }
 
-                        if (appMode == AppMode.VIEWER.value) {
-                            if (isLandscape) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Checkbox(
-                                            checked = loopedPlayback.value,
-                                            onCheckedChange = { loopedPlayback.value = it }
-                                        )
-                                        Text("Loop playback")
-                                    }
-                                }
-                            } else {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = loopedPlayback.value,
-                                        onCheckedChange = { loopedPlayback.value = it }
-                                    )
-                                    Text("Looped playback")
-                                }
+                        if (isTimeExpansion) {
+                            MyListSelector<Settings.AudioTimeExpansionFactorOptions>(
+                                Settings.AudioTimeExpansionFactorOptions.entries,
+                                "Expansion factor",
+                                audioTimeExpansionFactor.intValue
+                            ) { value ->
+                                audioTimeExpansionFactor.intValue = value
                             }
                         }
 
@@ -282,6 +286,16 @@ class AudioConfig {
                             }
                         }
 
+                        if (isViewer) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = loopedPlayback.value,
+                                    onCheckedChange = { loopedPlayback.value = it }
+                                )
+                                Text(if (isLandscape) "Loop playback" else "Looped playback")
+                            }
+                        }
+
                         // Buttons
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -298,7 +312,8 @@ class AudioConfig {
                                         audioRef1kHz.intValue,
                                         audioRef2kHz.intValue,
                                         loopedPlayback.value,
-                                        audioPitchRatio.intValue
+                                        audioPitchRatio.intValue,
+                                        audioTimeExpansionFactor.intValue
                                     )
                                 }
                             ) {

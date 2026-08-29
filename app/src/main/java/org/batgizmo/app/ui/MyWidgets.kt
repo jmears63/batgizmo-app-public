@@ -81,6 +81,7 @@ fun <T> MyListSelector(
     enumEntries: List<T>,
     description: String,
     selectedValue: Int,
+    optionEnabled: (T) -> Boolean = { true },
     onChange: (Int) -> Unit
 ) where T : Enum<T>, T: Settings.EnumHelper {
 
@@ -122,6 +123,7 @@ fun <T> MyListSelector(
             onDismissRequest = { expanded = false }
         ) {
             enumEntries.forEach { option ->
+                val enabled = optionEnabled(option)
                 DropdownMenuItem(
                     text = { Text(option.theLabel()) },
                     onClick = {
@@ -129,6 +131,7 @@ fun <T> MyListSelector(
                         expanded = false
                         onChange(valueForLabel(option.theLabel()))
                     },
+                    enabled = enabled,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

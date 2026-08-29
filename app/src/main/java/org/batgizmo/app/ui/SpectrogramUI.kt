@@ -617,7 +617,7 @@ class SpectrogramUI(
                 },
                 onConfirm = { audioPlaybackMode: Int, audioRef1kHz: Int,
                               audioRef2kHz: Int, loopedPlayback: Boolean,
-                              audioPitchRatio: Int ->
+                              audioPitchRatio: Int, audioTimeExpansionFactor: Int ->
                     scope.launch {
                         model.updateStoredSettings(
                             model.settings.copy(
@@ -625,6 +625,10 @@ class SpectrogramUI(
                                 audioPlaybackModePersisted = true,
                                 audioPitchRatio =
                                     Settings.AudioPitchRatioOptions.coerce(audioPitchRatio),
+                                audioTimeExpansionFactor =
+                                    Settings.AudioTimeExpansionFactorOptions.coerce(
+                                        audioTimeExpansionFactor
+                                    ),
                                 heterodyneDual = audioPlaybackMode ==
                                     Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value,
                                 heterodyneRef1kHz = audioRef1kHz,

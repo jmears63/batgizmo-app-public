@@ -28,6 +28,7 @@
 
 #include "dsp_heterodyne.h"  /* dsp_heterodyne_state_t */
 #include "dsp_tdola.h"       /* dsp_tdola_state_t */
+#include "dsp_te.h"          /* dsp_te_state_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +44,7 @@ typedef enum {
     DSP_PLAYBACK_DUAL_HETERODYNE = 1,
     DSP_PLAYBACK_DIRECT = 2,
     DSP_PLAYBACK_PITCH_SHIFTING = 3,
+    DSP_PLAYBACK_TIME_EXPANSION = 4,
 } dsp_playback_mode_t;
 
 /*
@@ -56,6 +58,7 @@ typedef struct {
     } downsampling_filter;
     dsp_heterodyne_state_t heterodyne;
     dsp_tdola_state_t tdola;
+    dsp_te_state_t te;
 } dsp_state_t;
 
 int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
@@ -87,5 +90,6 @@ int dsp_get_input_samples_for_output(int output_frames);
 #define BATGIZMO_DSP_STATE_COMPLETE
 #include "dsp_heterodyne.h"
 #include "dsp_tdola.h"
+#include "dsp_te.h"
 
 #endif /* BATGIZMO_DSP_H */

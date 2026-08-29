@@ -58,6 +58,7 @@ data class Settings(
     var audioPlaybackMode: Int = AudioPlaybackModeOptions.SINGLE_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
     var audioPitchRatio: Int = AudioPitchRatioOptions.DEFAULT.value,
+    var audioTimeExpansionFactor: Int = AudioTimeExpansionFactorOptions.DEFAULT.value,
     var loopedAudioPlayback: Boolean = false,
     var suppressAudioFeedbackWarning: Boolean = false,
     var includeLocationInFile: Boolean = true,
@@ -160,10 +161,11 @@ data class Settings(
     }
 
     enum class AudioPlaybackModeOptions(val value: Int, val label: String) : EnumHelper {
-        SINGLE_HETERODYNE(0, "Classic single heterodyne"),
+        PITCH_SHIFTING(3, "Pitch shifting"),
+        SINGLE_HETERODYNE(0, "Classic heterodyne"),
         DUAL_HETERODYNE(1, "Dual heterodyne"),
-        DIRECT(2, "Direct playback"),
-        PITCH_SHIFTING(3, "Pitch shifting");
+        TIME_EXPANSION(4, "Classic time expansion"),
+        DIRECT(2, "Direct playback");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
@@ -171,13 +173,13 @@ data class Settings(
 
     /** Pitch division ratios for TD-OLA playback (value = ÷ factor). */
     enum class AudioPitchRatioOptions(val value: Int, val label: String) : EnumHelper {
-        PITCH_4(4, "÷4"),
-        PITCH_6(6, "÷6"),
-        PITCH_8(8, "÷8"),
-        PITCH_12(12, "÷12"),
-        PITCH_16(16, "÷16"),
-        PITCH_24(24, "÷24"),
-        PITCH_32(32, "÷32");
+        PITCH_4(4, "4"),
+        PITCH_6(6, "6"),
+        PITCH_8(8, "8"),
+        PITCH_12(12, "12"),
+        PITCH_16(16, "16"),
+        PITCH_24(24, "24"),
+        PITCH_32(32, "32");
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
@@ -186,6 +188,26 @@ data class Settings(
             val DEFAULT = PITCH_8
             fun coerce(ratio: Int): Int =
                 entries.firstOrNull { it.value == ratio }?.value ?: DEFAULT.value
+        }
+    }
+
+    /** Classic time-expansion slowdown factors (viewer mode); same set as pitch ratios. */
+    enum class AudioTimeExpansionFactorOptions(val value: Int, val label: String) : EnumHelper {
+        TE_4(4, "4"),
+        TE_6(6, "6"),
+        TE_8(8, "8"),
+        TE_12(12, "12"),
+        TE_16(16, "16"),
+        TE_24(24, "24"),
+        TE_32(32, "32");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+
+        companion object {
+            val DEFAULT = TE_8
+            fun coerce(factor: Int): Int =
+                entries.firstOrNull { it.value == factor }?.value ?: DEFAULT.value
         }
     }
 
@@ -215,6 +237,10 @@ data class Settings(
     fun isPitchShiftingPlayback(sampleRateHz: Int): Boolean =
         effectiveAudioPlaybackMode(sampleRateHz) ==
             AudioPlaybackModeOptions.PITCH_SHIFTING.value
+
+    fun isTimeExpansionPlayback(sampleRateHz: Int): Boolean =
+        effectiveAudioPlaybackMode(sampleRateHz) ==
+            AudioPlaybackModeOptions.TIME_EXPANSION.value
 
     /**
      * Single or dual heterodyne — modes that use reference frequency UI/cursors.
@@ -312,6 +338,7 @@ data class Settings(
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
     private val keyAudioPlaybackMode = intPreferencesKey("audioPlaybackMode")
     private val keyAudioPitchRatio = intPreferencesKey("audioPitchRatio")
+    private val keyAudioTimeExpansionFactor = intPreferencesKey("audioTimeExpansionFactor")
     private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor2")
     private val keyAudioAGCEnabled = booleanPreferencesKey("audioAGCEnabled")
     private val keyLocationInFile = booleanPreferencesKey("locationInFile")
@@ -350,6 +377,8 @@ data class Settings(
         if (audioPlaybackModePersisted)
             prefs[keyAudioPlaybackMode] = audioPlaybackMode
         prefs[keyAudioPitchRatio] = AudioPitchRatioOptions.coerce(audioPitchRatio)
+        prefs[keyAudioTimeExpansionFactor] =
+            AudioTimeExpansionFactorOptions.coerce(audioTimeExpansionFactor)
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
         prefs[keyAudioBoostFactor] = audioBoostFactor
@@ -408,6 +437,10 @@ data class Settings(
         if (prefs[keyAudioPitchRatio] != null)
             audioPitchRatio =
                 AudioPitchRatioOptions.coerce(requireNotNull(prefs[keyAudioPitchRatio]))
+        if (prefs[keyAudioTimeExpansionFactor] != null)
+            audioTimeExpansionFactor = AudioTimeExpansionFactorOptions.coerce(
+                requireNotNull(prefs[keyAudioTimeExpansionFactor])
+            )
         if (prefs[keyAudioRef1kHz] != null)
             heterodyneRef1kHz = requireNotNull(prefs[keyAudioRef1kHz])
         if (prefs[keyAudioRef2kHz] != null)
