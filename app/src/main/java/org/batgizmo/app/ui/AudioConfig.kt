@@ -180,12 +180,23 @@ class AudioConfig {
         val audioRef2kHz = rememberSaveable { mutableIntStateOf(constrainedRef2kHz) }
         val loopedPlayback = rememberSaveable { mutableStateOf(settings.loopedAudioPlayback) }
         val audioPitchRatio = rememberSaveable {
-            mutableIntStateOf(Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio))
+            mutableIntStateOf(
+                Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                    settings.audioPitchRatio, sampleRateHz
+                )
+            )
         }
         val audioTimeExpansionFactor = rememberSaveable {
             mutableIntStateOf(
                 Settings.AudioTimeExpansionFactorOptions.coerce(settings.audioTimeExpansionFactor)
             )
+        }
+
+        LaunchedEffect(sampleRateHz) {
+            audioPitchRatio.intValue =
+                Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                    audioPitchRatio.intValue, sampleRateHz
+                )
         }
 
         val isHeterodynePlayback =
@@ -215,7 +226,7 @@ class AudioConfig {
                     modifier = Modifier
                         .fillMaxWidth()
                         .defaultMinSize(minHeight = 200.dp)
-                        .widthIn(max = if (isLandscape) 420.dp else 600.dp),
+                        .widthIn(max = 600.dp), // Card max width
                     shape = RoundedCornerShape(16.dp),
                     tonalElevation = 8.dp,
                     shadowElevation = 8.dp
@@ -250,7 +261,8 @@ class AudioConfig {
                             MyListSelector<Settings.AudioPitchRatioOptions>(
                                 Settings.AudioPitchRatioOptions.entries,
                                 "Shift factor",
-                                audioPitchRatio.intValue
+                                audioPitchRatio.intValue,
+                                optionEnabled = { it.isApplicable(sampleRateHz) }
                             ) { value ->
                                 audioPitchRatio.intValue = value
                             }

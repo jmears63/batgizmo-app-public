@@ -624,7 +624,9 @@ class SpectrogramUI(
                                 audioPlaybackMode = audioPlaybackMode,
                                 audioPlaybackModePersisted = true,
                                 audioPitchRatio =
-                                    Settings.AudioPitchRatioOptions.coerce(audioPitchRatio),
+                                    Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                                        audioPitchRatio, sampleRateHz
+                                    ),
                                 audioTimeExpansionFactor =
                                     Settings.AudioTimeExpansionFactorOptions.coerce(
                                         audioTimeExpansionFactor

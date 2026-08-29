@@ -1143,7 +1143,9 @@ class UIModel(application: Application,
                             settings.audioTimeExpansionFactor
                         )
                     else
-                        Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio)
+                        Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                            settings.audioPitchRatio, sampleRateHz
+                        )
                 val heterodyne2kHz =
                     if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
                         settings.heterodyneRef2kHz
@@ -1215,7 +1217,9 @@ class UIModel(application: Application,
                                 settings.audioTimeExpansionFactor
                             )
                         else
-                            Settings.AudioPitchRatioOptions.coerce(settings.audioPitchRatio)
+                            Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                                settings.audioPitchRatio, sampleRateHz
+                            )
                     usbService.startAudioFromBuffer(
                         settings.heterodyneRef1kHz,
                         if (playbackMode ==

@@ -184,10 +184,27 @@ data class Settings(
         override fun theValue(): Int = value
         override fun theLabel(): String = label
 
+        /**
+         * True if this factor can be realised without clamping W_out in dsp_tdola
+         * (W_out = Win * pitch * Fout / Fin ≤ Win * 4).
+         */
+        fun isApplicable(sampleRateHz: Int): Boolean =
+            value.toLong() * TARGET_AUDIO_OUT_RATE_HZ <=
+                TDOLA_MAX_WOUT_OVER_WIN.toLong() * sampleRateHz
+
         companion object {
             val DEFAULT = PITCH_8
             fun coerce(ratio: Int): Int =
                 entries.firstOrNull { it.value == ratio }?.value ?: DEFAULT.value
+
+            fun coerceForSampleRate(ratio: Int, sampleRateHz: Int): Int {
+                val preferred = coerce(ratio)
+                if (entries.any { it.value == preferred && it.isApplicable(sampleRateHz) })
+                    return preferred
+                return entries.filter { it.isApplicable(sampleRateHz) }
+                    .maxByOrNull { it.value }?.value
+                    ?: DEFAULT.value
+            }
         }
     }
 
@@ -315,8 +332,19 @@ data class Settings(
         /** Default manual audio boost multiplier (UI slider). */
         const val DEFAULT_AUDIO_BOOST_FACTOR = 1f
 
+        /**
+         * AAudio / pitch / TE output rate. Must match TARGET_AUDIO_OUT_RATE in dsp_internal.h.
+         */
+        const val TARGET_AUDIO_OUT_RATE_HZ = 48_000
+
+        /**
+         * Max W_out/Win in dsp_tdola (DSP_TDOLA_OUT_MAX / DSP_TDOLA_WINDOW_LEN).
+         * Limits how large a pitch factor can be for a given Fin.
+         */
+        const val TDOLA_MAX_WOUT_OVER_WIN = 4
+
         /** Sample rates at or below this use direct playback when no mode is stored. */
-        const val DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ = 48_000
+        const val DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ = TARGET_AUDIO_OUT_RATE_HZ
     }
 
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")
