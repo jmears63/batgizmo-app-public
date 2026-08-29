@@ -662,6 +662,10 @@ class UIModel(application: Application,
     var settings = Settings()
         private set  // public getter, private setter
 
+    // Last AGC enable value pushed to native; avoid re-calling setAgcEnabled (which resets
+    // the envelope) when unrelated settings are persisted (e.g. audio boost slider release).
+    private var appliedAudioAgcEnabled: Boolean? = null
+
     // The trigger monitor is displayed in the Settings UI for convenience when adjust the trigger
     // threshold. Multiple triggers are combined into one:
     val triggerMonitorChannel = Channel<Unit>(Channel.CONFLATED)
@@ -1549,7 +1553,10 @@ class UIModel(application: Application,
                 }
 
                 setAudioBoost(settings.audioBoostFactor)
-                usbService.setAgcEnabled(settings.audioAGCEnabled)
+                if (appliedAudioAgcEnabled != newSettings.audioAGCEnabled) {
+                    appliedAudioAgcEnabled = newSettings.audioAGCEnabled
+                    usbService.setAgcEnabled(newSettings.audioAGCEnabled)
+                }
 
                 /*
                   For now, do a complete reload for any settings change. This could be smarter

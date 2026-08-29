@@ -332,7 +332,8 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
     /*
      * The following loop processes a single raw data sample at a time through each
      * DSP stage. That isn't very efficient. It would be more efficient to process data in chunks because
-     * more state could remain in CPU registers. One day I will fix this.
+     * more state could remain in CPU registers. One day I will fix this, starting with the pre-decimation
+     * steps that are processed most frequently.
      */
 
     for (uint32_t i = 0; i < sample_count; i++) {
@@ -349,6 +350,9 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
         // (dual heterodyne), else INT16_MIN to INT16_MAX
 
         if (s_decimate_keep(decimation_factor, state)) {
+            // This processing is post decimation to standard audio frequency so is not
+            // so efficiency critical as the previous steps.
+
             // Apply any scaling required by previous processing steps:
             filtered >>= scale_shift;       // Range of filtered: INT16_MIN to INT16_MAX
 
