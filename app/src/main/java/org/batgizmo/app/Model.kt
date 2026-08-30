@@ -76,6 +76,7 @@ import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 
@@ -207,6 +208,10 @@ class UIModel(application: Application,
         private const val AMPLITUDE_GRAPH_COLOUR_MAP_INDEX = 180
 
         private const val minSrcDeltaLogical: Float = 0.001f
+
+        private const val AUTO_HET_TAU_S = 1.0f
+        private const val AUTO_HET_OFFSET_HZ = 500f
+        private const val AUTO_HET_DEFAULT_HZ = 50_000f
 
         /**
          * Make sure the supplied inner range is at least minSrcDeltaLogical, and doesn't
@@ -541,6 +546,16 @@ class UIModel(application: Application,
 
     private val audioProgressChannel = Channel<Int>(Channel.CONFLATED)
     val audioProgressFlow = audioProgressChannel.receiveAsFlow()
+
+    /**
+     * Auto-tuned heterodyne: tracked LO in kHz for the spectrogram cursor (null when inactive).
+     */
+    private val mutableAutoHeterodyneRefkHz = MutableStateFlow<Int?>(null)
+    val autoHeterodyneRefkHzFlow: StateFlow<Int?> = mutableAutoHeterodyneRefkHz.asStateFlow()
+
+    private var audioOutputActive = false
+    private var autoHetSmoothedHz: Float? = null
+    private var autoHetLastObservationHz: Float? = null
 
     var colourMapSize: Int? = null
     /** Colour map id currently installed in native code; null until first apply. */
@@ -1146,34 +1161,49 @@ class UIModel(application: Application,
                         Settings.AudioPitchRatioOptions.coerceForSampleRate(
                             settings.audioPitchRatio, sampleRateHz
                         )
+                val isAutoHet =
+                    playbackMode == Settings.AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+                if (isAutoHet)
+                    resetAutoHeterodyneTracker()
+                val heterodyne1kHz =
+                    if (isAutoHet) autoHeterodyneInitialRefkHz()
+                    else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
                 val heterodyne2kHz =
                     if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
-                        settings.heterodyneRef2kHz
+                        settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
                     else
                         null
 
                 when (effectiveLiveInputSource()) {
                     Settings.LiveInputSourceOptions.USB.value -> {
                         usbService.startAudio(
-                            settings.heterodyneRef1kHz,
+                            heterodyne1kHz,
                             heterodyne2kHz,
                             settings.audioBoostFactor,
                             playbackMode,
-                            modeFactor
+                            modeFactor,
+                            settings.audioPitchHpfEnabled
                         )
+                        audioOutputActive = true
+                        if (isAutoHet)
+                            mutableAutoHeterodyneRefkHz.value = heterodyne1kHz
                         audioStartResult = LiveAudioStartResult(startedOK = true)
                     }
 
                     Settings.LiveInputSourceOptions.PHONE_MIC.value -> {
                         val started = usbService.startLiveInputAudio(
                             sampleRateHz,
-                            settings.heterodyneRef1kHz,
+                            heterodyne1kHz,
                             heterodyne2kHz,
                             settings.audioBoostFactor,
                             playbackMode,
-                            modeFactor
+                            modeFactor,
+                            settings.audioPitchHpfEnabled
                         )
                         micCaptureService.liveAudioMonitorEnabled = started
+                        audioOutputActive = started
+                        if (started && isAutoHet)
+                            mutableAutoHeterodyneRefkHz.value = heterodyne1kHz
                         audioStartResult = LiveAudioStartResult(startedOK = started)
                     }
 
@@ -1220,12 +1250,20 @@ class UIModel(application: Application,
                             Settings.AudioPitchRatioOptions.coerceForSampleRate(
                                 settings.audioPitchRatio, sampleRateHz
                             )
+                    val isAutoHet =
+                        playbackMode ==
+                            Settings.AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+                    if (isAutoHet)
+                        resetAutoHeterodyneTracker()
+                    val heterodyne1kHz =
+                        if (isAutoHet) autoHeterodyneInitialRefkHz()
+                        else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
                     usbService.startAudioFromBuffer(
-                        settings.heterodyneRef1kHz,
+                        heterodyne1kHz,
                         if (playbackMode ==
                             Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
                         )
-                            settings.heterodyneRef2kHz
+                            settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
                         else
                             null,
                         settings.audioBoostFactor,
@@ -1233,9 +1271,13 @@ class UIModel(application: Application,
                         sampleRateHz,
                         playbackMode,
                         modeFactor,
+                        settings.audioPitchHpfEnabled,
                         ::onAudioProgress
                     )
 
+                    audioOutputActive = true
+                    if (isAutoHet)
+                        mutableAutoHeterodyneRefkHz.value = heterodyne1kHz
                     audioStartResult = LiveAudioStartResult(startedOK = true)
                 }
             }
@@ -1250,6 +1292,8 @@ class UIModel(application: Application,
     fun stopAudio() {
         viewModelScope.launch(Dispatchers.Default) {
             mutex.withLock {
+                audioOutputActive = false
+                resetAutoHeterodyneTracker()
                 micCaptureService.liveAudioMonitorEnabled = false
                 usbService.stopAudio()
             }
@@ -1404,7 +1448,108 @@ class UIModel(application: Application,
     fun setHeterodyne(kHz1: Int, kHz2: Int?) {
         viewModelScope.launch(Dispatchers.Default) {
             mutex.withLock {
-                usbService.setHeterodyne(kHz1, kHz2)
+                val lo1 = settings.coerceHeterodyneRefkHz(kHz1)
+                val lo2 = kHz2?.let { settings.coerceHeterodyneRefkHz(it) }
+                usbService.setHeterodyne(lo1, lo2)
+            }
+        }
+    }
+
+    private fun resetAutoHeterodyneTracker() {
+        autoHetSmoothedHz = null
+        autoHetLastObservationHz = null
+        mutableAutoHeterodyneRefkHz.value = null
+    }
+
+    private fun autoHeterodyneInitialRefkHz(): Int =
+        settings.coerceHeterodyneRefkHz(
+            ((AUTO_HET_DEFAULT_HZ - AUTO_HET_OFFSET_HZ) / 1000f).roundToInt()
+        )
+
+    /**
+     * Live path: after each spectrogram slice, update the auto-tuned LO from new time buckets.
+     */
+    fun onLiveSpectrumBucketsForAutoHeterodyne(buckets: IntRange) {
+        if (!audioOutputActive)
+            return
+        val sampleRateHz = pipeline?.sampleRateHz() ?: return
+        if (!settings.isAutoTunedHeterodynePlayback(sampleRateHz))
+            return
+        if (buckets.isEmpty())
+            return
+
+        viewModelScope.launch(Dispatchers.Default) {
+            val pl = pipeline ?: return@launch
+            val dt = pl.transformedTimeIntervalSeconds() ?: return@launch
+            if (dt <= 0f)
+                return@launch
+            val minHz = settings.autoTriggerRangeMinkHz * 1000f
+            val maxHz = settings.autoTriggerRangeMaxkHz * 1000f
+            val thresholdDb = settings.autoTriggerThresholdDb
+            for (bucket in buckets) {
+                val peak = pl.peakFrequencyInTimeBucket(bucket, minHz, maxHz)
+                applyAutoHeterodyneObservation(peak?.first, peak?.second, thresholdDb, dt)
+            }
+        }
+    }
+
+    /**
+     * Viewer path: drive auto-tuned LO from the spectrogram column under the playhead.
+     */
+    fun updateAutoHeterodyneAtRawSample(sampleIndex: Int) {
+        if (!audioOutputActive)
+            return
+        val sampleRateHz = pipeline?.sampleRateHz() ?: return
+        if (!settings.isAutoTunedHeterodynePlayback(sampleRateHz))
+            return
+
+        viewModelScope.launch(Dispatchers.Default) {
+            val pl = pipeline ?: return@launch
+            val bucket = pl.timeBucketForRawSampleIndex(sampleIndex) ?: return@launch
+            val dt = pl.transformedTimeIntervalSeconds() ?: return@launch
+            if (dt <= 0f)
+                return@launch
+            val minHz = settings.autoTriggerRangeMinkHz * 1000f
+            val maxHz = settings.autoTriggerRangeMaxkHz * 1000f
+            val thresholdDb = settings.autoTriggerThresholdDb
+            val peak = pl.peakFrequencyInTimeBucket(bucket, minHz, maxHz)
+            applyAutoHeterodyneObservation(peak?.first, peak?.second, thresholdDb, dt)
+        }
+    }
+
+    /**
+     * EWMA of peak frequencies (τ ≈ 1 s). Below-threshold peaks hold the last observation
+     * (default 50 kHz). Heterodyne LO = smoothed − 500 Hz, in integer kHz.
+     */
+    private suspend fun applyAutoHeterodyneObservation(
+        peakHz: Float?,
+        peakDb: Float?,
+        thresholdDb: Float,
+        dtSeconds: Float
+    ) {
+        val observationHz =
+            if (peakHz != null && peakDb != null && peakDb >= thresholdDb)
+                peakHz
+            else
+                autoHetLastObservationHz ?: AUTO_HET_DEFAULT_HZ
+        autoHetLastObservationHz = observationHz
+
+        val alpha = (1.0 - exp((-dtSeconds / AUTO_HET_TAU_S).toDouble())).toFloat()
+            .coerceIn(0f, 1f)
+        val prev = autoHetSmoothedHz
+        val smoothed = if (prev == null) observationHz
+        else alpha * observationHz + (1f - alpha) * prev
+        autoHetSmoothedHz = smoothed
+
+        val maxkHz = ((pipeline?.sampleRateHz() ?: 384_000) / 2000) - 1
+        val minkHz = settings.heterodyneMinRefkHz
+        val refkHz = ((smoothed - AUTO_HET_OFFSET_HZ) / 1000f).roundToInt()
+            .coerceIn(minkHz, maxOf(minkHz, maxkHz))
+
+        if (mutableAutoHeterodyneRefkHz.value != refkHz) {
+            mutableAutoHeterodyneRefkHz.value = refkHz
+            mutex.withLock {
+                usbService.setHeterodyne(refkHz, null)
             }
         }
     }

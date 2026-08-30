@@ -37,6 +37,9 @@ static int s_ha = 0;
 static int s_hs = 0;
 static int s_win = 0;
 static int s_wout = 0;
+static bool s_hpf_enabled = false;
+/* α = exp(-2πfc/fs) in Q31 for y[n] = α*(y[n-1] + x[n] - x[n-1]). */
+static int32_t s_hpf_alpha_q31 = 0;
 
 static int s_gcd(int a, int b) {
     while (b != 0) {
@@ -61,10 +64,21 @@ static void s_init_hann(int window_len, int hs) {
     }
 }
 
-void dsp_tdola_configure(int input_rate_hz, int output_rate_hz, int pitch_ratio) {
+void dsp_tdola_configure(int input_rate_hz, int output_rate_hz, int pitch_ratio,
+                         bool hpf_enabled) {
     int fin = input_rate_hz < 1 ? 1 : input_rate_hz;
     int fout = output_rate_hz < 1 ? TARGET_AUDIO_OUT_RATE : output_rate_hz;
     int r_pitch = pitch_ratio < 1 ? 1 : pitch_ratio;
+
+    s_hpf_enabled = hpf_enabled;
+    if (hpf_enabled) {
+        /* LPF a = 1-exp(...); HPF uses α = exp(...) = 1-a. */
+        int32_t a_lpf =
+                dsp_calculate_iir_coefficient(TDOLA_HPF_CUTOFF_HZ, (double) fin);
+        s_hpf_alpha_q31 = (int32_t) ((1LL << 31) - a_lpf);
+    } else {
+        s_hpf_alpha_q31 = 0;
+    }
 
     /*
      * Exact rate ratio for hops (authoritative for duration).
@@ -140,9 +154,9 @@ void dsp_tdola_configure(int input_rate_hz, int output_rate_hz, int pitch_ratio)
 
     __android_log_print(ANDROID_LOG_INFO, __FILE__,
                         "TD-OLA: Fin=%d Fout=%d Win=%d Wout=%d Ha=%d Hs=%d "
-                        "(Ha/Hs=%d/%d) pitch=%d %s",
+                        "(Ha/Hs=%d/%d) pitch=%d hpf=%d %s",
                         fin, fout, win, wout, ha, hs, ratio_in, ratio_out,
-                        r_pitch,
+                        r_pitch, s_hpf_enabled ? 1 : 0,
                         wout > win ? "expand" : (wout < win ? "compress" : "1:1"));
 }
 
@@ -222,6 +236,20 @@ static void s_overlap_add_grain(dsp_tdola_state_t *t,
     t->in_len -= ha;
 }
 
+/* Cascaded one-pole HPF: y = α*(y_prev + x - x_prev), α = exp(-2πfc/fs). */
+static int16_t s_apply_hpf(int16_t sample, dsp_tdola_state_t *t) {
+    int64_t v = sample;
+    for (int stage = 0; stage < DSP_TDOLA_HPF_STAGES; stage++) {
+        int32_t x_prev = t->hpf.x_prev[stage];
+        int32_t y_prev = t->hpf.y_prev[stage];
+        int64_t y = ((int64_t) s_hpf_alpha_q31 * (y_prev + v - x_prev)) >> 31;
+        t->hpf.x_prev[stage] = (int32_t) v;
+        t->hpf.y_prev[stage] = (int32_t) y;
+        v = y;
+    }
+    return dsp_saturate_i32_to_i16((int32_t) v);
+}
+
 int dsp_tdola_process(const int16_t *pBuffer, uint32_t sample_count,
                       int16_t *downsampled_buffer, dsp_state_t *state,
                       bool agc_enabled) {
@@ -244,7 +272,10 @@ int dsp_tdola_process(const int16_t *pBuffer, uint32_t sample_count,
     }
 
     for (uint32_t i = 0; i < sample_count; i++) {
-        t->in[t->in_len++] = pBuffer[i];
+        int16_t s = pBuffer[i];
+        if (s_hpf_enabled)
+            s = s_apply_hpf(s, t);
+        t->in[t->in_len++] = s;
         while (t->in_len >= win) {
             s_overlap_add_grain(t, downsampled_buffer, &out_count, out_needed,
                                 agc_enabled);

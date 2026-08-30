@@ -45,7 +45,8 @@ class HeterodyneCursors(
     private val heterodyneRef2kHz: MutableState<Int?>
 
 ) {
-    public val minimumHeterodynekHz: Int = 10
+    public val minimumHeterodynekHz: Int
+        get() = model.settings.heterodyneMinRefkHz
 
     @SuppressLint("UnusedBoxWithConstraintsScope")
     @Composable
@@ -137,7 +138,10 @@ class HeterodyneCursors(
                                             // Calculate the corresponding rounded reference kHz:
                                             val hz = yAxisState.value.endInclusive -
                                                     offsetY.floatValue / maxHeightPx * (yAxisState.value.endInclusive - yAxisState.value.start)
-                                            heterodyneRefkHz.value = maxOf(round(hz / 1000f).toInt(), minimumHeterodynekHz)
+                                            heterodyneRefkHz.value =
+                                                model.settings.coerceHeterodyneRefkHz(
+                                                    round(hz / 1000f).toInt()
+                                                )
                                         },
                                         onDragEnd = {
                                             // They've finished dragging, to write the updated values
@@ -161,15 +165,23 @@ class HeterodyneCursors(
                     }
                 }
 
-                drawDraggable(offsetY1, heterodyneRef1kHz) { kHz: Int ->
-                    model.settings.copy(heterodyneRef1kHz = kHz)
-                }
-                if (model.pipelineSampleRateHz()?.let { hz ->
-                        model.settings.isDualHeterodynePlayback(hz)
-                    } == true
-                ) {
-                    drawDraggable(offsetY2, heterodyneRef2kHz) { kHz: Int ->
-                        model.settings.copy(heterodyneRef2kHz = kHz)
+                val sampleRateHz = model.pipelineSampleRateHz()
+                val autoTuned = sampleRateHz?.let {
+                    model.settings.isAutoTunedHeterodynePlayback(it)
+                } == true
+
+                // Auto-tuned mode: tracked LO line only (not draggable).
+                if (!autoTuned) {
+                    drawDraggable(offsetY1, heterodyneRef1kHz) { kHz: Int ->
+                        model.settings.copy(heterodyneRef1kHz = kHz)
+                    }
+                    if (sampleRateHz?.let {
+                            model.settings.isDualHeterodynePlayback(it)
+                        } == true
+                    ) {
+                        drawDraggable(offsetY2, heterodyneRef2kHz) { kHz: Int ->
+                            model.settings.copy(heterodyneRef2kHz = kHz)
+                        }
                     }
                 }
             }

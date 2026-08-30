@@ -39,6 +39,7 @@ data class Settings(
     var useDarkTheme: Boolean = true,
     var amplitudePaneVisibility: Int = VisibilityOptions.AUTO.value,
     var showGrid: Boolean = true,
+    var showHeterodyneReferenceLine: Boolean = true,
     var defaultLiveTimeSpanS: Int = DefaultLiveTimeSpanOptions.DEFAULTLIVETIMESPAN_3S.value,
     var liveInputSource: Int = LiveInputSourceOptions.USB.value,
     // Stable descriptor of the chosen internal microphone, or "" for automatic selection.
@@ -55,10 +56,14 @@ data class Settings(
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
     var heterodyneRef2kHz: Int = 20,
+    /** Lower bound for heterodyne LO (kHz); LO is never set below this. */
+    var heterodyneMinRefkHz: Int = DEFAULT_HETERODYNE_MIN_REF_KHZ,
     var audioPlaybackMode: Int = AudioPlaybackModeOptions.SINGLE_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
     var audioPitchRatio: Int = AudioPitchRatioOptions.DEFAULT.value,
     var audioTimeExpansionFactor: Int = AudioTimeExpansionFactorOptions.DEFAULT.value,
+    /** Optional 4 kHz two-pole HPF on pitch-shifting input (before TD-OLA). */
+    var audioPitchHpfEnabled: Boolean = true,
     var loopedAudioPlayback: Boolean = false,
     var suppressAudioFeedbackWarning: Boolean = false,
     var includeLocationInFile: Boolean = true,
@@ -161,9 +166,10 @@ data class Settings(
     }
 
     enum class AudioPlaybackModeOptions(val value: Int, val label: String) : EnumHelper {
-        PITCH_SHIFTING(3, "Pitch shifting"),
+        AUTO_TUNED_HETERODYNE(5, "Auto heterodyne"),
         SINGLE_HETERODYNE(0, "Classic heterodyne"),
         DUAL_HETERODYNE(1, "Dual heterodyne"),
+        PITCH_SHIFTING(3, "Pitch shifting"),
         TIME_EXPANSION(4, "Classic time expansion"),
         DIRECT(2, "Direct playback");
 
@@ -193,7 +199,7 @@ data class Settings(
                 TDOLA_MAX_WOUT_OVER_WIN.toLong() * sampleRateHz
 
         companion object {
-            val DEFAULT = PITCH_8
+            val DEFAULT = PITCH_16
             fun coerce(ratio: Int): Int =
                 entries.firstOrNull { it.value == ratio }?.value ?: DEFAULT.value
 
@@ -259,14 +265,26 @@ data class Settings(
         effectiveAudioPlaybackMode(sampleRateHz) ==
             AudioPlaybackModeOptions.TIME_EXPANSION.value
 
+    fun isAutoTunedHeterodynePlayback(sampleRateHz: Int): Boolean =
+        effectiveAudioPlaybackMode(sampleRateHz) ==
+            AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+
     /**
-     * Single or dual heterodyne — modes that use reference frequency UI/cursors.
+     * Classic single/dual heterodyne — modes with a manual reference frequency UI.
      */
     fun isHeterodynePlayback(sampleRateHz: Int): Boolean {
         val mode = effectiveAudioPlaybackMode(sampleRateHz)
         return mode == AudioPlaybackModeOptions.SINGLE_HETERODYNE.value ||
                 mode == AudioPlaybackModeOptions.DUAL_HETERODYNE.value
     }
+
+    /** Any mode that uses the heterodyne DSP path (manual or auto-tuned). */
+    fun usesHeterodyneDsp(sampleRateHz: Int): Boolean =
+        isHeterodynePlayback(sampleRateHz) || isAutoTunedHeterodynePlayback(sampleRateHz)
+
+    /** Clamp a heterodyne LO (kHz) to at least [heterodyneMinRefkHz]. */
+    fun coerceHeterodyneRefkHz(kHz: Int): Int =
+        kHz.coerceAtLeast(heterodyneMinRefkHz)
 
     enum class DefaultLiveTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
         DEFAULTLIVETIMESPAN_NONE(0, "Use existing"),
@@ -345,11 +363,16 @@ data class Settings(
 
         /** Sample rates at or below this use direct playback when no mode is stored. */
         const val DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ = TARGET_AUDIO_OUT_RATE_HZ
+
+        /** Default lower bound for heterodyne LO (kHz). */
+        const val DEFAULT_HETERODYNE_MIN_REF_KHZ = 15
     }
 
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")
     private val keyAmplitudePaneVisibility = intPreferencesKey("amplitudePaneVisibility")
     private val keyShowGrid = booleanPreferencesKey("showGrid")
+    private val keyShowHeterodyneReferenceLine =
+        booleanPreferencesKey("showHeterodyneReferenceLine")
     private val keyAutoBnCViewer = booleanPreferencesKey("autoBnCViewer")
     private val keyAutoBnCLive = booleanPreferencesKey("autoBnCLive")
     private val keyAutoBaselineEnabled = booleanPreferencesKey("autoBaselineEnabled")
@@ -363,10 +386,12 @@ data class Settings(
     private val keyEnableLogging = booleanPreferencesKey("enableLogging")
     private val keyAudioRef1kHz = intPreferencesKey("audioRef1kHz")
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
+    private val keyHeterodyneMinRefkHz = intPreferencesKey("heterodyneMinRefkHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
     private val keyAudioPlaybackMode = intPreferencesKey("audioPlaybackMode")
     private val keyAudioPitchRatio = intPreferencesKey("audioPitchRatio")
     private val keyAudioTimeExpansionFactor = intPreferencesKey("audioTimeExpansionFactor")
+    private val keyAudioPitchHpfEnabled = booleanPreferencesKey("audioPitchHpfEnabled")
     private val keyAudioBoostFactor = floatPreferencesKey("audioBoostFactor2")
     private val keyAudioAGCEnabled = booleanPreferencesKey("audioAGCEnabled")
     private val keyLocationInFile = booleanPreferencesKey("locationInFile")
@@ -390,6 +415,7 @@ data class Settings(
         prefs[keyColourMap] = colourMap
         prefs[keyAmplitudePaneVisibility] = amplitudePaneVisibility
         prefs[keyShowGrid] = showGrid
+        prefs[keyShowHeterodyneReferenceLine] = showHeterodyneReferenceLine
         prefs[keyAutoBnCViewer] = autoBnCEnabledViewer
         prefs[keyAutoBnCLive] = autoBnCEnabledLive
         prefs[keyAutoBaselineEnabled] = autoBaselineEnabled
@@ -407,8 +433,10 @@ data class Settings(
         prefs[keyAudioPitchRatio] = AudioPitchRatioOptions.coerce(audioPitchRatio)
         prefs[keyAudioTimeExpansionFactor] =
             AudioTimeExpansionFactorOptions.coerce(audioTimeExpansionFactor)
+        prefs[keyAudioPitchHpfEnabled] = audioPitchHpfEnabled
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
+        prefs[keyHeterodyneMinRefkHz] = heterodyneMinRefkHz
         prefs[keyAudioBoostFactor] = audioBoostFactor
         prefs[keyAudioAGCEnabled] = audioAGCEnabled
         prefs[keyLocationInFile] = includeLocationInFile
@@ -436,6 +464,8 @@ data class Settings(
             amplitudePaneVisibility = requireNotNull(prefs[keyAmplitudePaneVisibility])
         if (prefs[keyShowGrid] != null)
             showGrid = requireNotNull(prefs[keyShowGrid])
+        if (prefs[keyShowHeterodyneReferenceLine] != null)
+            showHeterodyneReferenceLine = requireNotNull(prefs[keyShowHeterodyneReferenceLine])
         if (prefs[keyAutoBnCViewer] != null)
             autoBnCEnabledViewer = requireNotNull(prefs[keyAutoBnCViewer])
         if (prefs[keyAutoBnCLive] != null)
@@ -469,10 +499,17 @@ data class Settings(
             audioTimeExpansionFactor = AudioTimeExpansionFactorOptions.coerce(
                 requireNotNull(prefs[keyAudioTimeExpansionFactor])
             )
+        if (prefs[keyAudioPitchHpfEnabled] != null)
+            audioPitchHpfEnabled = requireNotNull(prefs[keyAudioPitchHpfEnabled])
         if (prefs[keyAudioRef1kHz] != null)
             heterodyneRef1kHz = requireNotNull(prefs[keyAudioRef1kHz])
         if (prefs[keyAudioRef2kHz] != null)
             heterodyneRef2kHz = requireNotNull(prefs[keyAudioRef2kHz])
+        if (prefs[keyHeterodyneMinRefkHz] != null)
+            heterodyneMinRefkHz = requireNotNull(prefs[keyHeterodyneMinRefkHz])
+        // Enforce LO floor after loading refs and min.
+        heterodyneRef1kHz = coerceHeterodyneRefkHz(heterodyneRef1kHz)
+        heterodyneRef2kHz = coerceHeterodyneRefkHz(heterodyneRef2kHz)
         if (prefs[keyAudioBoostFactor] != null)
             audioBoostFactor = requireNotNull(prefs[keyAudioBoostFactor])
         if (prefs[keyAudioAGCEnabled] != null)

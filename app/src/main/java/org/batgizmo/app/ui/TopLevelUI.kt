@@ -106,6 +106,8 @@ class TopLevelUI(private val model: UIModel) {
         val amplitudePaneVisibility =
             rememberSaveable { mutableIntStateOf(model.settings.amplitudePaneVisibility) }
         val showGrid = rememberSaveable { mutableStateOf(model.settings.showGrid) }
+        val showHeterodyneReferenceLine =
+            rememberSaveable { mutableStateOf(model.settings.showHeterodyneReferenceLine) }
         val showParameterOverlay =
             rememberSaveable { mutableStateOf(model.settings.showParameterOverlay) }
         val leftHandedMode = rememberSaveable { mutableStateOf(model.settings.leftHandButtons) }
@@ -133,6 +135,7 @@ class TopLevelUI(private val model: UIModel) {
             useDarkTheme.value = model.settings.useDarkTheme
             amplitudePaneVisibility.intValue = model.settings.amplitudePaneVisibility
             showGrid.value = model.settings.showGrid
+            showHeterodyneReferenceLine.value = model.settings.showHeterodyneReferenceLine
             showParameterOverlay.value = model.settings.showParameterOverlay
             leftHandedMode.value = model.settings.leftHandButtons
 
@@ -182,7 +185,11 @@ class TopLevelUI(private val model: UIModel) {
                         .background(Color.Black)
                         .systemBarsPadding()
                 ) {
-                    CompositionLocalProvider(spectrogramUI.localShowGrid provides showGrid.value) {
+                    CompositionLocalProvider(
+                        spectrogramUI.localShowGrid provides showGrid.value,
+                        spectrogramUI.localShowHeterodyneReferenceLine provides
+                            showHeterodyneReferenceLine.value
+                    ) {
                         val configuration = LocalConfiguration.current
                         val orientation = remember { mutableIntStateOf(configuration.orientation) }
                         // Keep in sync across configuration changes; remember alone only

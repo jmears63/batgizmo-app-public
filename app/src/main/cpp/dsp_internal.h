@@ -35,6 +35,9 @@ extern "C" {
 #define DOWNSAMPLING_AA_CUTOFF_HZ 3000
 #define DOWNSAMPLING_AA_STAGES 4
 
+/* Pre-TD-OLA high-pass cutoff (cascaded one-pole stages in dsp_tdola). */
+#define TDOLA_HPF_CUTOFF_HZ 10000
+
 #define BOOST_FACTOR_SCALING_SHIFT 8
 #define Q15_BITS 15                   /* Q15 fixed-point: unity = 1 << Q15_BITS. */
 

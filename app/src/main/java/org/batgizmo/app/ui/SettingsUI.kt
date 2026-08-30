@@ -271,6 +271,30 @@ class SettingsUI(private val model: UIModel) {
                         }
                     }
                 }
+                item {
+                    MyCheckbox(
+                        "Pitch shift HPF (reduces noise)",
+                        model.settings.audioPitchHpfEnabled
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(audioPitchHpfEnabled = value)
+                            )
+                        }
+                    }
+                }
+                item {
+                    MyCheckbox(
+                        "Show auto heterodyne reference",
+                        model.settings.showHeterodyneReferenceLine
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(showHeterodyneReferenceLine = value)
+                            )
+                        }
+                    }
+                }
             }
 
             settingsSection(SettingsSection.AUTO_BNC, expandedSections) {

@@ -525,7 +525,8 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromStream(JNIEnv *env, jobje
                                                               jint heterodyne2_kHz,
                                                               jfloat audio_boost_factor,
                                                               jint playback_mode,
-                                                              jint pitch_ratio) {
+                                                              jint pitch_ratio,
+                                                              jboolean pitch_hpf_enabled) {
 
     pthread_mutex_lock(&s_mutex);
 
@@ -533,7 +534,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromStream(JNIEnv *env, jobje
                                        s_sample_rate, s_nominal_samples_per_frame,
                                        heterodyne1_kHz, heterodyne2_kHz,
                                        audio_boost_factor, (dsp_playback_mode_t) playback_mode,
-                                       pitch_ratio);
+                                       pitch_ratio, pitch_hpf_enabled);
 
     pthread_mutex_unlock(&s_mutex);
 
@@ -549,7 +550,8 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromLiveInput(JNIEnv *env, jo
                                                                  jint heterodyne2_kHz,
                                                                  jfloat audio_boost_factor,
                                                                  jint playback_mode,
-                                                                 jint pitch_ratio) {
+                                                                 jint pitch_ratio,
+                                                                 jboolean pitch_hpf_enabled) {
 
     pthread_mutex_lock(&s_mutex);
 
@@ -557,7 +559,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromLiveInput(JNIEnv *env, jo
                                        sample_rate, sample_rate / 1000,
                                        heterodyne1_kHz, heterodyne2_kHz,
                                        audio_boost_factor, (dsp_playback_mode_t) playback_mode,
-                                       pitch_ratio);
+                                       pitch_ratio, pitch_hpf_enabled);
 
     pthread_mutex_unlock(&s_mutex);
 
@@ -603,6 +605,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobje
                                                               jboolean looped_playback,
                                                               jint playback_mode,
                                                               jint pitch_ratio,
+                                                              jboolean pitch_hpf_enabled,
                                                               jobject progress_callback) {
 
     pthread_mutex_lock(&s_mutex);
@@ -612,7 +615,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobje
                                          audio_boost_factor, buffer,
                                          start_index, end_exclusive_index,
                                          looped_playback, (dsp_playback_mode_t) playback_mode,
-                                         pitch_ratio,
+                                         pitch_ratio, pitch_hpf_enabled,
                                          progress_callback);
 
     pthread_mutex_unlock(&s_mutex);

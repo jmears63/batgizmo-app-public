@@ -388,6 +388,69 @@ abstract class AbstractPipeline(
         return null
     }
 
+    /**
+     * Peak (frequency Hz, power dB) in one spectrogram time column, searching [minHz, maxHz].
+     * Null if the bucket is outside assigned data or the band is empty.
+     */
+    suspend fun peakFrequencyInTimeBucket(
+        timeBucket: Int,
+        minHz: Float,
+        maxHz: Float
+    ): Pair<Float, Float>? = mutex.withLock {
+        val pd = pipelineData ?: return@withLock null
+        val calcs = pd.calcs
+        val assigned = pd.transformStep.getDataAssignedRange() ?: return@withLock null
+        if (timeBucket < assigned.start || timeBucket >= assigned.exclusiveEnd)
+            return@withLock null
+        if (timeBucket < 0 || timeBucket >= calcs.transformedTimeBucketCount)
+            return@withLock null
+
+        val freqCount = calcs.transformedFrequencyBucketCount
+        val df = calcs.transformedFrequencyInterval
+        if (df <= 0f || freqCount < 1)
+            return@withLock null
+
+        var minBucket = (minHz / df).toInt().coerceIn(0, freqCount - 1)
+        var maxBucket = (maxHz / df).toInt().coerceIn(0, freqCount - 1)
+        if (maxBucket < minBucket) {
+            val t = minBucket
+            minBucket = maxBucket
+            maxBucket = t
+        }
+
+        val row = timeBucket * freqCount
+        val buf = pd.transformedDataBuffer.buffer
+        var bestBucket = minBucket
+        var bestDb = Float.NEGATIVE_INFINITY
+        for (f in minBucket..maxBucket) {
+            val db = buf[row + f]
+            if (db > bestDb) {
+                bestDb = db
+                bestBucket = f
+            }
+        }
+        if (bestDb == Float.NEGATIVE_INFINITY)
+            return@withLock null
+        return@withLock Pair(bestBucket * df, bestDb)
+    }
+
+    /** Spectrogram time-bucket interval in seconds (for EWMA). */
+    suspend fun transformedTimeIntervalSeconds(): Float? = mutex.withLock {
+        pipelineData?.calcs?.transformedTimeInterval
+    }
+
+    /**
+     * Map a raw sample index (into the page/raw buffer) to a spectrogram time bucket.
+     */
+    suspend fun timeBucketForRawSampleIndex(sampleIndex: Int): Int? = mutex.withLock {
+        val calcs = pipelineData?.calcs ?: return@withLock null
+        if (calcs.fftStride < 1 || calcs.transformedTimeBucketCount < 1)
+            return@withLock null
+        val relative = sampleIndex - calcs.rawOffsetToPage
+        return@withLock (relative / calcs.fftStride)
+            .coerceIn(0, calcs.transformedTimeBucketCount - 1)
+    }
+
 
     private fun startPipeline(pld: PipelineData) {
         pld.dataSourceStep.start()
@@ -560,9 +623,19 @@ abstract class AbstractPipeline(
      * Render the raw data slice whose range is supplied.
      */
     open suspend fun sliceRender(sliceRange: HORange, transformedEntryIndex: Int) {
+        var autoHetBuckets: IntRange? = null
         mutex.withLock {
             pipelineData?.dataSourceStep?.sliceRender(sliceRange, transformedEntryIndex)
+            val calcs = pipelineData?.calcs
+            if (calcs != null && calcs.sliceTransformedTimeBucketCount > 0) {
+                val last = (transformedEntryIndex + calcs.sliceTransformedTimeBucketCount - 1)
+                    .coerceAtMost(calcs.transformedTimeBucketCount - 1)
+                if (last >= transformedEntryIndex)
+                    autoHetBuckets = transformedEntryIndex..last
+            }
         }
+        // Outside pipeline lock: Model may take its own locks / call JNI.
+        autoHetBuckets?.let { model.onLiveSpectrumBucketsForAutoHeterodyne(it) }
     }
 
     /**

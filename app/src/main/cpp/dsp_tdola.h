@@ -35,6 +35,9 @@ extern "C" {
 /* Synthesis grain / OLA buffer upper bound (expansion when pitch > Fin/Fout). */
 #define DSP_TDOLA_OUT_MAX (DSP_TDOLA_WINDOW_LEN * 4)
 
+/* Optional pre-TD-OLA high-pass (cascaded one-pole stages). */
+#define DSP_TDOLA_HPF_STAGES 4
+
 /* Per-stream TD-OLA continuity across dsp_process chunks. */
 typedef struct {
     int16_t in[DSP_TDOLA_WINDOW_LEN];
@@ -44,6 +47,10 @@ typedef struct {
     int32_t out_r;
     int32_t out_n;
     int32_t rate_phase;  /* accumulator for exact out count via Ha/Hs */
+    struct {
+        int32_t x_prev[DSP_TDOLA_HPF_STAGES];
+        int32_t y_prev[DSP_TDOLA_HPF_STAGES];
+    } hpf;
 } dsp_tdola_state_t;
 
 #ifdef __cplusplus
@@ -65,7 +72,8 @@ extern "C" {
  *   W_out = Win * pitch_ratio * Fout / Fin
  *   (> Win expands / more pitch drop; < Win compresses / less pitch drop).
  */
-void dsp_tdola_configure(int input_rate_hz, int output_rate_hz, int pitch_ratio);
+void dsp_tdola_configure(int input_rate_hz, int output_rate_hz, int pitch_ratio,
+                         bool hpf_enabled);
 
 int dsp_tdola_input_samples_for_output(int output_frames);
 

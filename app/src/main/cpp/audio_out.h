@@ -51,7 +51,8 @@ bool audio_out_start_live(JNIEnv *env,
                           jint heterodyne2_kHz,
                           float audio_boost_factor,
                           dsp_playback_mode_t playback_mode,
-                          int pitch_ratio);
+                          int pitch_ratio,
+                          bool pitch_hpf_enabled);
 
 /*
  * Stop any current output, set up viewer buffer playback, configure DSP, open AAudio
@@ -69,6 +70,7 @@ bool audio_out_start_buffer(JNIEnv *env,
                             bool looped_playback,
                             dsp_playback_mode_t playback_mode,
                             int pitch_ratio,
+                            bool pitch_hpf_enabled,
                             jobject progress_callback);
 
 #ifdef __cplusplus

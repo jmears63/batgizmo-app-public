@@ -45,6 +45,7 @@ typedef enum {
     DSP_PLAYBACK_DIRECT = 2,
     DSP_PLAYBACK_PITCH_SHIFTING = 3,
     DSP_PLAYBACK_TIME_EXPANSION = 4,
+    DSP_PLAYBACK_AUTO_TUNED_HETERODYNE = 5,
 } dsp_playback_mode_t;
 
 /*
@@ -69,6 +70,7 @@ int dsp_configure(int sample_rate,
                   int heterodyne1_kHz, int heterodyne2_kHz,
                   float audio_boost_factor, int samples_per_frame,
                   dsp_playback_mode_t playback_mode, int pitch_ratio,
+                  bool pitch_hpf_enabled,
                   dsp_state_t *state);
 
 void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz);

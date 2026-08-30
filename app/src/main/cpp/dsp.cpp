@@ -143,6 +143,7 @@ int dsp_configure(int sample_rate,
                   int samples_per_frame,
                   dsp_playback_mode_t playback_mode,
                   int pitch_ratio,
+                  bool pitch_hpf_enabled,
                   dsp_state_t *state) {
 
     s_decimation_factor = lround((double) sample_rate / TARGET_AUDIO_OUT_RATE);
@@ -154,8 +155,10 @@ int dsp_configure(int sample_rate,
     s_downsampling_iir_coefficient =
             dsp_calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ, sample_rate);
     __android_log_print(ANDROID_LOG_INFO, __FILE__,
-                        "Audio parameters: sample_rate = %d, s_decimation_factor = %d, playback_mode = %d, pitch_ratio = %d",
-                        sample_rate, s_decimation_factor, playback_mode, pitch_ratio);
+                        "Audio parameters: sample_rate = %d, s_decimation_factor = %d, "
+                        "playback_mode = %d, pitch_ratio = %d, pitch_hpf = %d",
+                        sample_rate, s_decimation_factor, playback_mode, pitch_ratio,
+                        pitch_hpf_enabled ? 1 : 0);
 
     memset(state, 0, sizeof(*state));
 
@@ -171,7 +174,7 @@ int dsp_configure(int sample_rate,
             int pr = pitch_ratio < 1 ? s_decimation_factor : pitch_ratio;
             if (pr < 1)
                 pr = 1;
-            dsp_tdola_configure(sample_rate, TARGET_AUDIO_OUT_RATE, pr);
+            dsp_tdola_configure(sample_rate, TARGET_AUDIO_OUT_RATE, pr, pitch_hpf_enabled);
             break;
         }
         case DSP_PLAYBACK_TIME_EXPANSION: {
@@ -183,6 +186,7 @@ int dsp_configure(int sample_rate,
             break;
         }
         case DSP_PLAYBACK_SINGLE_HETERODYNE:
+        case DSP_PLAYBACK_AUTO_TUNED_HETERODYNE:
         case DSP_PLAYBACK_DUAL_HETERODYNE:
         default:
             s_playback_mode = DSP_MODE_HETERODYNE;

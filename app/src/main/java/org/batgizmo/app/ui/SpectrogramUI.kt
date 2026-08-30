@@ -133,6 +133,7 @@ class SpectrogramUI(
     private val model: UIModel
 ) {
     val localShowGrid = compositionLocalOf<Boolean> { true }
+    val localShowHeterodyneReferenceLine = compositionLocalOf<Boolean> { true }
 
     // Represent the state of buttons in the UI:
     data class ButtonState(
@@ -219,7 +220,9 @@ class SpectrogramUI(
             audioMode.intValue = AudioMode.OFF.value
             showAudioConfig.value = false
             showAudioFeedbackWarning.value = false
-            audioSettingsAlreadyShown.value = false
+            // Keep audioSettingsAlreadyShown across file open / mode reset so a short
+            // press can reuse last settings; long-press still opens the modal. Cleared
+            // separately on USB stream errors (new mic may need ref sanity checks).
             heterodyneRef1kHz.value = null
             heterodyneRef2kHz.value = null
         }
@@ -421,7 +424,7 @@ class SpectrogramUI(
         }
 
         /**
-         * Notify the heterodyne frequencies to the native layer.
+         * Notify the heterodyne frequencies to the native layer (manual modes only).
          */
         LaunchedEffect(
             uiState.heterodyneRef1kHz.value,
@@ -433,6 +436,22 @@ class SpectrogramUI(
                 return@LaunchedEffect
             uiState.heterodyneRef1kHz.value?.let { kHz1 ->
                 model.setHeterodyne(kHz1, uiState.heterodyneRef2kHz.value)
+            }
+        }
+
+        /**
+         * Auto-tuned heterodyne: keep the spectrogram cursor on the tracked LO.
+         */
+        LaunchedEffect(Unit) {
+            model.autoHeterodyneRefkHzFlow.collectLatest { refkHz ->
+                val sampleRateHz = uiState.samplingRateHz.value ?: return@collectLatest
+                if (!model.settings.isAutoTunedHeterodynePlayback(sampleRateHz))
+                    return@collectLatest
+                if (uiState.audioMode.intValue != AudioMode.ON.value)
+                    return@collectLatest
+                uiState.heterodyneRef1kHz.value = refkHz
+                uiState.heterodyneRef2kHz.value = null
+                model.spectrogramBitmapHolder.signalUpdate()
             }
         }
 
@@ -967,7 +986,11 @@ class SpectrogramUI(
             }
 
             // Layer 2: dynamic things:
-            heterodyneCursors.Compose()
+            val sampleRateHz = uiState.samplingRateHz.value
+            val autoHet = sampleRateHz != null &&
+                model.settings.isAutoTunedHeterodynePlayback(sampleRateHz)
+            if (!autoHet || localShowHeterodyneReferenceLine.current)
+                heterodyneCursors.Compose()
        }
     }
 
@@ -983,21 +1006,26 @@ class SpectrogramUI(
 
     private fun updateHeterodyneUIState() {
         val sampleRateHz = uiState.samplingRateHz.value ?: return
-        if (uiState.audioMode.intValue in setOf(AudioMode.ON.value) &&
-            model.settings.isHeterodynePlayback(sampleRateHz)
-        ) {
-
-            // Assigning these values makes the heterodyne cursor appear on the graph:
-            uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
-            uiState.heterodyneRef2kHz.value =
-                if (model.settings.isDualHeterodynePlayback(sampleRateHz))
-                    model.settings.heterodyneRef2kHz
-                else
-                    null
-        }
-        else {
-            uiState.heterodyneRef1kHz.value = null
-            uiState.heterodyneRef2kHz.value = null
+        val audioOn = uiState.audioMode.intValue in setOf(AudioMode.ON.value)
+        when {
+            audioOn && model.settings.isHeterodynePlayback(sampleRateHz) -> {
+                // Manual classic/dual: settings drive cursors.
+                uiState.heterodyneRef1kHz.value = model.settings.heterodyneRef1kHz
+                uiState.heterodyneRef2kHz.value =
+                    if (model.settings.isDualHeterodynePlayback(sampleRateHz))
+                        model.settings.heterodyneRef2kHz
+                    else
+                        null
+            }
+            audioOn && model.settings.isAutoTunedHeterodynePlayback(sampleRateHz) -> {
+                uiState.heterodyneRef1kHz.value =
+                    model.autoHeterodyneRefkHzFlow.value ?: 50
+                uiState.heterodyneRef2kHz.value = null
+            }
+            else -> {
+                uiState.heterodyneRef1kHz.value = null
+                uiState.heterodyneRef2kHz.value = null
+            }
         }
 
         // Trigger a re-render to take these changes into account:
@@ -1369,6 +1397,13 @@ class SpectrogramUI(
 
                 // Timber.d("Audio playback cursor time is ${model.amplitudeBitmapHolder.cursorTime}")
             }
+        }
+
+        if (uiState.samplingRateHz.value?.let {
+                model.settings.isAutoTunedHeterodynePlayback(it)
+            } == true
+        ) {
+            model.updateAutoHeterodyneAtRawSample(position)
         }
 
         model.rerender()
