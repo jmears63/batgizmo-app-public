@@ -1634,7 +1634,9 @@ class UIModel(application: Application,
                 }
 
                 pl.fillFrequencyBand(bucket, minHz, maxHz, band) ?: continue
-                val obs = autoHetActivity.processColumn(band, dt)
+                val obs = autoHetActivity.processColumn(
+                    band, dt, settings.autoHeterodyneMode
+                )
                 autoHetLastProcessedBucket = bucket
                 if (obs != null)
                     lastRef = applyAutoHeterodyneObservation(obs.hz, dt)
@@ -1648,7 +1650,7 @@ class UIModel(application: Application,
     }
 
     /**
-     * EWMA reference from lowest-frequency active bin (τ = [AUTO_HET_REF_TAU_S]).
+     * EWMA reference from activity-span observation (τ = [AUTO_HET_REF_TAU_S]).
      * LO = reference − 500 Hz. Caller must hold [autoHetMutex]. Returns LO kHz.
      */
     private fun applyAutoHeterodyneObservation(

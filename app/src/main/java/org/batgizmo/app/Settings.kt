@@ -66,6 +66,8 @@ data class Settings(
     var audioPitchHpfEnabled: Boolean = true,
     var loopedAudioPlayback: Boolean = false,
     var suppressAudioFeedbackWarning: Boolean = false,
+    /** Shape preset for auto-tuned heterodyne tracking. */
+    var autoHeterodyneMode: Int = AutoHeterodyneModeOptions.HOCKEY_STICK.value,
     var includeLocationInFile: Boolean = true,
     var audioBoostFactor: Float = DEFAULT_AUDIO_BOOST_FACTOR,
     var audioAGCEnabled: Boolean = true,
@@ -175,6 +177,22 @@ data class Settings(
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
+    }
+
+    /** Auto-tuned heterodyne tracking shape presets. */
+    enum class AutoHeterodyneModeOptions(val value: Int, val label: String) : EnumHelper {
+        HOCKEY_STICK(0, "Hockey Stick"),
+        MYOTIS(1, "Generic/Myotis"),
+        RHINOLOPHUS(2, "Rhinolophus");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+
+        companion object {
+            val DEFAULT = HOCKEY_STICK
+            fun coerce(mode: Int): Int =
+                entries.firstOrNull { it.value == mode }?.value ?: DEFAULT.value
+        }
     }
 
     /** Pitch division ratios for TD-OLA playback (value = ÷ factor). */
@@ -399,6 +417,7 @@ data class Settings(
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
     private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
     private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
+    private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -444,6 +463,7 @@ data class Settings(
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
         prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
         prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
+        prefs[keyAutoHeterodyneMode] = AutoHeterodyneModeOptions.coerce(autoHeterodyneMode)
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -528,6 +548,9 @@ data class Settings(
             loopedAudioPlayback = requireNotNull(prefs[keyLoopedAudioPlayback])
         if (prefs[keySuppressAudioFeedbackWarning] != null)
             suppressAudioFeedbackWarning = requireNotNull(prefs[keySuppressAudioFeedbackWarning])
+        if (prefs[keyAutoHeterodyneMode] != null)
+            autoHeterodyneMode =
+                AutoHeterodyneModeOptions.coerce(requireNotNull(prefs[keyAutoHeterodyneMode]))
     }
 }
 

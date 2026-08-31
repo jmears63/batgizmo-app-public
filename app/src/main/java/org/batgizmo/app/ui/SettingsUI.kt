@@ -295,6 +295,21 @@ class SettingsUI(private val model: UIModel) {
                         }
                     }
                 }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.AutoHeterodyneModeOptions>(
+                            Settings.AutoHeterodyneModeOptions.entries,
+                            "Auto Heterodyne Optimisation",
+                            model.settings.autoHeterodyneMode
+                        ) { value: Int ->
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(autoHeterodyneMode = value)
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             settingsSection(SettingsSection.AUTO_BNC, expandedSections) {
