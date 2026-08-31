@@ -58,7 +58,7 @@ data class Settings(
     var heterodyneRef2kHz: Int = 20,
     /** Lower bound for heterodyne LO (kHz); LO is never set below this. */
     var heterodyneMinRefkHz: Int = DEFAULT_HETERODYNE_MIN_REF_KHZ,
-    var audioPlaybackMode: Int = AudioPlaybackModeOptions.SINGLE_HETERODYNE.value,
+    var audioPlaybackMode: Int = AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
     var audioPitchRatio: Int = AudioPitchRatioOptions.DEFAULT.value,
     var audioTimeExpansionFactor: Int = AudioTimeExpansionFactorOptions.DEFAULT.value,
@@ -234,13 +234,9 @@ data class Settings(
         }
     }
 
-    /** Sample rates at or below this use direct playback when no mode is stored. */
-    fun defaultAudioPlaybackModeForSampleRate(sampleRateHz: Int): Int {
-        return if (sampleRateHz <= DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ)
-            AudioPlaybackModeOptions.DIRECT.value
-        else
-            AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
-    }
+    /** Default mode when none has been confirmed/persisted yet. */
+    fun defaultAudioPlaybackModeForSampleRate(sampleRateHz: Int): Int =
+        AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
 
     fun effectiveAudioPlaybackMode(sampleRateHz: Int): Int {
         return if (audioPlaybackModePersisted)

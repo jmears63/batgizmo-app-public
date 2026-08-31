@@ -41,6 +41,7 @@ import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.pipeline.ColourMapStep.Companion.dbRangeMax
 import timber.log.Timber
+import kotlin.math.ceil
 import kotlin.math.log2
 import kotlin.math.pow
 import kotlin.math.round
@@ -388,15 +389,54 @@ abstract class AbstractPipeline(
         return null
     }
 
-    /**
-     * Peak (frequency Hz, power dB) in one spectrogram time column, searching [minHz, maxHz].
-     * Null if the bucket is outside assigned data or the band is empty.
-     */
-    suspend fun peakFrequencyInTimeBucket(
-        timeBucket: Int,
+    data class FrequencyBandGeometry(
+        val minFreqBucket: Int,
+        val bandBins: Int,
+        val dfHz: Float
+    )
+
+    /** First bucket index at or above [minHz]; last at or below [maxHz]. */
+    private fun frequencyBucketIndices(
+        minHz: Float,
+        maxHz: Float,
+        df: Float,
+        freqCount: Int
+    ): Pair<Int, Int>? {
+        if (df <= 0f || freqCount < 1)
+            return null
+        val minBucket = ceil(minHz / df - 1e-6f).toInt().coerceIn(0, freqCount - 1)
+        val maxBucket = (maxHz / df).toInt().coerceIn(0, freqCount - 1)
+        if (maxBucket < minBucket)
+            return null
+        return minBucket to maxBucket
+    }
+
+    /** Band geometry for [minHz, maxHz] without reading spectrogram samples. */
+    suspend fun frequencyBandGeometry(
         minHz: Float,
         maxHz: Float
-    ): Pair<Float, Float>? = mutex.withLock {
+    ): FrequencyBandGeometry? = mutex.withLock {
+        val calcs = pipelineData?.calcs ?: return@withLock null
+        val freqCount = calcs.transformedFrequencyBucketCount
+        val df = calcs.transformedFrequencyInterval
+        val range = frequencyBucketIndices(minHz, maxHz, df, freqCount)
+            ?: return@withLock null
+        val (minBucket, maxBucket) = range
+        return@withLock FrequencyBandGeometry(
+            minBucket, maxBucket - minBucket + 1, df
+        )
+    }
+
+    /**
+     * Copy one spectrogram time column's [minHz, maxHz] band into [dest].
+     * Requires dest.size >= bandBins.
+     */
+    suspend fun fillFrequencyBand(
+        timeBucket: Int,
+        minHz: Float,
+        maxHz: Float,
+        dest: FloatArray
+    ): FrequencyBandGeometry? = mutex.withLock {
         val pd = pipelineData ?: return@withLock null
         val calcs = pd.calcs
         val assigned = pd.transformStep.getDataAssignedRange() ?: return@withLock null
@@ -407,31 +447,19 @@ abstract class AbstractPipeline(
 
         val freqCount = calcs.transformedFrequencyBucketCount
         val df = calcs.transformedFrequencyInterval
-        if (df <= 0f || freqCount < 1)
+        val range = frequencyBucketIndices(minHz, maxHz, df, freqCount)
+            ?: return@withLock null
+        val (minBucket, maxBucket) = range
+        val bandBins = maxBucket - minBucket + 1
+        if (dest.size < bandBins)
             return@withLock null
-
-        var minBucket = (minHz / df).toInt().coerceIn(0, freqCount - 1)
-        var maxBucket = (maxHz / df).toInt().coerceIn(0, freqCount - 1)
-        if (maxBucket < minBucket) {
-            val t = minBucket
-            minBucket = maxBucket
-            maxBucket = t
-        }
 
         val row = timeBucket * freqCount
         val buf = pd.transformedDataBuffer.buffer
-        var bestBucket = minBucket
-        var bestDb = Float.NEGATIVE_INFINITY
-        for (f in minBucket..maxBucket) {
-            val db = buf[row + f]
-            if (db > bestDb) {
-                bestDb = db
-                bestBucket = f
-            }
-        }
-        if (bestDb == Float.NEGATIVE_INFINITY)
-            return@withLock null
-        return@withLock Pair(bestBucket * df, bestDb)
+        for (i in 0 until bandBins)
+            dest[i] = buf[row + minBucket + i]
+
+        return@withLock FrequencyBandGeometry(minBucket, bandBins, df)
     }
 
     /** Spectrogram time-bucket interval in seconds (for EWMA). */
@@ -442,6 +470,23 @@ abstract class AbstractPipeline(
     /**
      * Map a raw sample index (into the page/raw buffer) to a spectrogram time bucket.
      */
+    data class SpectrogramTimeMapping(
+        val fftStride: Int,
+        val rawOffsetToPage: Int,
+        val timeBucketCount: Int
+    )
+
+    suspend fun spectrogramTimeMapping(): SpectrogramTimeMapping? = mutex.withLock {
+        val calcs = pipelineData?.calcs ?: return@withLock null
+        if (calcs.fftStride < 1 || calcs.transformedTimeBucketCount < 1)
+            return@withLock null
+        return@withLock SpectrogramTimeMapping(
+            calcs.fftStride,
+            calcs.rawOffsetToPage,
+            calcs.transformedTimeBucketCount
+        )
+    }
+
     suspend fun timeBucketForRawSampleIndex(sampleIndex: Int): Int? = mutex.withLock {
         val calcs = pipelineData?.calcs ?: return@withLock null
         if (calcs.fftStride < 1 || calcs.transformedTimeBucketCount < 1)
