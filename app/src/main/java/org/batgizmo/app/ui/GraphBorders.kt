@@ -326,9 +326,13 @@ abstract class AxisBorder(
     // Some data cached by draw() for use in drawGraticule():
     private var cachedTickData: TickData? = null
 
+    /** Axis range from the most recent [draw] call (Hz for frequency axis). */
+    protected var drawAxisRange: FloatRange? = null
+
     override fun reset() {
         super.reset()
         cachedTickData = null
+        drawAxisRange = null
     }
 
     override fun doLayoutFirstPass(length: Dp): Dp {
@@ -393,6 +397,7 @@ abstract class AxisBorder(
         calc?.let {
             val safeAxisRange = axisRange ?: FloatRange(0f, 1f)
             val safeAxisLengthDp = it.axisLengthDp
+            drawAxisRange = safeAxisRange
 
             /**
              *  We have to use native android canvas and paint types -
@@ -659,6 +664,55 @@ class AxisBorderVertical(
     showAxis: Boolean = true, layoutType: Layout
 ) : AxisBorder(units, showAxis, layoutType) {
 
+    /** When set, an opaque band on the axis marks this frequency span (Hz). */
+    var highlightRangeHz: Pair<Float, Float>? = null
+
+    private fun drawFrequencyRangeHighlight(
+        canvas: Canvas,
+        density: Density,
+        origin: DpOffset,
+        calc: CalculatedDimensions,
+        axisRange: FloatRange,
+        rangeHz: Pair<Float, Float>,
+        unitScaling: Float
+    ) {
+        val visibleMinHz = minOf(axisRange.start, axisRange.endInclusive)
+        val visibleMaxHz = maxOf(axisRange.start, axisRange.endInclusive)
+        val bandMinHz = maxOf(rangeHz.first, visibleMinHz)
+        val bandMaxHz = minOf(rangeHz.second, visibleMaxHz)
+        if (bandMinHz >= bandMaxHz)
+            return
+
+        val minValue = visibleMinHz / unitScaling
+        val maxValue = visibleMaxHz / unitScaling
+        if (maxValue <= minValue)
+            return
+
+        val dpRange = calc.axisLengthDp - 1.dp
+        with(density) {
+            fun hzToY(hz: Float): Float {
+                val value = hz / unitScaling
+                val dpOffset =
+                    ((value - minValue) / (maxValue - minValue)) * dpRange.toPx() + 0.5f
+                return (origin.y + calc.marginsDp.second + calc.axisLengthDp).toPx() -
+                    dpOffset - 1.dp.toPx()
+            }
+
+            val yTop = minOf(hzToY(bandMinHz), hzToY(bandMaxHz))
+            val yBottom = maxOf(hzToY(bandMinHz), hzToY(bandMaxHz))
+            val xAxis = (origin.x + calc.breadthDp - 2.dp).toPx()
+            val halfLinePx = lineWidthDp.toPx() / 2f
+            val paint = Paint().apply {
+                color = HeterodyneCursors.referenceLineColor.toArgb()
+                style = Paint.Style.FILL
+            }
+            canvas.nativeCanvas.drawRect(
+                RectF(xAxis - halfLinePx, yTop, xAxis + halfLinePx, yBottom),
+                paint
+            )
+        }
+    }
+
     override fun doDraw(
         colorScheme: ColorScheme,
         density: Density,
@@ -680,6 +734,14 @@ class AxisBorderVertical(
                 return null
 
             val drawPhase2 = {
+                drawAxisRange?.let { axisRange ->
+                    highlightRangeHz?.let { rangeHz ->
+                        drawFrequencyRangeHighlight(
+                            canvas, density, origin, it, axisRange, rangeHz, unitToUse.scaling
+                        )
+                    }
+                }
+
                 with(density) {
                     // Draw the axis line:
                     val (y11, y12) = Pair<Float, Float>(

@@ -75,6 +75,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -199,8 +200,12 @@ class SpectrogramUI(
         val heterodyneRef1kHz: MutableState<Int?> = mutableStateOf(null),
         val heterodyneRef2kHz: MutableState<Int?> = mutableStateOf(null),
         val samplingRateHz: MutableState<Int?> = mutableStateOf(null),
-        val dataPresent: MutableState<Boolean> = mutableStateOf(false)
+        val dataPresent: MutableState<Boolean> = mutableStateOf(false),
+        /** Bumped when auto-het axis highlight inputs change. */
+        val autoHetAxisHighlightKey: MutableIntState = mutableIntStateOf(0)
     ) {
+        fun isAudioPlaybackOn(): Boolean = audioMode.intValue == AudioMode.ON.value
+
         fun reset() {
             fileIsOpen.value = false
             title.value = null
@@ -362,6 +367,7 @@ class SpectrogramUI(
             buttonState.audioChecked.value = (
                     uiState.audioMode.intValue == AudioMode.CONNECTING.value
                     || uiState.audioMode.intValue == AudioMode.ON.value)
+            uiState.autoHetAxisHighlightKey.intValue++
         }
 
         val connectedLiveInputSource by model.connectedLiveInputSourceFlow.collectAsState()
@@ -1251,19 +1257,21 @@ class SpectrogramUI(
             }
 
             // The spectrogram:
-            spectrogramGraph.Compose(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(0.85f)
-                    .onSizeChanged { sizePx ->
-                        // Timber.d("Spectrogram size is $sizePx")
-                        onSpectrogramSizeChange(sizePx)
-                    },
-                model,
-                localShowGrid.current,
-                title.value,
-                overlayComposer
-            )
+            key(uiState.autoHetAxisHighlightKey.intValue) {
+                spectrogramGraph.Compose(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(0.85f)
+                        .onSizeChanged { sizePx ->
+                            // Timber.d("Spectrogram size is $sizePx")
+                            onSpectrogramSizeChange(sizePx)
+                        },
+                    model,
+                    localShowGrid.current,
+                    title.value,
+                    overlayComposer
+                )
+            }
         }
     }
 
@@ -1842,6 +1850,12 @@ class SpectrogramUI(
                 uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
             ) {
                 updateAudioButtonEnabled(AppMode.LIVE.value)
+            }
+            if (newSettings.autoHeterodyneLoMinKhz != prev.autoHeterodyneLoMinKhz ||
+                newSettings.autoHeterodyneLoMaxKhz != prev.autoHeterodyneLoMaxKhz ||
+                newSettings.audioPlaybackMode != prev.audioPlaybackMode
+            ) {
+                uiState.autoHetAxisHighlightKey.intValue++
             }
         }
 

@@ -45,6 +45,10 @@ class HeterodyneCursors(
     private val heterodyneRef2kHz: MutableState<Int?>
 
 ) {
+    companion object {
+        val referenceLineColor = Color.Yellow
+    }
+
     public val minimumHeterodynekHz: Int
         get() = Settings.HETERODYNE_MIN_REF_KHZ
 
@@ -95,7 +99,7 @@ class HeterodyneCursors(
                     fun drawLine(y: Float) {
                         if (y in 0f..size.height) {
                             drawLine(
-                                color = Color.Yellow,
+                                color = referenceLineColor,
                                 start = Offset(0f, y),
                                 end = Offset(size.width, y),
                                 strokeWidth = 2.dp.toPx(),

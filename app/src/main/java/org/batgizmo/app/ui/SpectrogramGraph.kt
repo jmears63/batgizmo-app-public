@@ -36,6 +36,12 @@ class SpectrogramGraph(
     : GraphBase(model, rawPageRangeState,
     model.timeAxisRangeFlow, model.frequencyAxisRangeFlow, supportCursor = false) {
 
+    private val frequencyAxisBorder =
+        AxisBorderVertical(
+            "Frequency",
+            listOf(AxisBorder.Unit(units = "kHz", scaling = 1000f)),
+            layoutType = AxisBorder.Layout.COMPACT
+        )
     private val titleBorder: TitleBorder
     private val gestureHandler = SpectrogramGestureHandler(model, this)
 
@@ -46,19 +52,33 @@ class SpectrogramGraph(
             AxisBorder.Unit(limit=0.5f, units="ms", scaling=1E-3f)
             )
         val frequencyUnits = listOf(
-            AxisBorder.Unit(units="kHz", scaling=1000f),
+            AxisBorder.Unit(units = "kHz", scaling = 1000f),
         )
 
         titleBorder = TitleBorder(null)
         topBorder = titleBorder
         rightBorder = BlankBorderVertical()
-        leftBorder = AxisBorderVertical(
-            "Frequency", frequencyUnits, layoutType=AxisBorder.Layout.COMPACT)
+        leftBorder = frequencyAxisBorder
         bottomBorder = AxisBorderHorizontal(
-            "Time", timeUnits, layoutType=AxisBorder.Layout.COMPACT)
+            "Time", timeUnits, layoutType = AxisBorder.Layout.COMPACT)
 
         renderer = SpectrogramRenderer(model, this, rawPageRangeState,
             model.spectrogramBitmapHolder)
+    }
+
+    private fun updateAutoHeterodyneAxisHighlight() {
+        val sampleRateHz = model.pipelineSampleRateHz()
+        val audioOn = model.spectrogramUIState.isAudioPlaybackOn()
+        frequencyAxisBorder.highlightRangeHz =
+            if (audioOn &&
+                sampleRateHz != null &&
+                model.settings.isAutoTunedHeterodynePlayback(sampleRateHz)
+            ) {
+                val (minKhz, maxKhz) = model.settings.normalizedAutoHeterodyneLoRange()
+                minKhz * 1000f to maxKhz * 1000f
+            } else {
+                null
+            }
     }
 
     @Composable
@@ -69,6 +89,7 @@ class SpectrogramGraph(
         title: String?,
         overlayComposer: @Composable (Modifier) -> Unit
     ) {
+        updateAutoHeterodyneAxisHighlight()
         titleBorder.setTitle(title)
         ComposeFrame(
             modifier,
