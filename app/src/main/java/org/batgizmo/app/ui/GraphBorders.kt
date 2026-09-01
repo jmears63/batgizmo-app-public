@@ -664,8 +664,22 @@ class AxisBorderVertical(
     showAxis: Boolean = true, layoutType: Layout
 ) : AxisBorder(units, showAxis, layoutType) {
 
+    private val indicatorBandWidthDp = lineWidthDp * 2
+    private val indicatorGapDp = 1.dp
+
     /** When set, an opaque band on the axis marks this frequency span (Hz). */
     var highlightRangeHz: Pair<Float, Float>? = null
+    /** Trigger recording range band (Hz), drawn left of [highlightRangeHz]. */
+    var triggerHighlightRangeHz: Pair<Float, Float>? = null
+
+    /** Center x (from border origin) for an indicator band [indexFromAxis] steps from the axis. */
+    private fun indicatorCenterDp(breadthDp: Dp, indexFromAxis: Int): Dp {
+        val axisCenterDp = breadthDp - 1.dp
+        val axisInnerDp = axisCenterDp - lineWidthDp / 2
+        val stepDp = indicatorBandWidthDp + indicatorGapDp
+        val bandOuterDp = axisInnerDp - indicatorGapDp - stepDp * indexFromAxis
+        return bandOuterDp - indicatorBandWidthDp / 2
+    }
 
     private fun drawFrequencyRangeHighlight(
         canvas: Canvas,
@@ -674,7 +688,10 @@ class AxisBorderVertical(
         calc: CalculatedDimensions,
         axisRange: FloatRange,
         rangeHz: Pair<Float, Float>,
-        unitScaling: Float
+        unitScaling: Float,
+        xCenterDp: Dp,
+        bandColor: Color,
+        bandWidthDp: Dp = indicatorBandWidthDp
     ) {
         val visibleMinHz = minOf(axisRange.start, axisRange.endInclusive)
         val visibleMaxHz = maxOf(axisRange.start, axisRange.endInclusive)
@@ -700,14 +717,14 @@ class AxisBorderVertical(
 
             val yTop = minOf(hzToY(bandMinHz), hzToY(bandMaxHz))
             val yBottom = maxOf(hzToY(bandMinHz), hzToY(bandMaxHz))
-            val xAxis = (origin.x + calc.breadthDp - 2.dp).toPx()
-            val halfLinePx = lineWidthDp.toPx() / 2f
+            val xAxis = (origin.x + xCenterDp).toPx()
+            val halfBandPx = bandWidthDp.toPx() / 2f
             val paint = Paint().apply {
-                color = HeterodyneCursors.referenceLineColor.toArgb()
+                color = bandColor.toArgb()
                 style = Paint.Style.FILL
             }
             canvas.nativeCanvas.drawRect(
-                RectF(xAxis - halfLinePx, yTop, xAxis + halfLinePx, yBottom),
+                RectF(xAxis - halfBandPx, yTop, xAxis + halfBandPx, yBottom),
                 paint
             )
         }
@@ -735,9 +752,18 @@ class AxisBorderVertical(
 
             val drawPhase2 = {
                 drawAxisRange?.let { axisRange ->
+                    triggerHighlightRangeHz?.let { rangeHz ->
+                        drawFrequencyRangeHighlight(
+                            canvas, density, origin, it, axisRange, rangeHz, unitToUse.scaling,
+                            indicatorCenterDp(it.breadthDp, 1),
+                            HeterodyneCursors.triggerRangeLineColor
+                        )
+                    }
                     highlightRangeHz?.let { rangeHz ->
                         drawFrequencyRangeHighlight(
-                            canvas, density, origin, it, axisRange, rangeHz, unitToUse.scaling
+                            canvas, density, origin, it, axisRange, rangeHz, unitToUse.scaling,
+                            indicatorCenterDp(it.breadthDp, 0),
+                            HeterodyneCursors.referenceLineColor
                         )
                     }
                 }

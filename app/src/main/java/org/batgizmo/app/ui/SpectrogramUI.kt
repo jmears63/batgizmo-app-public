@@ -1853,7 +1853,9 @@ class SpectrogramUI(
             }
             if (newSettings.autoHeterodyneLoMinKhz != prev.autoHeterodyneLoMinKhz ||
                 newSettings.autoHeterodyneLoMaxKhz != prev.autoHeterodyneLoMaxKhz ||
-                newSettings.audioPlaybackMode != prev.audioPlaybackMode
+                newSettings.audioPlaybackMode != prev.audioPlaybackMode ||
+                newSettings.autoTriggerRangeMinkHz != prev.autoTriggerRangeMinkHz ||
+                newSettings.autoTriggerRangeMaxkHz != prev.autoTriggerRangeMaxkHz
             ) {
                 uiState.autoHetAxisHighlightKey.intValue++
             }

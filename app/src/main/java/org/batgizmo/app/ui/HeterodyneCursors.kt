@@ -47,6 +47,7 @@ class HeterodyneCursors(
 ) {
     companion object {
         val referenceLineColor = Color.Yellow
+        val triggerRangeLineColor = Color.Green
     }
 
     public val minimumHeterodynekHz: Int

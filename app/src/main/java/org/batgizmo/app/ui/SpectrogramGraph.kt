@@ -24,6 +24,7 @@ package org.batgizmo.app.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import org.batgizmo.app.HORange
 import org.batgizmo.app.UIModel
@@ -66,9 +67,16 @@ class SpectrogramGraph(
             model.spectrogramBitmapHolder)
     }
 
-    private fun updateAutoHeterodyneAxisHighlight() {
+    private fun updateFrequencyAxisHighlights(triggeredRecording: Boolean) {
         val sampleRateHz = model.pipelineSampleRateHz()
         val audioOn = model.spectrogramUIState.isAudioPlaybackOn()
+        frequencyAxisBorder.triggerHighlightRangeHz =
+            if (triggeredRecording) {
+                model.settings.autoTriggerRangeMinkHz * 1000f to
+                    model.settings.autoTriggerRangeMaxkHz * 1000f
+            } else {
+                null
+            }
         frequencyAxisBorder.highlightRangeHz =
             if (audioOn &&
                 sampleRateHz != null &&
@@ -89,7 +97,8 @@ class SpectrogramGraph(
         title: String?,
         overlayComposer: @Composable (Modifier) -> Unit
     ) {
-        updateAutoHeterodyneAxisHighlight()
+        val triggeredRecording by model.spectrogramButtonState.triggeredRecordingChecked
+        updateFrequencyAxisHighlights(triggeredRecording)
         titleBorder.setTitle(title)
         ComposeFrame(
             modifier,
