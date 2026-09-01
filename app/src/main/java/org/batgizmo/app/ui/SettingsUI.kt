@@ -159,12 +159,17 @@ class SettingsUI(private val model: UIModel) {
                 }
 
                 item {
-                    MyCheckbox(
-                        "Show parameter overlay", model.settings.showParameterOverlay
-                    ) { value: Boolean ->
-                        // Signal the updated settings values:
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(showParameterOverlay = value))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.OverlayTextModeOptions>(
+                            Settings.OverlayTextModeOptions.entries,
+                            "Overlay text",
+                            model.settings.overlayTextMode
+                        ) { value: Int ->
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(overlayTextMode = value)
+                                )
+                            }
                         }
                     }
                 }

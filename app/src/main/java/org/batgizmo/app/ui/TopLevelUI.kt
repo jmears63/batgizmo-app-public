@@ -108,8 +108,8 @@ class TopLevelUI(private val model: UIModel) {
         val showGrid = rememberSaveable { mutableStateOf(model.settings.showGrid) }
         val showHeterodyneReferenceLine =
             rememberSaveable { mutableStateOf(model.settings.showHeterodyneReferenceLine) }
-        val showParameterOverlay =
-            rememberSaveable { mutableStateOf(model.settings.showParameterOverlay) }
+        val overlayTextMode =
+            rememberSaveable { mutableIntStateOf(model.settings.overlayTextMode) }
         val leftHandedMode = rememberSaveable { mutableStateOf(model.settings.leftHandButtons) }
 
         // Have we received the settings values yet?
@@ -136,7 +136,7 @@ class TopLevelUI(private val model: UIModel) {
             amplitudePaneVisibility.intValue = model.settings.amplitudePaneVisibility
             showGrid.value = model.settings.showGrid
             showHeterodyneReferenceLine.value = model.settings.showHeterodyneReferenceLine
-            showParameterOverlay.value = model.settings.showParameterOverlay
+            overlayTextMode.intValue = model.settings.overlayTextMode
             leftHandedMode.value = model.settings.leftHandButtons
 
             // It's OK to draw the full UI now:
@@ -188,7 +188,8 @@ class TopLevelUI(private val model: UIModel) {
                     CompositionLocalProvider(
                         spectrogramUI.localShowGrid provides showGrid.value,
                         spectrogramUI.localShowHeterodyneReferenceLine provides
-                            showHeterodyneReferenceLine.value
+                            showHeterodyneReferenceLine.value,
+                        spectrogramUI.localOverlayTextMode provides overlayTextMode.intValue
                     ) {
                         val configuration = LocalConfiguration.current
                         val orientation = remember { mutableIntStateOf(configuration.orientation) }
@@ -204,7 +205,6 @@ class TopLevelUI(private val model: UIModel) {
                             model,
                             amplitudePaneVisibility.intValue,
                             leftHandedMode.value,
-                            showParameterOverlay.value,
                             settingsVisible,
                             orientation,
                             appMode,

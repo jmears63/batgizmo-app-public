@@ -46,9 +46,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -135,6 +139,9 @@ class SpectrogramUI(
 ) {
     val localShowGrid = compositionLocalOf<Boolean> { true }
     val localShowHeterodyneReferenceLine = compositionLocalOf<Boolean> { true }
+    val localOverlayTextMode = compositionLocalOf<Int> {
+        Settings.OverlayTextModeOptions.BASIC.value
+    }
 
     // Represent the state of buttons in the UI:
     data class ButtonState(
@@ -287,7 +294,6 @@ class SpectrogramUI(
         viewModel: UIModel,
         amplitudePaneVisibility: Int,
         leftHandedMode: Boolean,
-        showParameterOverlay: Boolean,
         settingsVisible: MutableState<Boolean>,
         orientation: MutableIntState,
         appMode: MutableIntState,
@@ -515,7 +521,6 @@ class SpectrogramUI(
                 viewModel,
                 amplitudePaneVisibility,
                 leftHandedMode,
-                showParameterOverlay,
                 settingsVisible,
                 uiState.liveMode,
                 documentPickerLauncher,
@@ -533,7 +538,6 @@ class SpectrogramUI(
         viewModel: UIModel,
         amplitudePaneVisibility: Int,
         leftHandedMode: Boolean,
-        showParameterOverlay: Boolean,
         settingsVisible: MutableState<Boolean>,
         liveMode: MutableIntState,
         documentPickerLauncher: ManagedActivityResultLauncher<Array<String>, List<Uri>>,
@@ -578,7 +582,7 @@ class SpectrogramUI(
                         title = title,
                         { modifier: Modifier ->
                             ComposeOverlay(
-                                modifier, buttonState, detailsText, appMode, showParameterOverlay
+                                modifier, buttonState, detailsText, appMode
                             )
                         }
                     )
@@ -766,8 +770,7 @@ class SpectrogramUI(
         modifier: Modifier,
         buttonState: ButtonState,
         detailsText: State<String?>,
-        appMode: MutableIntState,
-        showParameterOverlay: Boolean
+        appMode: MutableIntState
     ) {
         // A box so we can have two layers.
         Box(modifier = modifier
@@ -777,8 +780,6 @@ class SpectrogramUI(
             Column(Modifier
                 .fillMaxSize()
                 .padding(5.dp)) {
-
-                val textHeightSp = 14.sp // Scale independent.
 
                 val commonModifier = Modifier.fillMaxWidth()
                 val commonAlignment = Alignment.CenterVertically
@@ -886,9 +887,6 @@ class SpectrogramUI(
                 if (buttonState.slidersButtonChecked.value) {
                     Row(
                         commonModifier,
-                        /*commonModifier
-                        .invisibleAndUntouchable(buttonState.slidersButtonChecked.value),
-                     */
                         verticalAlignment = commonAlignment
                     ) {
                         Spacer(Modifier.weight(1f))
@@ -907,92 +905,121 @@ class SpectrogramUI(
                         Spacer(Modifier.weight(1f))
                     }
                 }
+            }
 
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(
-                        Modifier.weight(1f)
-                    ) {
-                        if (showParameterOverlay) {
-                            val isLiveMode = appMode.intValue == AppMode.LIVE.value
-                            // Clock + sunset only in live mode; updates once a second so
-                            // the minute flips promptly without needing a pipeline rebuild.
-                            val clockFormatter = remember {
-                                DateTimeFormatter.ofPattern("hh:mm a")
+            val textHeightSp = 14.sp
+            Box(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(5.dp)
+                    .padding(end = 40.dp)
+            ) {
+                val overlayTextMode = localOverlayTextMode.current
+                if (overlayTextMode != Settings.OverlayTextModeOptions.NONE.value) {
+                    val showTimeLine =
+                        overlayTextMode >= Settings.OverlayTextModeOptions.BASIC.value
+                    val showDetails =
+                        overlayTextMode == Settings.OverlayTextModeOptions.FULL.value
+                    val timeFormatter = remember {
+                        DateTimeFormatter.ofPattern("HH:mm:ss")
+                    }
+                    val sunsetFormatter = remember {
+                        DateTimeFormatter.ofPattern("hh:mm a")
+                    }
+                    var currentTimeText by remember {
+                        mutableStateOf(LocalTime.now().format(timeFormatter))
+                    }
+                    val location by model.locationFlow.collectAsStateWithLifecycle()
+                    var sunsetText by remember { mutableStateOf<String?>(null) }
+                    if (showTimeLine) {
+                        LaunchedEffect(Unit) {
+                            while (true) {
+                                currentTimeText =
+                                    LocalTime.now().format(timeFormatter)
+                                delay(1_000.milliseconds)
                             }
-                            var currentTimeText by remember {
-                                mutableStateOf(LocalTime.now().format(clockFormatter).lowercase(Locale.getDefault()))
+                        }
+                        LaunchedEffect(location) {
+                            val loc = location
+                            if (loc == null) {
+                                sunsetText = null
+                                return@LaunchedEffect
                             }
-                            val location by model.locationFlow.collectAsStateWithLifecycle()
-                            var sunsetText by remember { mutableStateOf<String?>(null) }
-                            LaunchedEffect(isLiveMode) {
-                                if (!isLiveMode) return@LaunchedEffect
-                                while (true) {
-                                    currentTimeText =
-                                        LocalTime.now().format(clockFormatter).lowercase(Locale.getDefault())
-                                    delay(1_000.milliseconds)
-                                }
-                            }
-                            LaunchedEffect(location, isLiveMode) {
-                                if (!isLiveMode) {
-                                    sunsetText = null
-                                    return@LaunchedEffect
-                                }
-                                val loc = location
-                                if (loc == null) {
-                                    sunsetText = null
-                                    return@LaunchedEffect
-                                }
-                                // Refresh periodically so sunset updates after local midnight
-                                // without waiting for another GPS fix.
-                                while (true) {
-                                    val times = SunriseSunset.forLocation(
-                                        loc.latitude, loc.longitude
-                                    )
-                                    sunsetText = times.sunset
-                                        ?.format(clockFormatter)
-                                        ?.lowercase(Locale.getDefault())
-                                    delay(60_000.milliseconds)
-                                }
-                            }
-                            val details = detailsText.value
-                            val timeLine = if (isLiveMode) {
-                                if (sunsetText != null)
-                                    "$currentTimeText (sunset $sunsetText)"
-                                else
-                                    currentTimeText
-                            } else {
-                                null
-                            }
-                            val overlayText = when {
-                                timeLine != null && details != null -> "$timeLine\n$details"
-                                timeLine != null -> timeLine
-                                details != null -> details
-                                else -> null
-                            }
-                            if (overlayText != null) {
-                                Text(
-                                    overlayText,
-                                    overflow = TextOverflow.Ellipsis,
-                                    style = TextStyle(
-                                        fontSize = textHeightSp,
-                                        color = Color.Gray
-                                    )
+                            while (true) {
+                                val times = SunriseSunset.forLocation(
+                                    loc.latitude, loc.longitude
                                 )
+                                sunsetText = times.sunset
+                                    ?.format(sunsetFormatter)
+                                    ?.lowercase(Locale.getDefault())
+                                delay(60_000.milliseconds)
                             }
                         }
                     }
-                    Column {
-                        MyTransparentLatchingButton(
-                            buttonState.slidersButtonChecked,
-                            buttonState.slidersButtonEnabled,
-                            ImageVector.vectorResource(R.drawable.baseline_tune_24),
-                            "Show sliders",
-                            onSelectionChanged = { _: Boolean -> })
+                    val details = if (showDetails) detailsText.value else null
+                    val overlayStyle = TextStyle(
+                        fontSize = textHeightSp,
+                        color = Color.Gray
+                    )
+                    if (details != null || showTimeLine) {
+                        Column(horizontalAlignment = Alignment.Start) {
+                            if (details != null) {
+                                Text(
+                                    details,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = overlayStyle
+                                )
+                            }
+                            if (showTimeLine) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.AccessTime,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = Color.Gray
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        currentTimeText,
+                                        overflow = TextOverflow.Ellipsis,
+                                        style = overlayStyle
+                                    )
+                                    sunsetText?.let { sunset ->
+                                        Spacer(Modifier.width(8.dp))
+                                        Icon(
+                                            imageVector = Icons.Filled.WbTwilight,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = Color.Gray
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            sunset,
+                                            overflow = TextOverflow.Ellipsis,
+                                            style = overlayStyle
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+            }
+
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(5.dp)
+            ) {
+                MyTransparentLatchingButton(
+                    buttonState.slidersButtonChecked,
+                    buttonState.slidersButtonEnabled,
+                    ImageVector.vectorResource(R.drawable.baseline_tune_24),
+                    "Show sliders",
+                    onSelectionChanged = { _: Boolean -> })
             }
 
             // Layer 2: dynamic things:

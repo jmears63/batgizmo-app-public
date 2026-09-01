@@ -48,7 +48,8 @@ data class Settings(
     var autoBnCEnabledViewer: Boolean = true,
     var autoBnCEnabledLive: Boolean = true,
     var autoBaselineEnabled: Boolean = false,
-    var showParameterOverlay: Boolean = true,
+    /** Spectrogram overlay text: none, time and sunset, or plus technical parameters. */
+    var overlayTextMode: Int = OverlayTextModeOptions.BASIC.value,
     /** Selected spectrogram colour map; see [ColourMapOptions]. */
     var colourMap: Int = ColourMapOptions.KINDLMANN.value,
     var leftHandButtons: Boolean = false,
@@ -94,6 +95,22 @@ data class Settings(
 
         override fun theValue(): Int = value
         override fun theLabel(): String = label
+    }
+
+    /** Spectrogram overlay text detail level. */
+    enum class OverlayTextModeOptions(val value: Int, val label: String) : EnumHelper {
+        NONE(0, "None"),
+        BASIC(1, "Basic"),
+        FULL(2, "Full");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+
+        companion object {
+            val DEFAULT = BASIC
+            fun coerce(mode: Int): Int =
+                entries.firstOrNull { it.value == mode }?.value ?: DEFAULT.value
+        }
     }
 
     enum class ColourMapOptions(
@@ -438,12 +455,13 @@ data class Settings(
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")
     private val keyAmplitudePaneVisibility = intPreferencesKey("amplitudePaneVisibility")
     private val keyShowGrid = booleanPreferencesKey("showGrid")
+    private val keyOverlayTextMode = intPreferencesKey("overlayTextMode")
+    private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
     private val keyShowHeterodyneReferenceLine =
         booleanPreferencesKey("showHeterodyneReferenceLine")
     private val keyAutoBnCViewer = booleanPreferencesKey("autoBnCViewer")
     private val keyAutoBnCLive = booleanPreferencesKey("autoBnCLive")
     private val keyAutoBaselineEnabled = booleanPreferencesKey("autoBaselineEnabled")
-    private val keyShowParameterOverlay = booleanPreferencesKey("showParameterOverlay")
     private val keyColourMap = intPreferencesKey("colourMap")
     private val keyDefaultLiveTimeSpanS = intPreferencesKey("keyDefaultLiveTimeSpanS")
     private val keyLiveInputSource = intPreferencesKey("liveInputSource")
@@ -480,7 +498,7 @@ data class Settings(
 
         // Copy the settings data into the preferences datastore:
         prefs[keyUseDarkTheme] = useDarkTheme
-        prefs[keyShowParameterOverlay] = showParameterOverlay
+        prefs[keyOverlayTextMode] = OverlayTextModeOptions.coerce(overlayTextMode)
         prefs[keyColourMap] = colourMap
         prefs[keyAmplitudePaneVisibility] = amplitudePaneVisibility
         prefs[keyShowGrid] = showGrid
@@ -530,8 +548,15 @@ data class Settings(
 
         if (prefs[keyUseDarkTheme] != null)
             useDarkTheme = requireNotNull(prefs[keyUseDarkTheme])
-        if (prefs[keyShowParameterOverlay] != null)
-            showParameterOverlay = requireNotNull(prefs[keyShowParameterOverlay])
+        if (prefs[keyOverlayTextMode] != null)
+            overlayTextMode =
+                OverlayTextModeOptions.coerce(requireNotNull(prefs[keyOverlayTextMode]))
+        else if (prefs[keyShowParameterOverlay] != null)
+            overlayTextMode =
+                if (requireNotNull(prefs[keyShowParameterOverlay]))
+                    OverlayTextModeOptions.FULL.value
+                else
+                    OverlayTextModeOptions.NONE.value
         if (prefs[keyColourMap] != null)
             colourMap = requireNotNull(prefs[keyColourMap])
         if (prefs[keyAmplitudePaneVisibility] != null)
