@@ -56,7 +56,7 @@ data class Settings(
     var enableLogging: Boolean = false,
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
-    var heterodyneRef2kHz: Int = 20,
+    var heterodyneRef2kHz: Int = 23,
     var audioPlaybackMode: Int = AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
     var audioPitchRatio: Int = AudioPitchRatioOptions.DEFAULT.value,
