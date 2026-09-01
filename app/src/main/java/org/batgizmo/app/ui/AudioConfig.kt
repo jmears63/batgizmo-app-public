@@ -143,14 +143,15 @@ class AudioConfig {
         val constrainedRef2kHz = constrainFrequency(settings.heterodyneRef2kHz, 0.66f)
 
         fun coercePlaybackModeForAppMode(mode: Int): Int {
+            var coerced = settings.coerceAudioPlaybackModeForSampleRate(mode, sampleRateHz)
             if (appMode != AppMode.VIEWER.value) {
-                if (mode == Settings.AudioPlaybackModeOptions.DIRECT.value ||
-                    mode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value
+                if (coerced == Settings.AudioPlaybackModeOptions.DIRECT.value ||
+                    coerced == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value
                 ) {
-                    return Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+                    coerced = Settings.AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
                 }
             }
-            return mode
+            return coerced
         }
 
         // Direct is viewer-only (hidden in live). Time expansion stays visible in live but
@@ -197,6 +198,8 @@ class AudioConfig {
                 Settings.AudioPitchRatioOptions.coerceForSampleRate(
                     audioPitchRatio.intValue, sampleRateHz
                 )
+            audioPlaybackMode.intValue =
+                coercePlaybackModeForAppMode(audioPlaybackMode.intValue)
         }
 
         val isHeterodynePlayback =
@@ -251,8 +254,13 @@ class AudioConfig {
                             "Playback mode",
                             audioPlaybackMode.intValue,
                             optionEnabled = { option ->
-                                isViewer ||
-                                    option != Settings.AudioPlaybackModeOptions.TIME_EXPANSION
+                                when (option) {
+                                    Settings.AudioPlaybackModeOptions.TIME_EXPANSION ->
+                                        isViewer
+                                    Settings.AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE ->
+                                        Settings.isAutoHeterodyneSampleRateApplicable(sampleRateHz)
+                                    else -> true
+                                }
                             }
                         ) { value ->
                             audioPlaybackMode.intValue = value

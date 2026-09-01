@@ -254,13 +254,36 @@ data class Settings(
 
     /** Default mode when none has been confirmed/persisted yet. */
     fun defaultAudioPlaybackModeForSampleRate(sampleRateHz: Int): Int =
-        AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+        if (isAutoHeterodyneSampleRateApplicable(sampleRateHz))
+            AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+        else
+            AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+
+    /** Clamp a stored playback mode to what [sampleRateHz] can support. */
+    fun coerceAudioPlaybackModeForSampleRate(mode: Int, sampleRateHz: Int): Int {
+        if (mode == AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value &&
+            !isAutoHeterodyneSampleRateApplicable(sampleRateHz)
+        ) {
+            return AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
+        }
+        return mode
+    }
+
+    /**
+     * True when the user previously confirmed auto heterodyne but [sampleRateHz] is now too low.
+     * The audio playback modal should be shown again for an explicit mode choice.
+     */
+    fun requiresAudioModeReselection(sampleRateHz: Int): Boolean =
+        audioPlaybackModePersisted &&
+            audioPlaybackMode == AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value &&
+            !isAutoHeterodyneSampleRateApplicable(sampleRateHz)
 
     fun effectiveAudioPlaybackMode(sampleRateHz: Int): Int {
-        return if (audioPlaybackModePersisted)
+        val mode = if (audioPlaybackModePersisted)
             audioPlaybackMode
         else
             defaultAudioPlaybackModeForSampleRate(sampleRateHz)
+        return coerceAudioPlaybackModeForSampleRate(mode, sampleRateHz)
     }
 
     fun isDualHeterodynePlayback(sampleRateHz: Int): Boolean =
@@ -378,8 +401,14 @@ data class Settings(
         /** Sample rates at or below this use direct playback when no mode is stored. */
         const val DIRECT_PLAYBACK_MAX_SAMPLE_RATE_HZ = TARGET_AUDIO_OUT_RATE_HZ
 
+        /** Auto heterodyne requires at least this input sample rate (Hz). */
+        const val AUTO_HET_MIN_SAMPLE_RATE_HZ = 192_000
+
         /** Default lower bound for heterodyne LO (kHz). */
         const val DEFAULT_HETERODYNE_MIN_REF_KHZ = 15
+
+        fun isAutoHeterodyneSampleRateApplicable(sampleRateHz: Int): Boolean =
+            sampleRateHz >= AUTO_HET_MIN_SAMPLE_RATE_HZ
     }
 
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")

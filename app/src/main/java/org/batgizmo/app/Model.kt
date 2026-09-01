@@ -1181,8 +1181,7 @@ class UIModel(application: Application,
                         Settings.AudioPitchRatioOptions.coerceForSampleRate(
                             settings.audioPitchRatio, sampleRateHz
                         )
-                val isAutoHet =
-                    playbackMode == Settings.AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+                val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
                 if (isAutoHet)
                     resetAutoHeterodyneTracker()
                 val heterodyne1kHz =
@@ -1279,9 +1278,7 @@ class UIModel(application: Application,
                             Settings.AudioPitchRatioOptions.coerceForSampleRate(
                                 settings.audioPitchRatio, sampleRateHz
                             )
-                    val isAutoHet =
-                        playbackMode ==
-                            Settings.AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
+                    val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
                     if (isAutoHet)
                         resetAutoHeterodyneTracker()
                     val heterodyne1kHz =

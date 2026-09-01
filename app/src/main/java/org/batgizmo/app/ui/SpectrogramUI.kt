@@ -638,9 +638,13 @@ class SpectrogramUI(
                               audioRef2kHz: Int, loopedPlayback: Boolean,
                               audioPitchRatio: Int, audioTimeExpansionFactor: Int ->
                     scope.launch {
+                        val coercedPlaybackMode =
+                            model.settings.coerceAudioPlaybackModeForSampleRate(
+                                audioPlaybackMode, sampleRateHz
+                            )
                         model.updateStoredSettings(
                             model.settings.copy(
-                                audioPlaybackMode = audioPlaybackMode,
+                                audioPlaybackMode = coercedPlaybackMode,
                                 audioPlaybackModePersisted = true,
                                 audioPitchRatio =
                                     Settings.AudioPitchRatioOptions.coerceForSampleRate(
@@ -650,7 +654,7 @@ class SpectrogramUI(
                                     Settings.AudioTimeExpansionFactorOptions.coerce(
                                         audioTimeExpansionFactor
                                     ),
-                                heterodyneDual = audioPlaybackMode ==
+                                heterodyneDual = coercedPlaybackMode ==
                                     Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value,
                                 heterodyneRef1kHz = audioRef1kHz,
                                 heterodyneRef2kHz = audioRef2kHz,
@@ -1376,6 +1380,25 @@ class SpectrogramUI(
         model.amplitudeBitmapHolder.cursorTime = null
     }
 
+    /**
+     * When stored auto heterodyne is no longer valid at [sampleRateHz], require an explicit
+     * mode choice in the audio modal instead of silently downgrading at playback.
+     */
+    private fun onAudioPlaybackModeReselectionRequired(sampleRateHz: Int) {
+        if (!model.settings.requiresAudioModeReselection(sampleRateHz))
+            return
+
+        uiState.audioSettingsAlreadyShown.value = false
+
+        val audioActive =
+            uiState.audioMode.intValue == AudioMode.ON.value ||
+                uiState.audioMode.intValue == AudioMode.CONNECTING.value
+        if (audioActive) {
+            stopAudioAndResetUi()
+            uiState.showAudioConfig.value = true
+        }
+    }
+
     private suspend fun onAudioProgress(position: Int) {
         // Timber.d("onAudioProgress called: $position")
 
@@ -1410,6 +1433,15 @@ class SpectrogramUI(
     }
 
     private fun startAudio(appMode: MutableIntState) {
+        val sampleRateHz = uiState.samplingRateHz.value
+        if (sampleRateHz != null &&
+            model.settings.requiresAudioModeReselection(sampleRateHz)
+        ) {
+            uiState.audioSettingsAlreadyShown.value = false
+            uiState.showAudioConfig.value = true
+            return
+        }
+
         // Monitoring the internal microphone live risks acoustic feedback via the speaker,
         // so warn the user before starting. The warning's confirm path calls startAudioNow.
         if (appMode.intValue == AppMode.LIVE.value &&
@@ -1619,6 +1651,7 @@ class SpectrogramUI(
             uiState.title.value = title
             uiState.fileIsOpen.value = true
             uiState.samplingRateHz.value = wfi.sampleRate
+            onAudioPlaybackModeReselectionRequired(wfi.sampleRate)
 
             // Paging data is constant for the data file, it doesn't
             // change when the page sized is changed:
@@ -1700,6 +1733,7 @@ class SpectrogramUI(
             if (hz != null) {
                 rateText = String.format(Locale.getDefault(), " @ %.1f kHz", hz / 1000f)
                 uiState.samplingRateHz.value = hz
+                onAudioPlaybackModeReselectionRequired(hz)
             }
             else {
                 uiState.samplingRateHz.value = null
