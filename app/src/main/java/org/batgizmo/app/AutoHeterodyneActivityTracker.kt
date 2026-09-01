@@ -32,8 +32,9 @@ import kotlin.math.sqrt
 /**
  * Auto heterodyne activity tracker: per-bin EWMA mean and variance of linear
  * power (τ = [ACTIVITY_TAU_S]). Active bins have σ/μ above [MIN_COEFF_VAR].
- * Contiguous active runs in one time column are activity spans; the span with
- * the highest peak activity wins. Observation within that span depends on
+ * Contiguous active runs in one time column are activity spans; spans outside
+ * [rangeMinHz, rangeMaxHz] are truncated or discarded. The span with the highest
+ * peak activity among surviving spans wins. Observation within that span depends on
  * [Settings.AutoHeterodyneModeOptions]:
  * - Hockey Stick: lowest-frequency bin
  * - Rhinolophus: highest-frequency bin
@@ -105,7 +106,9 @@ class AutoHeterodyneActivityTracker {
     fun processColumn(
         band: FloatArray,
         dtSeconds: Float,
-        mode: Int = Settings.AutoHeterodyneModeOptions.DEFAULT.value
+        mode: Int = Settings.AutoHeterodyneModeOptions.DEFAULT.value,
+        rangeMinHz: Float = 0f,
+        rangeMaxHz: Float = Float.MAX_VALUE
     ): Observation? {
         if (nBins < 1 || band.size != nBins || dfHz <= 0f || dtSeconds <= 0f)
             return null
@@ -116,8 +119,6 @@ class AutoHeterodyneActivityTracker {
 
         if (!havePrev) {
             for (f in 0 until nBins) {
-                if (binHz(f) < MIN_FREQ_HZ)
-                    continue
                 meanPower[f] = dbToPower(band[f])
                 varPower[f] = 0f
             }
@@ -127,8 +128,6 @@ class AutoHeterodyneActivityTracker {
         }
 
         for (f in 0 until nBins) {
-            if (binHz(f) < MIN_FREQ_HZ)
-                continue
             val p = dbToPower(band[f])
             val prevMean = meanPower[f]
             val newMean = prevMean + alpha * (p - prevMean)
@@ -141,17 +140,22 @@ class AutoHeterodyneActivityTracker {
         if (!isWarm())
             return null
 
-        return selectObservationFromActivitySpans(band, minMeanPower, mode)
+        return selectObservationFromActivitySpans(
+            band, minMeanPower, mode, rangeMinHz, rangeMaxHz
+        )
     }
 
     /**
-     * Contiguous active bins form spans. Choose the span with the highest peak
-     * σ/μ; pick the observation bin within that span according to [mode].
+     * Contiguous active bins form spans. Spans outside [rangeMinHz, rangeMaxHz] are
+     * truncated to the overlap or discarded. Among surviving spans, choose the one
+     * with the highest peak σ/μ; pick the observation bin within that span per [mode].
      */
     private fun selectObservationFromActivitySpans(
         band: FloatArray,
         minMeanPower: Float,
-        mode: Int
+        mode: Int,
+        rangeMinHz: Float,
+        rangeMaxHz: Float
     ): Observation? {
         var bestPeakCv = MIN_COEFF_VAR
         var bestObsF = -1
@@ -162,33 +166,68 @@ class AutoHeterodyneActivityTracker {
         var spanEnd = -1
         var spanPeakF = -1
         var spanPeakCv = 0f
-        var spanStartCv = 0f
-        var spanStartDb = Float.NEGATIVE_INFINITY
-        var spanEndCv = 0f
-        var spanEndDb = Float.NEGATIVE_INFINITY
-        var spanPeakDb = Float.NEGATIVE_INFINITY
 
         fun closeSpan() {
             if (spanStart < 0 || spanPeakF < 0)
                 return
-            if (spanPeakCv > bestPeakCv) {
-                bestPeakCv = spanPeakCv
+
+            var truncStart = -1
+            var truncEnd = -1
+            var truncPeakF = -1
+            var truncPeakCv = 0f
+            var truncStartCv = 0f
+            var truncStartDb = Float.NEGATIVE_INFINITY
+            var truncEndCv = 0f
+            var truncEndDb = Float.NEGATIVE_INFINITY
+            var truncPeakDb = Float.NEGATIVE_INFINITY
+
+            for (f in spanStart..spanEnd) {
+                val hz = binHz(f)
+                if (hz < rangeMinHz || hz > rangeMaxHz)
+                    continue
+                val mu = meanPower[f]
+                if (mu < minMeanPower)
+                    continue
+                val cv = sqrt(varPower[f]) / mu
+                if (cv <= MIN_COEFF_VAR)
+                    continue
+                if (truncStart < 0) {
+                    truncStart = f
+                    truncStartCv = cv
+                    truncStartDb = band[f]
+                    truncPeakF = f
+                    truncPeakCv = cv
+                    truncPeakDb = band[f]
+                } else if (cv > truncPeakCv) {
+                    truncPeakF = f
+                    truncPeakCv = cv
+                    truncPeakDb = band[f]
+                }
+                truncEnd = f
+                truncEndCv = cv
+                truncEndDb = band[f]
+            }
+
+            if (truncStart < 0)
+                return
+
+            if (truncPeakCv > bestPeakCv) {
+                bestPeakCv = truncPeakCv
                 when (Settings.AutoHeterodyneModeOptions.coerce(mode)) {
                     Settings.AutoHeterodyneModeOptions.HOCKEY_STICK.value -> {
-                        bestObsF = spanStart
-                        bestObsCv = spanStartCv
-                        bestObsDb = spanStartDb
+                        bestObsF = truncStart
+                        bestObsCv = truncStartCv
+                        bestObsDb = truncStartDb
                     }
                     Settings.AutoHeterodyneModeOptions.RHINOLOPHUS.value -> {
-                        bestObsF = spanEnd
-                        bestObsCv = spanEndCv
-                        bestObsDb = spanEndDb
+                        bestObsF = truncEnd
+                        bestObsCv = truncEndCv
+                        bestObsDb = truncEndDb
                     }
                     else -> {
-                        // Generic/Myotis: peak activity within the span.
-                        bestObsF = spanPeakF
-                        bestObsCv = spanPeakCv
-                        bestObsDb = spanPeakDb
+                        bestObsF = truncPeakF
+                        bestObsCv = truncPeakCv
+                        bestObsDb = truncPeakDb
                     }
                 }
             }
@@ -198,10 +237,6 @@ class AutoHeterodyneActivityTracker {
         }
 
         for (f in 0 until nBins) {
-            if (binHz(f) < MIN_FREQ_HZ) {
-                closeSpan()
-                continue
-            }
             val mu = meanPower[f]
             if (mu < minMeanPower) {
                 closeSpan()
@@ -214,19 +249,13 @@ class AutoHeterodyneActivityTracker {
             }
             if (spanStart < 0) {
                 spanStart = f
-                spanStartCv = cv
-                spanStartDb = band[f]
                 spanPeakF = f
                 spanPeakCv = cv
-                spanPeakDb = band[f]
             } else if (cv > spanPeakCv) {
                 spanPeakF = f
                 spanPeakCv = cv
-                spanPeakDb = band[f]
             }
             spanEnd = f
-            spanEndCv = cv
-            spanEndDb = band[f]
         }
         closeSpan()
 
@@ -248,8 +277,6 @@ class AutoHeterodyneActivityTracker {
 
     companion object {
         const val ACTIVITY_TAU_S = 0.5f
-        /** Ignore bins below this frequency (matches auto-het search band). */
-        const val MIN_FREQ_HZ = 16_000f
         /** Minimum σ/μ (linear power) for an active bin. */
         const val MIN_COEFF_VAR = 5f
         /** Ignore bins whose EWMA power is below this dB level. */

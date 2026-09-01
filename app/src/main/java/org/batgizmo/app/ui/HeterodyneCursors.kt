@@ -46,7 +46,7 @@ class HeterodyneCursors(
 
 ) {
     public val minimumHeterodynekHz: Int
-        get() = model.settings.heterodyneMinRefkHz
+        get() = Settings.HETERODYNE_MIN_REF_KHZ
 
     @SuppressLint("UnusedBoxWithConstraintsScope")
     @Composable

@@ -57,6 +57,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
 import org.batgizmo.app.Settings
 import kotlin.enums.EnumEntries
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -467,6 +469,38 @@ fun MyFloatRangeSlider(
                 onChange(sliderValues)
             },
             valueRange = valueRange
+        )
+    }
+}
+
+@Composable
+fun MyIntRangeSlider(
+    label: String,
+    initialRangeStart: Int,
+    initialRangeEnd: Int,
+    valueRange: IntRange,
+    onChange: (Int, Int) -> Job
+) {
+    var minKhz by rememberSaveable { mutableIntStateOf(initialRangeStart) }
+    var maxKhz by rememberSaveable { mutableIntStateOf(initialRangeEnd) }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text("$label: $minKhz - $maxKhz kHz")
+
+        RangeSlider(
+            value = minKhz.toFloat()..maxKhz.toFloat(),
+            onValueChange = { newRange ->
+                val newMin = newRange.start.roundToInt()
+                    .coerceIn(valueRange.first, valueRange.last)
+                val newMax = newRange.endInclusive.roundToInt()
+                    .coerceIn(valueRange.first, valueRange.last)
+                minKhz = minOf(newMin, newMax)
+                maxKhz = maxOf(newMin, newMax)
+            },
+            onValueChangeFinished = {
+                onChange(minKhz, maxKhz)
+            },
+            valueRange = valueRange.first.toFloat()..valueRange.last.toFloat()
         )
     }
 }

@@ -213,9 +213,6 @@ class UIModel(application: Application,
         private const val AUTO_HET_REF_TAU_S = 0.5f
         private const val AUTO_HET_OFFSET_HZ = 500f
         private const val AUTO_HET_DEFAULT_HZ = 50_000f
-        /** Auto-het search band (hard-coded). */
-        private const val AUTO_HET_BAND_MIN_HZ = 16_000f
-        private const val AUTO_HET_BAND_MAX_HZ = 120_000f
 
         /**
          * Make sure the supplied inner range is at least minSrcDeltaLogical, and doesn't
@@ -1561,10 +1558,21 @@ class UIModel(application: Application,
         autoHetViewerTimeBucketCount = null
     }
 
-    private fun autoHeterodyneInitialRefkHz(): Int =
-        settings.coerceHeterodyneRefkHz(
+    private fun autoHeterodyneActivitySearchBandHz(): Pair<Float, Float> =
+        Settings.AUTO_HET_LO_LIMIT_MIN_KHZ * 1000f to
+            Settings.AUTO_HET_LO_LIMIT_MAX_KHZ * 1000f
+
+    private fun autoHeterodyneSpanFilterBandHz(): Pair<Float, Float> {
+        val (minKhz, maxKhz) = settings.normalizedAutoHeterodyneLoRange()
+        return minKhz * 1000f to maxKhz * 1000f
+    }
+
+    private fun autoHeterodyneInitialRefkHz(): Int {
+        val defaultLo =
             ((AUTO_HET_DEFAULT_HZ - AUTO_HET_OFFSET_HZ) / 1000f).roundToInt()
-        )
+        val maxkHz = ((pipeline?.sampleRateHz() ?: 384_000) / 2000) - 1
+        return defaultLo.coerceAtMost(maxkHz)
+    }
 
     /**
      * Live path: after each spectrogram slice, update the auto-tuned LO from new time buckets.
@@ -1606,8 +1614,8 @@ class UIModel(application: Application,
             val dt = pl.transformedTimeIntervalSeconds() ?: return
             if (dt <= 0f)
                 return
-            val minHz = AUTO_HET_BAND_MIN_HZ
-            val maxHz = AUTO_HET_BAND_MAX_HZ
+            val (minHz, maxHz) = autoHeterodyneActivitySearchBandHz()
+            val (filterMinHz, filterMaxHz) = autoHeterodyneSpanFilterBandHz()
             val bucketList = buckets.toList()
             if (bucketList.isEmpty())
                 return
@@ -1632,7 +1640,7 @@ class UIModel(application: Application,
 
                 pl.fillFrequencyBand(bucket, minHz, maxHz, band) ?: continue
                 val obs = autoHetActivity.processColumn(
-                    band, dt, settings.autoHeterodyneMode
+                    band, dt, settings.autoHeterodyneMode, filterMinHz, filterMaxHz
                 )
                 autoHetLastProcessedBucket = bucket
                 if (obs != null)
@@ -1667,9 +1675,8 @@ class UIModel(application: Application,
         autoHetSmoothedHz = smoothed
 
         val maxkHz = ((pipeline?.sampleRateHz() ?: 384_000) / 2000) - 1
-        val minkHz = settings.heterodyneMinRefkHz
         val refkHz = ((smoothed - AUTO_HET_OFFSET_HZ) / 1000f).roundToInt()
-            .coerceIn(minkHz, maxOf(minkHz, maxkHz))
+            .coerceAtMost(maxkHz)
 
         mutableAutoHeterodyneRefkHz.value = refkHz
         return refkHz
@@ -1835,6 +1842,11 @@ class UIModel(application: Application,
                     if (newSettings.pageOverlapPercent != it.pageOverlapPercent
                     ) {
                         resetVisibleRange = true
+                    }
+                    if (newSettings.autoHeterodyneLoMinKhz != it.autoHeterodyneLoMinKhz ||
+                        newSettings.autoHeterodyneLoMaxKhz != it.autoHeterodyneLoMaxKhz
+                    ) {
+                        resetAutoHeterodyneActivityState()
                     }
                 }
 

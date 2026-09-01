@@ -297,6 +297,26 @@ class SettingsUI(private val model: UIModel) {
                 }
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyIntRangeSlider(
+                            "Auto heterodyne range",
+                            model.settings.autoHeterodyneLoMinKhz,
+                            model.settings.autoHeterodyneLoMaxKhz,
+                            Settings.AUTO_HET_LO_LIMIT_MIN_KHZ..
+                                Settings.AUTO_HET_LO_LIMIT_MAX_KHZ
+                        ) { minKhz: Int, maxKhz: Int ->
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(
+                                        autoHeterodyneLoMinKhz = minKhz,
+                                        autoHeterodyneLoMaxKhz = maxKhz
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         MyListSelector<Settings.AutoHeterodyneModeOptions>(
                             Settings.AutoHeterodyneModeOptions.entries,
                             "Auto Heterodyne Optimisation",

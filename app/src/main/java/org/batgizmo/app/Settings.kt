@@ -56,8 +56,6 @@ data class Settings(
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
     var heterodyneRef2kHz: Int = 20,
-    /** Lower bound for heterodyne LO (kHz); LO is never set below this. */
-    var heterodyneMinRefkHz: Int = DEFAULT_HETERODYNE_MIN_REF_KHZ,
     var audioPlaybackMode: Int = AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value,
     var audioPlaybackModePersisted: Boolean = false,
     var audioPitchRatio: Int = AudioPitchRatioOptions.DEFAULT.value,
@@ -68,6 +66,10 @@ data class Settings(
     var suppressAudioFeedbackWarning: Boolean = false,
     /** Shape preset for auto-tuned heterodyne tracking. */
     var autoHeterodyneMode: Int = AutoHeterodyneModeOptions.HOCKEY_STICK.value,
+    /** Lower frequency limit (kHz) for auto heterodyne activity spans. */
+    var autoHeterodyneLoMinKhz: Int = DEFAULT_AUTO_HET_LO_MIN_KHZ,
+    /** Upper frequency limit (kHz) for auto heterodyne activity spans. */
+    var autoHeterodyneLoMaxKhz: Int = DEFAULT_AUTO_HET_LO_MAX_KHZ,
     var includeLocationInFile: Boolean = true,
     var audioBoostFactor: Float = DEFAULT_AUDIO_BOOST_FACTOR,
     var audioAGCEnabled: Boolean = true,
@@ -319,9 +321,23 @@ data class Settings(
     fun usesHeterodyneDsp(sampleRateHz: Int): Boolean =
         isHeterodynePlayback(sampleRateHz) || isAutoTunedHeterodynePlayback(sampleRateHz)
 
-    /** Clamp a heterodyne LO (kHz) to at least [heterodyneMinRefkHz]. */
+    /** Clamp a manual heterodyne LO (kHz) to at least [HETERODYNE_MIN_REF_KHZ]. */
     fun coerceHeterodyneRefkHz(kHz: Int): Int =
-        kHz.coerceAtLeast(heterodyneMinRefkHz)
+        kHz.coerceAtLeast(HETERODYNE_MIN_REF_KHZ)
+
+    /** Valid integer kHz limits for the auto heterodyne LO range UI. */
+    fun coerceAutoHeterodyneLoLimitKhz(kHz: Int): Int =
+        kHz.coerceIn(AUTO_HET_LO_LIMIT_MIN_KHZ, AUTO_HET_LO_LIMIT_MAX_KHZ)
+
+    /** Coerced auto heterodyne LO limits with min ≤ max. */
+    fun normalizedAutoHeterodyneLoRange(): Pair<Int, Int> {
+        val min = coerceAutoHeterodyneLoLimitKhz(autoHeterodyneLoMinKhz)
+        val max = coerceAutoHeterodyneLoLimitKhz(autoHeterodyneLoMaxKhz)
+        return if (min <= max)
+            min to max
+        else
+            min to min
+    }
 
     enum class DefaultLiveTimeSpanOptions(val value: Int, val label: String) : EnumHelper {
         DEFAULTLIVETIMESPAN_NONE(0, "Use existing"),
@@ -404,8 +420,16 @@ data class Settings(
         /** Auto heterodyne requires at least this input sample rate (Hz). */
         const val AUTO_HET_MIN_SAMPLE_RATE_HZ = 192_000
 
-        /** Default lower bound for heterodyne LO (kHz). */
-        const val DEFAULT_HETERODYNE_MIN_REF_KHZ = 15
+        /** Minimum LO (kHz) for manual classic/dual heterodyne reference controls. */
+        const val HETERODYNE_MIN_REF_KHZ = 15
+
+        /** Default auto heterodyne LO range (kHz). */
+        const val DEFAULT_AUTO_HET_LO_MIN_KHZ = 16
+        const val DEFAULT_AUTO_HET_LO_MAX_KHZ = 120
+
+        /** Valid auto heterodyne activity-span frequency limits (kHz). */
+        const val AUTO_HET_LO_LIMIT_MIN_KHZ = 10
+        const val AUTO_HET_LO_LIMIT_MAX_KHZ = 130
 
         fun isAutoHeterodyneSampleRateApplicable(sampleRateHz: Int): Boolean =
             sampleRateHz >= AUTO_HET_MIN_SAMPLE_RATE_HZ
@@ -429,7 +453,6 @@ data class Settings(
     private val keyEnableLogging = booleanPreferencesKey("enableLogging")
     private val keyAudioRef1kHz = intPreferencesKey("audioRef1kHz")
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
-    private val keyHeterodyneMinRefkHz = intPreferencesKey("heterodyneMinRefkHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
     private val keyAudioPlaybackMode = intPreferencesKey("audioPlaybackMode")
     private val keyAudioPitchRatio = intPreferencesKey("audioPitchRatio")
@@ -447,6 +470,8 @@ data class Settings(
     private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
     private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
+    private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
+    private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -480,7 +505,6 @@ data class Settings(
         prefs[keyAudioPitchHpfEnabled] = audioPitchHpfEnabled
         prefs[keyAudioRef1kHz] = heterodyneRef1kHz
         prefs[keyAudioRef2kHz] = heterodyneRef2kHz
-        prefs[keyHeterodyneMinRefkHz] = heterodyneMinRefkHz
         prefs[keyAudioBoostFactor] = audioBoostFactor
         prefs[keyAudioAGCEnabled] = audioAGCEnabled
         prefs[keyLocationInFile] = includeLocationInFile
@@ -493,6 +517,11 @@ data class Settings(
         prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
         prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
         prefs[keyAutoHeterodyneMode] = AutoHeterodyneModeOptions.coerce(autoHeterodyneMode)
+        val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
+        autoHeterodyneLoMinKhz = loMinKhz
+        autoHeterodyneLoMaxKhz = loMaxKhz
+        prefs[keyAutoHeterodyneLoMinKhz] = loMinKhz
+        prefs[keyAutoHeterodyneLoMaxKhz] = loMaxKhz
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -550,9 +579,7 @@ data class Settings(
             heterodyneRef1kHz = requireNotNull(prefs[keyAudioRef1kHz])
         if (prefs[keyAudioRef2kHz] != null)
             heterodyneRef2kHz = requireNotNull(prefs[keyAudioRef2kHz])
-        if (prefs[keyHeterodyneMinRefkHz] != null)
-            heterodyneMinRefkHz = requireNotNull(prefs[keyHeterodyneMinRefkHz])
-        // Enforce LO floor after loading refs and min.
+        // Enforce manual-reference LO floor after loading refs.
         heterodyneRef1kHz = coerceHeterodyneRefkHz(heterodyneRef1kHz)
         heterodyneRef2kHz = coerceHeterodyneRefkHz(heterodyneRef2kHz)
         if (prefs[keyAudioBoostFactor] != null)
@@ -580,6 +607,13 @@ data class Settings(
         if (prefs[keyAutoHeterodyneMode] != null)
             autoHeterodyneMode =
                 AutoHeterodyneModeOptions.coerce(requireNotNull(prefs[keyAutoHeterodyneMode]))
+        if (prefs[keyAutoHeterodyneLoMinKhz] != null)
+            autoHeterodyneLoMinKhz = requireNotNull(prefs[keyAutoHeterodyneLoMinKhz])
+        if (prefs[keyAutoHeterodyneLoMaxKhz] != null)
+            autoHeterodyneLoMaxKhz = requireNotNull(prefs[keyAutoHeterodyneLoMaxKhz])
+        val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
+        autoHeterodyneLoMinKhz = loMinKhz
+        autoHeterodyneLoMaxKhz = loMaxKhz
     }
 }
 
