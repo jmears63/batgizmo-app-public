@@ -1,13 +1,13 @@
 Version     Date            Description
 
- 2.0.0                      Major revamp of audio playback, resulting in new features:
-                                Automatic gain control.
-                                Autotuning heterodyne.
-                                Pitching shifting (modern alternative to FD).
+ 2.0.0      2026-09-02      Major revamp of audio playback, resulting in new features:
+                                * Autotuning heterodyne.
+                                * Pitching shifting (modern alternative to FD).
+                                * Automatic gain control.
                             Text overlay is now just the time and sunset time by default.
-                            Added an indication of trigger and heterodyne range against the frequency axis.
-                            Reordered buttons slightly to be more logical.
+                            Added an indication of heterodyne and trigger ranges to frequency axis.
                             Reworked some of the icons to be more intuitive.
+                            Reordered buttons slightly to be more logical.
 
 1.9.1       2026-08-27      Added compatibility with Android 10 so that older devices can be used.
 
