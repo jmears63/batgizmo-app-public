@@ -54,11 +54,13 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ScreenLockRotation
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -242,6 +244,9 @@ class SpectrogramUI(
 
     private var uiState: UIState = model.spectrogramUIState
     private var buttonState: ButtonState = model.spectrogramButtonState
+
+    /** Record dot colour for manual recording (triggered uses the same dot with a bat overlay). */
+    private val manualRecordDotColour = Color(0xFFE53935)
 
     private val spectrogramGraph = SpectrogramGraph(model, uiState.rawPageRange)
     private val amplitudeGraph = AmplitudeGraph(model, uiState.rawPageRange)
@@ -1031,14 +1036,28 @@ class SpectrogramUI(
        }
     }
 
+    /** Recording needs live data flowing; paused acquisition is not enough. */
+    private fun isLiveRecordingAvailable(appModeInt: Int): Boolean =
+        appModeInt == AppMode.LIVE.value &&
+            uiState.liveMode.intValue == LiveMode.STREAMING.value
+
+    private fun updateRecordingButtonsEnabled(isLiveRecordingAvailable: Boolean) {
+        buttonState.manualRecordingEnabled.value =
+            isLiveRecordingAvailable &&
+                (!buttonState.triggeredRecordingChecked.value ||
+                    buttonState.manualRecordingChecked.value)
+        buttonState.triggeredRecordingEnabled.value =
+            isLiveRecordingAvailable &&
+                (!buttonState.manualRecordingChecked.value ||
+                    buttonState.triggeredRecordingChecked.value)
+    }
+
     private fun updateAudioButtonEnabled(appModeInt: Int) {
-        val isLiveAndStreaming = appModeInt == AppMode.LIVE.value &&
-            uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
+        val liveRecordingAvailable = isLiveRecordingAvailable(appModeInt)
         val isViewingAndDataLoaded =
             appModeInt == AppMode.VIEWER.value && uiState.dataPresent.value
-        buttonState.audioEnabled.value = isLiveAndStreaming || isViewingAndDataLoaded
-        buttonState.manualRecordingEnabled.value = isLiveAndStreaming
-        buttonState.triggeredRecordingEnabled.value = isLiveAndStreaming
+        buttonState.audioEnabled.value = liveRecordingAvailable || isViewingAndDataLoaded
+        updateRecordingButtonsEnabled(liveRecordingAvailable)
     }
 
     private fun updateHeterodyneUIState() {
@@ -1510,8 +1529,19 @@ class SpectrogramUI(
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
 
+        val manualRecordingChecked by buttonState.manualRecordingChecked
+        val triggeredRecordingChecked by buttonState.triggeredRecordingChecked
+        val liveRecordingAvailable =
+            appMode.intValue == AppMode.LIVE.value &&
+                liveMode.intValue == LiveMode.STREAMING.value
+        // Keep the active recording mode clickable even if both checked states are briefly true.
+        val manualRecordingButtonEnabled =
+            liveRecordingAvailable && (!triggeredRecordingChecked || manualRecordingChecked)
+        val triggeredRecordingButtonEnabled =
+            liveRecordingAvailable && (!manualRecordingChecked || triggeredRecordingChecked)
+
         MyLatchingButton(
-            buttonState.acquisitionChecked, buttonState.acquisitionEnabled,
+            buttonState.acquisitionChecked, buttonState.acquisitionEnabled.value,
             ImageVector.vectorResource(R.drawable.baseline_mic_24_filled),
             "Toggle acquisition",
             onSelectionChanged = { checked ->
@@ -1520,6 +1550,7 @@ class SpectrogramUI(
                     model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType = TriggerType.OFF))
                     buttonState.manualRecordingChecked.value = false
                     buttonState.triggeredRecordingChecked.value = false
+                    stopAudioAndResetUi()
                 }
 
                 // Start/stop acquisition as required:
@@ -1527,12 +1558,46 @@ class SpectrogramUI(
             }
         )
 
+        MyLatchingButton(
+            buttonState.audioChecked, buttonState.audioEnabled.value,
+            ImageVector.vectorResource(R.drawable.baseline_volume_up_24_filled),
+            "Toggle audio",
+            onSelectionChanged = { checked: Boolean ->
+                if (checked) {
+                    // Provide instant UI feedback:
+                    uiState.audioMode.intValue = AudioMode.CONNECTING.value
+
+                    // The first time, we route them via the audio config dialog:
+                    if (!uiState.audioSettingsAlreadyShown.value)
+                        uiState.showAudioConfig.value = true
+                    else
+                        startAudio(appMode)
+                }
+                else {
+                    // Stop live or viewer audio and reset UI. Fire and forget.
+                    stopAudioAndResetUi()
+                    scope.launch {
+                        model.rerender()
+                    }
+                }
+            },
+            onLongPress = { checked: Boolean ->
+                // Route them via the audio config dialog:
+                // uiState.audioMode.intValue = AudioMode.CONNECTING.value
+                uiState.showAudioConfig.value = true
+            }
+        )
+
         if (appMode.intValue == AppMode.LIVE.value) {
 
+            val currentlyWriting by model.currentlyWritingFlow.collectAsStateWithLifecycle()
+            val currentlyWritingManual = manualRecordingChecked && currentlyWriting
+
             MyLatchingButton(
-                buttonState.manualRecordingChecked, buttonState.manualRecordingEnabled,
-                ImageVector.vectorResource(R.drawable.baseline_insert_drive_file_24_filled),
-                "Toggle manual recording",
+                buttonState.manualRecordingChecked, manualRecordingButtonEnabled,
+                if (currentlyWritingManual) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
+                if (currentlyWritingManual) "Stop manual recording" else "Start manual recording",
+                iconTint = if (currentlyWritingManual) null else manualRecordDotColour,
                 onSelectionChanged = { checked: Boolean ->
                     // Start or stop manual recording:
                     when (checked) {
@@ -1549,11 +1614,14 @@ class SpectrogramUI(
                 })
 
             MyLatchingButton(
-                buttonState.triggeredRecordingChecked, buttonState.triggeredRecordingEnabled,
-                ImageVector.vectorResource(R.drawable.baseline_insert_page_break_24_filled),
-                "Toggle triggered recording",
+                buttonState.triggeredRecordingChecked, triggeredRecordingButtonEnabled,
+                if (triggeredRecordingChecked) Icons.Filled.Stop else Icons.Filled.FiberManualRecord,
+                if (triggeredRecordingChecked) "Stop triggered recording" else "Start triggered recording",
+                iconTint = if (triggeredRecordingChecked) null else manualRecordDotColour,
+                overlayImage = if (triggeredRecordingChecked) null
+                    else ImageVector.vectorResource(R.drawable.ic_bat_24),
                 onSelectionChanged = { checked: Boolean ->
-                    // Start or stop manual recording:
+                    // Start or stop triggered recording:
                     when (checked) {
                         true -> {
                             // Mutually exclusive trigger modes:
@@ -1595,37 +1663,7 @@ class SpectrogramUI(
         }
 
         MyLatchingButton(
-            buttonState.audioChecked, buttonState.audioEnabled,
-            ImageVector.vectorResource(R.drawable.baseline_volume_up_24_filled),
-            "Toggle audio",
-            onSelectionChanged = { checked: Boolean ->
-                if (checked) {
-                    // Provide instant UI feedback:
-                    uiState.audioMode.intValue = AudioMode.CONNECTING.value
-
-                    // The first time, we route them via the audio config dialog:
-                    if (!uiState.audioSettingsAlreadyShown.value)
-                        uiState.showAudioConfig.value = true
-                    else
-                        startAudio(appMode)
-                }
-                else {
-                    // Stop live or viewer audio and reset UI. Fire and forget.
-                    stopAudioAndResetUi()
-                    scope.launch {
-                        model.rerender()
-                    }
-                }
-            },
-            onLongPress = { checked: Boolean ->
-                // Route them via the audio config dialog:
-                // uiState.audioMode.intValue = AudioMode.CONNECTING.value
-                uiState.showAudioConfig.value = true
-            }
-        )
-
-        MyLatchingButton(
-            buttonState.screenOrientationLocked, buttonState.screenOrientationEnabled,
+            buttonState.screenOrientationLocked, buttonState.screenOrientationEnabled.value,
             Icons.Filled.ScreenLockRotation,
             "Lock screen rotation",
             onSelectionChanged = { checked: Boolean ->
@@ -1979,6 +2017,7 @@ class SpectrogramUI(
     private fun fileWriterErrorHandler(msg: String) {
         buttonState.manualRecordingChecked.value = false
         buttonState.triggeredRecordingChecked.value = false
+        updateRecordingButtonsEnabled(isLiveRecordingAvailable(AppMode.LIVE.value))
 
         /*  Removed for now, makes for a confusing UX.
         uiState.showErrorDialog.value = true

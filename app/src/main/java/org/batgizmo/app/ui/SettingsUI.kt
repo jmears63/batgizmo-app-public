@@ -633,7 +633,7 @@ class SettingsUI(private val model: UIModel) {
 private enum class SettingsSection(val title: String) {
     APPEARANCE("Appearance"),
     AUDIO_INPUT("Audio Source"),
-    AUDIO_OUTPUT("Audio Output"),
+    AUDIO_OUTPUT("Audio Output & Playback"),
     AUTO_BNC("Auto Brightness/Contrast"),
     RENDERING("Rendering"),
     RECORDING("Recording"),

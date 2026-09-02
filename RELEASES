@@ -1,6 +1,13 @@
 Version     Date            Description
 
-                            Added AGC in audio output.
+ 2.0.0                      Major revamp of audio playback, resulting in new features:
+                                Automatic gain control.
+                                Autotuning heterodyne.
+                                Pitching shifting (modern alternative to FD).
+                            Text overlay is now just the time and sunset time by default.
+                            Added an indication of trigger and heterodyne range against the frequency axis.
+                            Reordered buttons slightly to be more logical.
+                            Reworked some of the icons to be more intuitive.
 
 1.9.1       2026-08-27      Added compatibility with Android 10 so that older devices can be used.
 

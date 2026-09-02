@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -353,9 +354,12 @@ fun MyCheckbox(label: String, initialValue: Boolean, onChange: (Boolean) -> Job)
 @Composable
 fun MyLatchingButton(
     selected: MutableState<Boolean>,
-    enabled: MutableState<Boolean>,
+    enabled: Boolean,
     image: ImageVector,
     contentDescription: String,
+    iconTint: Color? = null,
+    overlayImage: ImageVector? = null,
+    overlayTint: Color? = null,
     onSelectionChanged: (checked: Boolean) -> Unit,
     onLongPress: ((checked: Boolean) -> Unit)? = null
 ) {
@@ -363,22 +367,31 @@ fun MyLatchingButton(
     val backgroundColorBehind = Color.Transparent
 
     val containerColor = when {
-        !enabled.value -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         selected.value -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
 
     val contentColor = when {
-        !enabled.value -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
         selected.value -> MaterialTheme.colorScheme.onPrimary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
+    fun tintOrContentColor(tint: Color?): Color = when {
+        tint != null && !enabled -> tint.copy(alpha = 0.5f)
+        tint != null -> tint
+        else -> contentColor
+    }
+
+    val iconColor = tintOrContentColor(iconTint)
+    val overlayColor = tintOrContentColor(overlayTint)
+
     val clickModifier = if (onLongPress != null) {
         Modifier.combinedClickable(
             interactionSource = interactionSource,
-            indication = if (enabled.value) ripple(bounded = true) else null,
-            enabled = enabled.value,
+            indication = if (enabled) ripple(bounded = true) else null,
+            enabled = enabled,
             onClick = {
                 selected.value = !selected.value
                 onSelectionChanged(selected.value)
@@ -390,8 +403,8 @@ fun MyLatchingButton(
     } else {
         Modifier.clickable(
             interactionSource = interactionSource,
-            indication = if (enabled.value) ripple(bounded = true) else null,
-            enabled = enabled.value,
+            indication = if (enabled) ripple(bounded = true) else null,
+            enabled = enabled,
             onClick = {
                 selected.value = !selected.value
                 onSelectionChanged(selected.value)
@@ -409,11 +422,30 @@ fun MyLatchingButton(
             .then(clickModifier),
         contentAlignment = Alignment.Center
     ) {
-        CompositionLocalProvider(LocalContentColor provides contentColor) {
-            Icon(
-                imageVector = image,
-                contentDescription = contentDescription
-            )
+        CompositionLocalProvider(LocalContentColor provides iconColor) {
+            if (overlayImage == null) {
+                Icon(
+                    imageVector = image,
+                    contentDescription = contentDescription
+                )
+            } else {
+                Box(
+                    modifier = Modifier.size(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = image,
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Icon(
+                        imageVector = overlayImage,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        tint = overlayColor
+                    )
+                }
+            }
         }
     }
 }
