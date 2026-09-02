@@ -20,7 +20,7 @@
  * SOFTWARE.
  */
 
-#include "dsp_internal.h"
+#include "dsp_utils.h"
 #include "dsp_te.h"
 
 #include <string.h>

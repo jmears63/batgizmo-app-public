@@ -20,7 +20,7 @@
  * SOFTWARE.
  */
 
-#include "dsp_internal.h"
+#include "dsp_utils.h"
 #include "dsp_heterodyne.h"
 
 #include <math.h>
@@ -99,7 +99,7 @@ void dsp_heterodyne_clear(void) {
     s_heterodyne2_kHz = 0;
 }
 
-void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz) {
+void dsp_heterodyne_set_frequencies(int heterodyne1_kHz, int heterodyne2_kHz) {
     /* Smooth change: no phase reset. */
     s_heterodyne1_kHz = heterodyne1_kHz;
     s_heterodyne2_kHz = heterodyne2_kHz;

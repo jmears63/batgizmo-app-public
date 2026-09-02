@@ -20,23 +20,15 @@
  * SOFTWARE.
  */
 
-#include "dsp_internal.h"
+#include "dsp_utils.h"
 #include "dsp_agc.h"
 #include "dsp_heterodyne.h"
 #include "dsp_tdola.h"
 #include "dsp_te.h"
 
+#include <android/log.h>
 #include <math.h>
 #include <string.h>
-#include <android/log.h>
-
-typedef struct {
-    int32_t previous[DOWNSAMPLING_AA_STAGES];
-} DownsamplingFilterState;
-
-static_assert(sizeof(DownsamplingFilterState) ==
-              sizeof(((dsp_state_t *) nullptr)->downsampling_filter),
-              "DownsamplingFilterState must match dsp_state_t.downsampling_filter");
 
 static volatile int s_decimation_factor = 0;
 
@@ -48,93 +40,8 @@ typedef enum {
 } dsp_mode_t;
 
 static volatile dsp_mode_t s_playback_mode = DSP_MODE_HETERODYNE;
-static int s_scaled_audio_boost_factor = 1 << BOOST_FACTOR_SCALING_SHIFT;
-static int32_t s_downsampling_iir_coefficient = 0;
 
-/***********************************************************************************/
-/* Common helpers                                                                  */
-/***********************************************************************************/
-
-int32_t dsp_calculate_iir_coefficient(double cutoff_hz, double sample_rate_hz) {
-    double exponent = -2.0 * M_PI * cutoff_hz / sample_rate_hz;
-    double a = 1.0 - exp(exponent);
-    return (int32_t) lround(a * (1LL << 31));
-}
-
-void dsp_set_scaled_audio_boost_from_factor(float boost_factor) {
-    const float sanity_max = 2 << 16;
-    if (boost_factor > sanity_max)
-        boost_factor = sanity_max;
-    s_scaled_audio_boost_factor = (int32_t) (boost_factor * (2 << BOOST_FACTOR_SCALING_SHIFT));
-}
-
-int32_t dsp_apply_lpf(int32_t value, dsp_state_t *state) {
-    int64_t filtered = value;
-    for (int order = 0; order < DOWNSAMPLING_AA_STAGES; order++) {
-        filtered = (int64_t) s_downsampling_iir_coefficient * filtered +
-                   (int64_t) ((1LL << 31) - s_downsampling_iir_coefficient) *
-                   state->downsampling_filter.previous[order];
-        filtered >>= 31;
-        state->downsampling_filter.previous[order] = (int32_t) filtered;
-    }
-    return (int32_t) filtered;
-}
-
-bool dsp_decimate_keep(int decimation_factor, dsp_state_t *state) {
-    state->decimation_counter++;
-    if (state->decimation_counter != decimation_factor)
-        return false;
-    state->decimation_counter = 0;
-    return true;
-}
-
-static int16_t s_apply_boost_and_saturate(int64_t value, int scaled_boost_factor) {
-    /* Must use 64-bit: after heterodyning, |value| can be ~2^30. */
-    int64_t scaled = (int64_t) value * scaled_boost_factor;
-    scaled >>= BOOST_FACTOR_SCALING_SHIFT;
-
-    if (scaled > INT16_MAX)
-        scaled = INT16_MAX;
-    if (scaled < INT16_MIN)
-        scaled = INT16_MIN;
-
-    return static_cast<int16_t>(scaled);
-}
-
-int16_t dsp_apply_output_gain(int32_t sample, bool agc_enabled) {
-    int64_t gained = agc_enabled ? dsp_agc_apply(sample) : (int64_t) sample;
-    return s_apply_boost_and_saturate(gained, s_scaled_audio_boost_factor);
-}
-
-int16_t dsp_saturate_i32_to_i16(int32_t value) {
-    if (value > INT16_MAX)
-        return (int16_t) INT16_MAX;
-    if (value < INT16_MIN)
-        return (int16_t) INT16_MIN;
-    return (int16_t) value;
-}
-
-int dsp_direct_process(const int16_t *pBuffer, uint32_t sample_count,
-                       int16_t *downsampled_buffer, dsp_state_t *state,
-                       int decimation_factor, bool agc_enabled) {
-    int resultant_sample_count = 0;
-    const bool do_lpf = decimation_factor != 1;
-
-    for (uint32_t i = 0; i < sample_count; i++) {
-        int16_t raw = pBuffer[i];
-        int32_t filtered = do_lpf ? dsp_apply_lpf(raw, state) : raw;
-
-        if (dsp_decimate_keep(decimation_factor, state)) {
-            downsampled_buffer[resultant_sample_count++] =
-                    dsp_apply_output_gain(filtered, agc_enabled);
-        }
-    }
-    return resultant_sample_count;
-}
-
-/***********************************************************************************/
-/* Public API                                                                      */
-/***********************************************************************************/
+extern "C" {
 
 int dsp_configure(int sample_rate,
                   int heterodyne1_kHz,
@@ -150,10 +57,9 @@ int dsp_configure(int sample_rate,
     if (s_decimation_factor == 0)
         s_decimation_factor = 1;
 
-    /* Direct/heterodyne: AAudio at sample_rate/R. Pitch: always TARGET (48 kHz). */
     int audio_out_rate = sample_rate / s_decimation_factor;
-    s_downsampling_iir_coefficient =
-            dsp_calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ, sample_rate);
+    dsp_set_downsampling_iir_coefficient(
+            dsp_calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ, sample_rate));
     __android_log_print(ANDROID_LOG_INFO, __FILE__,
                         "Audio parameters: sample_rate = %d, s_decimation_factor = %d, "
                         "playback_mode = %d, pitch_ratio = %d, pitch_hpf = %d",
@@ -207,6 +113,14 @@ void dsp_set_audio_boost(float boost_factor) {
     dsp_set_scaled_audio_boost_from_factor(boost_factor);
 }
 
+void dsp_set_heterodyne(int heterodyne1_kHz, int heterodyne2_kHz) {
+    dsp_heterodyne_set_frequencies(heterodyne1_kHz, heterodyne2_kHz);
+}
+
+void dsp_set_agc_enabled(bool enabled) {
+    dsp_agc_set_enabled(enabled);
+}
+
 int dsp_get_decimation_factor(void) {
     return s_decimation_factor;
 }
@@ -248,3 +162,5 @@ int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
                                           decimation_factor, agc_enabled);
     }
 }
+
+} /* extern "C" */

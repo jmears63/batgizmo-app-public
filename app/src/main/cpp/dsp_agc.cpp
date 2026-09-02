@@ -21,7 +21,7 @@
  */
 
 #include "dsp_agc.h"
-#include "dsp_internal.h"
+#include "dsp_utils.h"
 
 /* Peak envelope → gain in boost-scaled units (256 == unity after >> BOOST). */
 #define AGC_TARGET_LEVEL 5000
@@ -57,7 +57,7 @@ bool dsp_agc_is_enabled(void) {
     return s_agc_enabled;
 }
 
-void dsp_set_agc_enabled(bool enabled) {
+void dsp_agc_set_enabled(bool enabled) {
     /* Reset only on off→on so stop/start does not wipe learned gain. */
     if (enabled && !s_agc_enabled)
         dsp_agc_reset();

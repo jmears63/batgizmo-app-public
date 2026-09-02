@@ -32,6 +32,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         pipeline.cpp
         nativeusb.cpp
         dsp.cpp
+        dsp_utils.cpp
         dsp_agc.cpp
         dsp_heterodyne.cpp
         dsp_tdola.cpp

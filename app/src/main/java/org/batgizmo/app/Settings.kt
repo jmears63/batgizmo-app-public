@@ -421,7 +421,7 @@ data class Settings(
         const val DEFAULT_AUDIO_BOOST_FACTOR = 1f
 
         /**
-         * AAudio / pitch / TE output rate. Must match TARGET_AUDIO_OUT_RATE in dsp_internal.h.
+         * AAudio / pitch / TE output rate. Must match TARGET_AUDIO_OUT_RATE in dsp_utils.h.
          */
         const val TARGET_AUDIO_OUT_RATE_HZ = 48_000
 

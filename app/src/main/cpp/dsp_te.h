@@ -20,36 +20,12 @@
  * SOFTWARE.
  */
 
-#ifndef BATGIZMO_DSP_TE_STATE_H
-#define BATGIZMO_DSP_TE_STATE_H
+#ifndef BATGIZMO_DSP_TE_H
+#define BATGIZMO_DSP_TE_H
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define DSP_TE_LEFTOVER_MAX 64
-
-typedef struct {
-    int16_t leftover[DSP_TE_LEFTOVER_MAX];
-    int32_t leftover_n;
-    int32_t frac_q16;
-    int32_t rate_phase;
-} dsp_te_state_t;
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* BATGIZMO_DSP_TE_STATE_H */
-
-#if defined(BATGIZMO_DSP_STATE_COMPLETE) && !defined(BATGIZMO_DSP_TE_API_H)
-#define BATGIZMO_DSP_TE_API_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "dsp_types.h"
 
 void dsp_te_configure(int input_rate_hz, int output_rate_hz, int expansion_factor);
 int dsp_te_input_samples_for_output(int output_frames);
@@ -57,8 +33,4 @@ int dsp_te_process(const int16_t *pBuffer, uint32_t sample_count,
                    int16_t *downsampled_buffer, dsp_state_t *state,
                    bool agc_enabled);
 
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* BATGIZMO_DSP_TE_API_H */
+#endif /* BATGIZMO_DSP_TE_H */

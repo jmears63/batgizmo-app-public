@@ -26,18 +26,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 void dsp_agc_reset(void);
 int64_t dsp_agc_apply(int32_t value);
 bool dsp_agc_is_enabled(void);
-
-/* dsp_set_agc_enabled is declared in dsp.h (public API). */
-
-#ifdef __cplusplus
-}
-#endif
+void dsp_agc_set_enabled(bool enabled);
 
 #endif /* BATGIZMO_DSP_AGC_H */

@@ -23,47 +23,20 @@
 #ifndef BATGIZMO_DSP_H
 #define BATGIZMO_DSP_H
 
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 
-#include "dsp_heterodyne.h"  /* dsp_heterodyne_state_t */
-#include "dsp_tdola.h"       /* dsp_tdola_state_t */
-#include "dsp_te.h"          /* dsp_te_state_t */
+#include "dsp_types.h"
+#include "dsp_heterodyne.h"
+#include "dsp_tdola.h"
+#include "dsp_te.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/*
- * Playback mode values must match Settings.AudioPlaybackModeOptions in Kotlin.
- * Dual vs single heterodyne both use the heterodyne process path; dual is selected
- * when playback_mode is DUAL or heterodyne2_kHz != 0 after configure.
- */
-typedef enum {
-    DSP_PLAYBACK_SINGLE_HETERODYNE = 0,
-    DSP_PLAYBACK_DUAL_HETERODYNE = 1,
-    DSP_PLAYBACK_DIRECT = 2,
-    DSP_PLAYBACK_PITCH_SHIFTING = 3,
-    DSP_PLAYBACK_TIME_EXPANSION = 4,
-    DSP_PLAYBACK_AUTO_TUNED_HETERODYNE = 5,
-} dsp_playback_mode_t;
-
-/*
- * Mutable continuity across dsp_process chunks (per live or viewer stream).
- * Mode-specific fields live in nested structs defined by those modules.
- */
-typedef struct {
-    int32_t decimation_counter;
-    struct {
-        int32_t previous[4];  /* Must match DOWNSAMPLING_AA_STAGES in dsp_internal.h. */
-    } downsampling_filter;
-    dsp_heterodyne_state_t heterodyne;
-    dsp_tdola_state_t tdola;
-    dsp_te_state_t te;
-} dsp_state_t;
-
 int dsp_process(const int16_t *pBuffer, uint32_t sample_count,
-                             int16_t *downsampled_buffer, dsp_state_t *state);
+                int16_t *downsampled_buffer, dsp_state_t *state);
 
 /* Returns the AAudio output rate on success, or 0 on failure. */
 int dsp_configure(int sample_rate,
@@ -87,11 +60,5 @@ int dsp_get_input_samples_for_output(int output_frames);
 #ifdef __cplusplus
 }
 #endif
-
-/* Re-include so module APIs see the complete dsp_state_t / playback mode. */
-#define BATGIZMO_DSP_STATE_COMPLETE
-#include "dsp_heterodyne.h"
-#include "dsp_tdola.h"
-#include "dsp_te.h"
 
 #endif /* BATGIZMO_DSP_H */
