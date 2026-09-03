@@ -49,7 +49,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -58,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.batgizmo.app.Settings
+import org.batgizmo.app.pipeline.UsbService
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import kotlin.math.roundToInt
 
@@ -128,8 +131,9 @@ class AudioConfig {
         appMode: Int,
         audioStarting: Boolean,
         onDismiss: () -> Unit,
-        onConfirm: (Int, Int, Int, Boolean, Int, Int) -> Unit,
+        onConfirm: (Int, Int, Int, Boolean, Int, Int, String) -> Unit,
         heterodyneRange: IntRange,
+        audioOutputOptions: List<Pair<String, String>>,
     ) {
         // Constrain frequencies
         fun constrainFrequency(kHz: Int, factor: Float): Int {
@@ -192,6 +196,12 @@ class AudioConfig {
                 Settings.AudioTimeExpansionFactorOptions.coerce(settings.audioTimeExpansionFactor)
             )
         }
+        val initialOutputId =
+            if (audioOutputOptions.any { it.first == settings.audioOutputDeviceId })
+                settings.audioOutputDeviceId
+            else
+                UsbService.DEFAULT_AUDIO_OUTPUT_ID
+        var audioOutputDeviceId by rememberSaveable { mutableStateOf(initialOutputId) }
 
         LaunchedEffect(sampleRateHz) {
             audioPitchRatio.intValue =
@@ -264,6 +274,16 @@ class AudioConfig {
                             }
                         ) { value ->
                             audioPlaybackMode.intValue = value
+                        }
+
+                        if (audioOutputOptions.isNotEmpty()) {
+                            MyDynamicSelector(
+                                options = audioOutputOptions,
+                                description = "Audio output",
+                                selectedValue = audioOutputDeviceId
+                            ) { value ->
+                                audioOutputDeviceId = value
+                            }
                         }
 
                         if (isPitchShifting) {
@@ -340,7 +360,11 @@ class AudioConfig {
                                         audioRef2kHz.intValue,
                                         loopedPlayback.value,
                                         audioPitchRatio.intValue,
-                                        audioTimeExpansionFactor.intValue
+                                        audioTimeExpansionFactor.intValue,
+                                        if (audioOutputOptions.any { it.first == audioOutputDeviceId })
+                                            audioOutputDeviceId
+                                        else
+                                            UsbService.DEFAULT_AUDIO_OUTPUT_ID
                                     )
                                 }
                             ) {

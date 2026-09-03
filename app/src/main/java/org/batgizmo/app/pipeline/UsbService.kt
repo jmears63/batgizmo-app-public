@@ -130,7 +130,19 @@ class UsbService(private val context: Context,
         // The maximum multiple of 48kHz supported by full speed USB:
         const val MAX_SAMPLING_RATE = 384000
         const val MIN_SAMPLING_RATE = 44100
+
+        /** Empty descriptor means Android chooses the default output. */
+        const val DEFAULT_AUDIO_OUTPUT_ID = ""
+
+        /** As defined in AAudio: unspecified device id. */
+        const val AAUDIO_UNSPECIFIED = 0
     }
+
+    /**
+     * A selectable audio output. [id] is a stable descriptor (type + address), not the
+     * session-specific [AudioDeviceInfo.id].
+     */
+    data class AudioOutputOption(val id: String, val label: String)
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
 
@@ -1233,13 +1245,108 @@ class UsbService(private val context: Context,
         */
     }
 
-    private fun getAudioOutputDevices(): Array<AudioDeviceInfo> {
+    private fun getAudioOutputDevices(): List<AudioDeviceInfo> {
+        return audioManager.getDevices(GET_DEVICES_OUTPUTS)
+            .filter { isSelectableOutput(it) }
+    }
 
-        val devices = audioManager.getDevices(GET_DEVICES_OUTPUTS)
-        for (device in devices) {
-            Timber.i("Output device id ${device.id}: ${device.productName}")
+    /**
+     * Outputs the user can pin playback to. First entry is always Default.
+     */
+    fun availableAudioOutputs(): List<AudioOutputOption> {
+        val devices = getAudioOutputDevices().map { device ->
+            AudioOutputOption(outputDescriptor(device), outputLabel(device))
         }
-        return devices
+        val deduped = devices
+            .groupBy { it.label }
+            .flatMap { (_, group) ->
+                if (group.size == 1) group
+                else group.mapIndexed { i, opt -> opt.copy(label = "${opt.label} ${i + 1}") }
+            }
+        return listOf(AudioOutputOption(DEFAULT_AUDIO_OUTPUT_ID, "Default")) + deduped
+    }
+
+    /**
+     * Resolve a persisted output descriptor to the current AAudio device id.
+     * Missing devices silently fall back to [AAUDIO_UNSPECIFIED].
+     */
+    fun resolveAudioOutputDeviceId(descriptor: String): Int {
+        if (descriptor.isEmpty())
+            return AAUDIO_UNSPECIFIED
+        val match = getAudioOutputDevices().firstOrNull { outputDescriptor(it) == descriptor }
+        return match?.id ?: AAUDIO_UNSPECIFIED
+    }
+
+    private fun outputDescriptor(device: AudioDeviceInfo): String =
+        "${device.type}:${device.address.orEmpty()}"
+
+    private fun outputLabel(device: AudioDeviceInfo): String {
+        val typeLabel = when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE -> "Built-in speaker"
+            AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired headset"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired headphones"
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth"
+            AudioDeviceInfo.TYPE_USB_DEVICE,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB"
+            AudioDeviceInfo.TYPE_HDMI -> "HDMI"
+            AudioDeviceInfo.TYPE_LINE_ANALOG,
+            AudioDeviceInfo.TYPE_LINE_DIGITAL -> "Line out"
+            AudioDeviceInfo.TYPE_HEARING_AID -> "Hearing aid"
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER -> "Bluetooth LE"
+            AudioDeviceInfo.TYPE_DOCK -> "Dock"
+            AudioDeviceInfo.TYPE_AUX_LINE -> "Aux"
+            else -> "Audio output"
+        }
+        val product = device.productName?.toString()?.trim().orEmpty()
+        return if (product.isNotEmpty() &&
+            !product.equals("Android", ignoreCase = true) &&
+            device.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER &&
+            device.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE
+        ) {
+            "$typeLabel: $product"
+        } else {
+            typeLabel
+        }
+    }
+
+    private fun isSelectableOutput(device: AudioDeviceInfo): Boolean {
+        if (!device.isSink) return false
+        return when (device.type) {
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_USB_DEVICE,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_USB_ACCESSORY,
+            AudioDeviceInfo.TYPE_HDMI,
+            AudioDeviceInfo.TYPE_LINE_ANALOG,
+            AudioDeviceInfo.TYPE_LINE_DIGITAL,
+            AudioDeviceInfo.TYPE_HEARING_AID,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
+            AudioDeviceInfo.TYPE_DOCK,
+            AudioDeviceInfo.TYPE_AUX_LINE -> true
+            else -> false
+        }
+    }
+
+    /**
+     * Start native AAudio on the persisted output, retrying on the default device if that fails.
+     */
+    private fun startNativeAudio(start: (Int) -> Boolean): Boolean {
+        val requested = resolveAudioOutputDeviceId(model.settings.audioOutputDeviceId)
+        if (start(requested))
+            return true
+        if (requested != AAUDIO_UNSPECIFIED) {
+            Timber.w("Audio output device id $requested failed; falling back to default")
+            return start(AAUDIO_UNSPECIFIED)
+        }
+        return false
     }
 
     fun internalDisconnect() {
@@ -1276,8 +1383,6 @@ class UsbService(private val context: Context,
      * Unspecified audio device means that Android chooses one for us, which is
      * typically the right choice:
      */
-    var AAUDIO_UNSPECIFIED = 0  // As defined in aaudio and the native layer.
-
     suspend fun startAudio(
         heterodyne1kHz: Int,
         heterodyne2kHz: Int?,
@@ -1289,9 +1394,11 @@ class UsbService(private val context: Context,
         mutex.withLock {
             if (isConnected) {
                 Timber.i("startAudio: heterodynekHz = $heterodyne1kHz")
-                nativeUsb.startAudioFromStream(AAUDIO_UNSPECIFIED, heterodyne1kHz,
+                startNativeAudio { deviceId ->
+                    nativeUsb.startAudioFromStream(deviceId, heterodyne1kHz,
                         heterodyne2kHz ?: 0, audioBoostFactor, playbackMode, pitchRatio,
                         pitchHpfEnabled)
+                }
             }
         }
     }
@@ -1311,11 +1418,13 @@ class UsbService(private val context: Context,
     ): Boolean {
         return mutex.withLock {
             Timber.i("startLiveInputAudio: sampleRateHz = $sampleRateHz heterodynekHz = $heterodyne1kHz")
-            nativeUsb.startAudioFromLiveInput(
-                AAUDIO_UNSPECIFIED, sampleRateHz,
-                heterodyne1kHz, heterodyne2kHz ?: 0, audioBoostFactor, playbackMode, pitchRatio,
-                pitchHpfEnabled
-            )
+            startNativeAudio { deviceId ->
+                nativeUsb.startAudioFromLiveInput(
+                    deviceId, sampleRateHz,
+                    heterodyne1kHz, heterodyne2kHz ?: 0, audioBoostFactor, playbackMode, pitchRatio,
+                    pitchHpfEnabled
+                )
+            }
         }
     }
 
@@ -1338,12 +1447,14 @@ class UsbService(private val context: Context,
         mutex.withLock {
             // Note: we can't use a lambda as the callback, it has to be a method.
             val (buffer, dataRangeExclusive) = visibleRawData
-            nativeUsb.startAudioFromBuffer(AAUDIO_UNSPECIFIED,
-                samplingRateHz,
-                heterodyne1kHz, heterodyne2kHz ?: 0,
-                audioBoostExponent,
-                buffer, dataRangeExclusive.start, dataRangeExclusive.exclusiveEnd,
-                loopedPlayback, playbackMode, pitchRatio, pitchHpfEnabled, onAudioProgress)
+            startNativeAudio { deviceId ->
+                nativeUsb.startAudioFromBuffer(deviceId,
+                    samplingRateHz,
+                    heterodyne1kHz, heterodyne2kHz ?: 0,
+                    audioBoostExponent,
+                    buffer, dataRangeExclusive.start, dataRangeExclusive.exclusiveEnd,
+                    loopedPlayback, playbackMode, pitchRatio, pitchHpfEnabled, onAudioProgress)
+            }
         }
     }
 

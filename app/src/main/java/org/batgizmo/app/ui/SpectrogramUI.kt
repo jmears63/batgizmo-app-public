@@ -662,7 +662,8 @@ class SpectrogramUI(
                 },
                 onConfirm = { audioPlaybackMode: Int, audioRef1kHz: Int,
                               audioRef2kHz: Int, loopedPlayback: Boolean,
-                              audioPitchRatio: Int, audioTimeExpansionFactor: Int ->
+                              audioPitchRatio: Int, audioTimeExpansionFactor: Int,
+                              audioOutputDeviceId: String ->
                     scope.launch {
                         val coercedPlaybackMode =
                             model.settings.coerceAudioPlaybackModeForSampleRate(
@@ -684,7 +685,8 @@ class SpectrogramUI(
                                     Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value,
                                 heterodyneRef1kHz = audioRef1kHz,
                                 heterodyneRef2kHz = audioRef2kHz,
-                                loopedAudioPlayback = loopedPlayback
+                                loopedAudioPlayback = loopedPlayback,
+                                audioOutputDeviceId = audioOutputDeviceId
                             )
                         )
 
@@ -700,7 +702,8 @@ class SpectrogramUI(
                         startAudio(appMode)
                     }
                 },
-                heterodyneRange = heterodyneRangekHz
+                heterodyneRange = heterodyneRangekHz,
+                audioOutputOptions = model.availableAudioOutputs().map { it.id to it.label }
             )
         }
 

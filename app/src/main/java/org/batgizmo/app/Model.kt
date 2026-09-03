@@ -312,6 +312,10 @@ class UIModel(application: Application,
     fun availableInternalMics(): List<MicCaptureService.MicOption> =
         micCaptureService.availableInternalMics()
 
+    /** The audio outputs the user can choose between (first entry is "Default"). */
+    fun availableAudioOutputs(): List<UsbService.AudioOutputOption> =
+        usbService.availableAudioOutputs()
+
     private suspend fun cleanupPartialLiveConnect(liveInputSource: LiveInputSource) {
         fileWriter?.shutdown()
         fileWriter = null

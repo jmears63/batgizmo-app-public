@@ -64,6 +64,7 @@ data class Settings(
     /** Optional 4 kHz two-pole HPF on pitch-shifting input (before TD-OLA). */
     var audioPitchHpfEnabled: Boolean = true,
     var loopedAudioPlayback: Boolean = false,
+    var audioOutputDeviceId: String = "",
     var suppressAudioFeedbackWarning: Boolean = false,
     var suppressUpdateNotification: Boolean = false,
     /** Shape preset for auto-tuned heterodyne tracking. */
@@ -489,6 +490,7 @@ data class Settings(
     private val keyAutoTriggerRangeStartkHz = floatPreferencesKey("autoTriggerRangeStartkHz")
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
     private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
+    private val keyAudioOutputDeviceId = stringPreferencesKey("audioOutputDeviceId")
     private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
     private val keySuppressUpdateNotification = booleanPreferencesKey("suppressUpdateNotification")
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
@@ -538,6 +540,7 @@ data class Settings(
         prefs[keyAutoTriggerRangeStartkHz] = autoTriggerRangeMinkHz
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
         prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
+        prefs[keyAudioOutputDeviceId] = audioOutputDeviceId
         prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
         prefs[keySuppressUpdateNotification] = suppressUpdateNotification
         prefs[keyAutoHeterodyneMode] = AutoHeterodyneModeOptions.coerce(autoHeterodyneMode)
@@ -635,6 +638,8 @@ data class Settings(
             autoTriggerRangeMaxkHz = requireNotNull(prefs[keyAutoTriggerRangeEndkHz])
         if (prefs[keyLoopedAudioPlayback] != null)
             loopedAudioPlayback = requireNotNull(prefs[keyLoopedAudioPlayback])
+        if (prefs[keyAudioOutputDeviceId] != null)
+            audioOutputDeviceId = requireNotNull(prefs[keyAudioOutputDeviceId])
         if (prefs[keySuppressAudioFeedbackWarning] != null)
             suppressAudioFeedbackWarning = requireNotNull(prefs[keySuppressAudioFeedbackWarning])
         if (prefs[keySuppressUpdateNotification] != null)
