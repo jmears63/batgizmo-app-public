@@ -317,6 +317,12 @@ class AudioConfig {
                             }
                         }
 
+                        Text(
+                            text = "(Return to this next time by long pressing the button.)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
                         // Buttons
                         Row(
                             modifier = Modifier.fillMaxWidth(),

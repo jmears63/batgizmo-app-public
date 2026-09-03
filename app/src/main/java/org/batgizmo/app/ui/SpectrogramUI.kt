@@ -59,6 +59,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ScreenLockRotation
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.BottomAppBar
@@ -1539,6 +1541,14 @@ class SpectrogramUI(
             liveRecordingAvailable && (!triggeredRecordingChecked || manualRecordingChecked)
         val triggeredRecordingButtonEnabled =
             liveRecordingAvailable && (!manualRecordingChecked || triggeredRecordingChecked)
+        val isViewer = appMode.intValue == AppMode.VIEWER.value
+        val audioChecked by buttonState.audioChecked
+        // Keep Play while the first-run audio modal is open; switch to Pause only after Start
+        // (or immediately when settings were already chosen and playback starts).
+        val viewerAudioPlaying =
+            audioChecked &&
+                (uiState.audioMode.intValue == AudioMode.ON.value ||
+                    !uiState.showAudioConfig.value)
 
         MyLatchingButton(
             buttonState.acquisitionChecked, buttonState.acquisitionEnabled.value,
@@ -1560,8 +1570,16 @@ class SpectrogramUI(
 
         MyLatchingButton(
             buttonState.audioChecked, buttonState.audioEnabled.value,
-            ImageVector.vectorResource(R.drawable.baseline_volume_up_24_filled),
-            "Toggle audio",
+            when {
+                isViewer && viewerAudioPlaying -> Icons.Filled.Pause
+                isViewer -> Icons.Filled.PlayArrow
+                else -> ImageVector.vectorResource(R.drawable.baseline_volume_up_24_filled)
+            },
+            when {
+                isViewer && viewerAudioPlaying -> "Pause audio"
+                isViewer -> "Play audio"
+                else -> "Toggle audio"
+            },
             onSelectionChanged = { checked: Boolean ->
                 if (checked) {
                     // Provide instant UI feedback:

@@ -360,6 +360,8 @@ fun MyLatchingButton(
     iconTint: Color? = null,
     overlayImage: ImageVector? = null,
     overlayTint: Color? = null,
+    overlaySize: Dp? = null,
+    overlayAlignment: Alignment = Alignment.Center,
     onSelectionChanged: (checked: Boolean) -> Unit,
     onLongPress: ((checked: Boolean) -> Unit)? = null
 ) {
@@ -438,12 +440,27 @@ fun MyLatchingButton(
                         contentDescription = contentDescription,
                         modifier = Modifier.fillMaxSize()
                     )
-                    Icon(
-                        imageVector = overlayImage,
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        tint = overlayColor
-                    )
+                    if (overlaySize != null) {
+                        Box(
+                            modifier = Modifier
+                                .align(overlayAlignment)
+                                .size(overlaySize)
+                        ) {
+                            Icon(
+                                imageVector = overlayImage,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                tint = overlayColor
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = overlayImage,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            tint = overlayColor
+                        )
+                    }
                 }
             }
         }
