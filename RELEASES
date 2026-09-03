@@ -1,5 +1,7 @@
 Version     Date            Description
 
+                            Auto baseline data is reused whenever possible for a smoother experience.
+
  2.0.0      2026-09-02      Major revamp of audio playback, resulting in new features:
                                 * Autotuning heterodyne.
                                 * Pitching shifting (modern alternative to FD).

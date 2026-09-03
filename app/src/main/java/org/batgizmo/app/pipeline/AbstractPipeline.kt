@@ -802,61 +802,83 @@ abstract class AbstractPipeline(
     /**
      * Call this expensive method on a worker thread.
      *
-     * Calculate the noise profile if the buffer has been allocated to contain it
-     * , resulting in a noise offset per frequency bucket.
-     *
-     * This method does heavy calculations: don't call it in the main thread.
+     * Calculate the noise profile from currently assigned transformed data.
+     * Returns true if a baseline was computed and installed; false if there was
+     * no pipeline or no assigned data yet.
      */
-    suspend fun calculateNoiseBaseline() {
+    suspend fun calculateNoiseBaseline(): Boolean {
         mutex.withLock() {
             // Timber.d("calculateNoiseBaseline called")
             val pd = pipelineData
             if (pd == null)
-                return
+                return false
 
             val calcs = pd.calcs
 
+            // Use all the data available in the buffer, don't limit it to the visible range:
+            val assignedTimeRange = pd.transformStep.getDataAssignedRange()
+            if (assignedTimeRange == null ||
+                assignedTimeRange.exclusiveEnd <= assignedTimeRange.start
+            ) {
+                return false
+            }
+
             val baselineBuffer = FloatArray(calcs.transformedFrequencyBucketCount)
 
-            // Only calculate the noise baseline if it is required, ie if the buffer is not null:
-            // Use all the data available in the buffer, don't limit it to the visible range:
-            val assignedTimeRange = pipelineData?.transformStep?.getDataAssignedRange()
-            assignedTimeRange?.let {
-                if (assignedTimeRange.exclusiveEnd > assignedTimeRange.start) {
-                    // val elapsed = measureTime {
-                        nativeFindNoiseBaseline(
-                            assignedTimeRange.start, assignedTimeRange.exclusiveEnd,
-                            calcs.transformedFrequencyBucketCount,
-                            pd.transformedDataBuffer.buffer,
-                            baselineBuffer
-                        )
-                    // }
-                    // Timber.d("Time taken to find the noise baseline = $elapsed")
+            // val elapsed = measureTime {
+                nativeFindNoiseBaseline(
+                    assignedTimeRange.start, assignedTimeRange.exclusiveEnd,
+                    calcs.transformedFrequencyBucketCount,
+                    pd.transformedDataBuffer.buffer,
+                    baselineBuffer
+                )
+            // }
+            // Timber.d("Time taken to find the noise baseline = $elapsed")
 
-                    /*
-                     * Adjust the profile to provide a linear reduction above a certain frequency.
-                     * This subjectively looks natural and it avoids over emphasising spurious detail at
-                     * very high frequencies. The parameters were chosen by trial and error.
-                     * Linear reduction to avoid expensive logs in the loop below.
-                    */
-                    val fCornerHz: Float = 80f * 1000f
-                    val reductionFactor = 10f
-                    val freqCornerBucket =
-                        round((fCornerHz) / calcs.transformedFrequencyInterval)
-                            .toInt().coerceIn(1, calcs.transformedFrequencyBucketCount - 1)
-                    for (freqBucket in freqCornerBucket until calcs.transformedFrequencyBucketCount) {
-                        val freqRatio =
-                            (freqBucket - freqCornerBucket).toFloat() / freqCornerBucket
-                        val deltaDb = freqRatio * reductionFactor
-                        // *add* the delta as we will subtract the profile:
-                        baselineBuffer[freqBucket] = baselineBuffer[freqBucket] + deltaDb
-                    }
-                }
-
-                pd.noiseBaselineHolder.noiseBaselineDb = baselineBuffer
+            /*
+             * Adjust the profile to provide a linear reduction above a certain frequency.
+             * This subjectively looks natural and it avoids over emphasising spurious detail at
+             * very high frequencies. The parameters were chosen by trial and error.
+             * Linear reduction to avoid expensive logs in the loop below.
+            */
+            val fCornerHz: Float = 80f * 1000f
+            val reductionFactor = 10f
+            val freqCornerBucket =
+                round((fCornerHz) / calcs.transformedFrequencyInterval)
+                    .toInt().coerceIn(1, calcs.transformedFrequencyBucketCount - 1)
+            for (freqBucket in freqCornerBucket until calcs.transformedFrequencyBucketCount) {
+                val freqRatio =
+                    (freqBucket - freqCornerBucket).toFloat() / freqCornerBucket
+                val deltaDb = freqRatio * reductionFactor
+                // *add* the delta as we will subtract the profile:
+                baselineBuffer[freqBucket] = baselineBuffer[freqBucket] + deltaDb
             }
+
+            pd.noiseBaselineHolder.noiseBaselineDb = baselineBuffer
+            return true
         }
     }
+
+    /**
+     * Install a previously computed noise baseline if its length matches the
+     * current FFT frequency-bucket count. Returns true if applied.
+     */
+    suspend fun tryApplyNoiseBaseline(baselineDb: FloatArray): Boolean {
+        mutex.withLock {
+            val pd = pipelineData ?: return false
+            if (baselineDb.size != pd.calcs.transformedFrequencyBucketCount)
+                return false
+            pd.noiseBaselineHolder.noiseBaselineDb = baselineDb.copyOf()
+            return true
+        }
+    }
+
+    /** Snapshot of the installed noise baseline, or null if none. */
+    fun copyNoiseBaseline(): FloatArray? =
+        pipelineData?.noiseBaselineHolder?.noiseBaselineDb?.copyOf()
+
+    fun noiseBaselineFrequencyBucketCount(): Int? =
+        pipelineData?.calcs?.transformedFrequencyBucketCount
 
     fun clearNoiseBaseline(): Boolean {
         val changed = (pipelineData?.noiseBaselineHolder?.noiseBaselineDb != null)

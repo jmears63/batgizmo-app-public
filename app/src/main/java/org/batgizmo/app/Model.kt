@@ -408,6 +408,10 @@ class UIModel(application: Application,
             )
             fileWriter?.run()
 
+            if (settings.autoBaselineEnabled) {
+                tryRestoreNoiseBaseline(p)
+            }
+
             return result
         } catch (e: OutOfMemoryError) {
             cleanupPartialLiveConnect(liveInputSource)
@@ -593,6 +597,18 @@ class UIModel(application: Application,
     // Are we currently writing data to file?
     private val mutableCurrentlyWritingFlow = MutableStateFlow(false) // Initial value
     val currentlyWritingFlow: StateFlow<Boolean> = mutableCurrentlyWritingFlow.asStateFlow()
+
+    /**
+     * In-session noise baseline so live start/resume can reapply correction before
+     * enough new data exists to recompute. Invalidated when sample rate or FFT
+     * frequency-bucket count no longer match.
+     */
+    private data class NoiseBaselineCache(
+        val sampleRateHz: Int,
+        val frequencyBucketCount: Int,
+        val baselineDb: FloatArray
+    )
+    private var noiseBaselineSessionCache: NoiseBaselineCache? = null
 
     // Various UI states that need to be accessible outside compose context:
     val spectrogramUIState = SpectrogramUI.UIState()
@@ -994,21 +1010,21 @@ class UIModel(application: Application,
              * Do noise baseline calculation *before* auto BnC, as it will affect
              * the auto BnC range calculated.
              *
-             * We could cache the result of this calculation. However, we would have to recalculate
-             * whenever nfft changes, which is quite often, and whenever the visible region of a
-             * data file is changed, which is also quite often. So the cache would only be somewhat
-             * effective. Instead, we apply fairly aggressive decimation when calculating the noise
-             * baseline to keep it quick.
-             *
-             * Similarly - it wouldn't work well to disable auto baseline but retain the existing
-             * baseline, as it is calculated for a specific nfft.
+             * Prefer recomputing from current data. If that is not yet possible
+             * (e.g. live buffer empty after start/resume), restore a compatible
+             * session-cached baseline so correction is not missing until the next
+             * zoom/reload.
              */
             if (autoBaselineRequired) {
                 val t = measureTimeMillis {
-                    p.calculateNoiseBaseline()
+                    if (p.calculateNoiseBaseline()) {
+                        cacheNoiseBaselineFromPipeline(p)
+                        rerenderRequired = true
+                    } else if (tryRestoreNoiseBaseline(p)) {
+                        rerenderRequired = true
+                    }
                 }
-                // Timber.d("p.calculateNoiseBaseline() took $t ms")
-                rerenderRequired = true
+                // Timber.d("noise baseline apply took $t ms")
             }
             else {
                 if (p.clearNoiseBaseline())
@@ -1040,6 +1056,40 @@ class UIModel(application: Application,
 
             // Update the bitmap to the display:
             triggerBitblt()
+        }
+    }
+
+    private fun cacheNoiseBaselineFromPipeline(p: AbstractPipeline) {
+        val baseline = p.copyNoiseBaseline() ?: return
+        noiseBaselineSessionCache = NoiseBaselineCache(
+            sampleRateHz = p.sampleRateHz(),
+            frequencyBucketCount = baseline.size,
+            baselineDb = baseline
+        )
+    }
+
+    /**
+     * Reinstall a session-cached baseline when sample rate and FFT bucket count still match.
+     * Clears the cache if geometry is incompatible.
+     */
+    private suspend fun tryRestoreNoiseBaseline(p: AbstractPipeline): Boolean {
+        val cache = noiseBaselineSessionCache ?: return false
+        val bucketCount = p.noiseBaselineFrequencyBucketCount()
+        if (cache.sampleRateHz != p.sampleRateHz() ||
+            bucketCount == null ||
+            cache.frequencyBucketCount != bucketCount
+        ) {
+            noiseBaselineSessionCache = null
+            return false
+        }
+        return p.tryApplyNoiseBaseline(cache.baselineDb).also { applied ->
+            if (applied) {
+                Timber.i(
+                    "Auto baseline: reused session noise baseline " +
+                        "(sampleRateHz=${cache.sampleRateHz}, " +
+                        "frequencyBuckets=${cache.frequencyBucketCount})"
+                )
+            }
         }
     }
 
