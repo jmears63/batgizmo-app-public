@@ -78,6 +78,7 @@ data class Settings(
     var preTriggerTimeMs: Int = PreTriggerTimeOptions.PRETRIGGER_TIME_500MS.value,
     var postTriggerTimeMs: Int = PostTriggerTimeOptions.POSTTRIGGER_TIME_1000MS.value,
     var maxFileTimeMs: Int = MaxFileTimeOptions.MAX_FILE_TIME_5000MS.value,
+    var unlimitedFileLength: Boolean = false,
     var autoTriggerThresholdDb: Float = 40f,
     var autoTriggerRangeMinkHz: Float = 16f,
     var autoTriggerRangeMaxkHz: Float = 120f,
@@ -483,6 +484,7 @@ data class Settings(
     private val keyPreTriggerTimeMs = intPreferencesKey("preTriggerTimeMs")
     private val keyPostTriggerTimeMs = intPreferencesKey("postTriggerTimeMs")
     private val keyMaxFileTimeMs = intPreferencesKey("maxFileTimeMs")
+    private val keyUnlimitedFileLength = booleanPreferencesKey("unlimitedFileLength")
     private val keyAutoTriggerThresholdDb = floatPreferencesKey("autoTriggerThresholdDb")
     private val keyAutoTriggerRangeStartkHz = floatPreferencesKey("autoTriggerRangeStartkHz")
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
@@ -531,6 +533,7 @@ data class Settings(
         prefs[keyPreTriggerTimeMs] = preTriggerTimeMs
         prefs[keyPostTriggerTimeMs] = postTriggerTimeMs
         prefs[keyMaxFileTimeMs] = maxFileTimeMs
+        prefs[keyUnlimitedFileLength] = unlimitedFileLength
         prefs[keyAutoTriggerThresholdDb] = autoTriggerThresholdDb
         prefs[keyAutoTriggerRangeStartkHz] = autoTriggerRangeMinkHz
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
@@ -622,6 +625,8 @@ data class Settings(
             postTriggerTimeMs = requireNotNull(prefs[keyPostTriggerTimeMs])
         if (prefs[keyMaxFileTimeMs] != null)
             maxFileTimeMs = requireNotNull(prefs[keyMaxFileTimeMs])
+        if (prefs[keyUnlimitedFileLength] != null)
+            unlimitedFileLength = requireNotNull(prefs[keyUnlimitedFileLength])
         if (prefs[keyAutoTriggerThresholdDb] != null)
             autoTriggerThresholdDb = requireNotNull(prefs[keyAutoTriggerThresholdDb])
         if (prefs[keyAutoTriggerRangeStartkHz] != null)

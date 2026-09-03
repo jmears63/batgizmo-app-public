@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: sans-serif;
+    font-size: 14px;
+    color: #e0e0e0;
+    background: #303030;
+    margin: 8px;
+    line-height: 1.4;
+  }
+  h2 {
+    font-size: 16px;
+    margin: 16px 0 2px 0;
+    color: #ffffff;
+  }
+  .date {
+    font-size: 12px;
+    color: #aaaaaa;
+    margin-bottom: 6px;
+  }
+  ul {
+    margin: 4px 0 4px 16px;
+    padding: 0;
+  }
+  li {
+    margin-bottom: 3px;
+  }
+  p {
+    margin: 3px 0;
+  }
+  hr {
+    border: none;
+    border-top: 1px solid #555;
+    margin: 12px 0;
+  }
+</style>
+</head>
+<body>
+
+<p>Auto baseline data is reused whenever possible for a smoother experience.</p>
+<p>Added a Settings check box for unlimited recording file length.</p>
+
+<hr>
+
+<h2>2.0.0</h2>
+<div class="date">2026-09-02</div>
+<p>Major revamp of audio playback, resulting in new features:</p>
+<ul>
+  <li>Autotuning heterodyne.</li>
+  <li>Pitch shifting (modern alternative to FD).</li>
+  <li>Automatic gain control.</li>
+</ul>
+<p>Text overlay is now just the time and sunset time by default.</p>
+<p>Added an indication of heterodyne and trigger ranges to frequency axis.</p>
+<p>Reworked some of the icons to be more intuitive.</p>
+<p>Reordered buttons slightly to be more logical.</p>
+
+<hr>
+
+<h2>1.9.1</h2>
+<div class="date">2026-08-27</div>
+<p>Added compatibility with Android 10 so that older devices can be used.</p>
+
+<hr>
+
+<h2>1.9.0</h2>
+<div class="date">2026-08-25</div>
+<p>Added alternative spectrogram colour mappings, selectable in Settings.</p>
+<p>Fixed minor bug in the format of wav files generated.</p>
+
+<hr>
+
+<h2>1.8.0</h2>
+<div class="date">2026-07-21</div>
+<p>Included the current time and sunset time in the parameter overlay.</p>
+
+<hr>
+
+<h2>1.7.1</h2>
+<div class="date">2026-07-02</div>
+<p>Fixed bug in audio playback distorted very quiet recordings in direct playback.</p>
+
+<hr>
+
+<h2>1.7.0</h2>
+<div class="date">2026-06-29</div>
+<p><strong>Features:</strong></p>
+<ul>
+  <li>Possible pretrigger settings are extended to include 2, 5 and 10s.</li>
+  <li>The user can now select a specific internal microphone, or allow automatic selection.</li>
+  <li>The viewer can now open and display spectrograms from stereo wav files.</li>
+  <li>Tidied the Settings dialog using a concertina model.</li>
+  <li>Expanded the list of MIME types the viewer can open.</li>
+</ul>
+<p><strong>Fixes:</strong></p>
+<ul>
+  <li>Screen size changes are debounced to avoid unnecessary screen re-renders, such as resulting from the internal microphone privacy indication animation.</li>
+  <li>Made the wav file parser a little more tolerant so that the EMT2 sample files with incorrect wamd chunk length can be loaded.</li>
+  <li>The time resolution is now automatically reduced on devices with large screens and low spec GPUs, such as Galaxy A50. This avoids an out of memory crash.</li>
+</ul>
+
+<hr>
+
+<h2>1.6.0</h2>
+<div class="date">2026-06-22</div>
+<p>Added support for using the internal device microphone.</p>
+<p>When a pan or zoom gesture starts over an axis, the range of the other axis is fixed.</p>
+<p>Panning and zooming is now possible in the amplitude graph when visible.</p>
+<p>The audio settings dialog now makes better use of screen space on small devices.</p>
+<p>Build for API version 37.</p>
+
+<hr>
+
+<h2>1.5.0</h2>
+<div class="date">2026-03-09</div>
+<p>Rebuild targeting API version 36, Android 16 Baklava.</p>
+
+<hr>
+
+<h2>1.4.0</h2>
+<div class="date">2025-12-19</div>
+<p>Added a slider for setting microphone sensitivity for microphones that support it.</p>
+
+<hr>
+
+<h2>1.3.0</h2>
+<div class="date">2025-12-09</div>
+<p>Added a button to lock viewing orientation (portrait or landscape).</p>
+<p>Move the info button into the main menu.</p>
+
+<hr>
+
+<h2>1.2.0</h2>
+<div class="date">2025-12-03</div>
+<p>Added the ability to generate heterodyned audio output in viewer mode.</p>
+<p>Moved the audio boost control to the overlay panel.</p>
+<p>Improved the text displayed when the microphone is missing or unplugged.</p>
+
+<hr>
+
+<h2>1.1.3</h2>
+<div class="date">2025-10-28</div>
+<p>Fixed two minor bugs that affected multiple file viewing mode.</p>
+
+<hr>
+
+<h2>1.1.2</h2>
+<div class="date">2025-10-20</div>
+<p>Re-release of 1.1.1.</p>
+
+<hr>
+
+<h2>1.1.1</h2>
+<div class="date">2025-10-19</div>
+<p>Bug fix: next/previous were unresponsive in some situation.</p>
+
+<hr>
+
+<h2>1.1.0</h2>
+<div class="date">2025-10-16</div>
+<p>Added support for selecting multiple files and scrolling through them.</p>
+<p>Added support for automatic background correction.</p>
+<p>Fixed a minor bug with paged viewing of large files.</p>
+
+<hr>
+
+<h2>1.0.14</h2>
+<div class="date">2025-09-23</div>
+<p>Fix: respect system level lock orientation setting while permitting inverted portrait.</p>
+<p>Perform an auto BnC when pausing live acquisition.</p>
+
+<hr>
+
+<h2>1.0.13</h2>
+<div class="date">2025-09-22</div>
+<p>Support inverted portrait mode.</p>
+<p>Fails gracefully when memory is over committed.</p>
+<p>Write memory information to the diagnostic log.</p>
+
+<hr>
+
+<h2>1.0.12</h2>
+<div class="date">2025-09-20</div>
+<p>Added a new setting for the time span for live mode.</p>
+<p>Renamed the existing buffer size setting to maximum viewable time span.</p>
+<p>Improvements to gesture responsiveness on lower spec devices.</p>
+<p>Fixed a bug related to display of heterodyne markers.</p>
+<p>Fixed a buffer overrun that could result in crashes.</p>
+<p>Noted GPU limitations leading to jerky updates with some settings combinations.</p>
+
+<hr>
+
+<h2>1.0.11</h2>
+<div class="date">2025-09-14</div>
+<p>Handles USB timeouts, important for certain models of EMT2.</p>
+<p>Set sampling rate to microphones dependent on their support for it in the descriptor.</p>
+
+<hr>
+
+<h2>1.0.10</h2>
+<div class="date">2025-09-12</div>
+<p>Reorganized the drawing of the UI so that it is OK on devices with API version 30.</p>
+<p>The live cursor is hidden in file viewer mode.</p>
+
+<hr>
+
+<h2>1.0.9</h2>
+<div class="date">2025-09-08</div>
+<p>Add support for reading the bmAttributes field.</p>
+<p>GUANO timestamp is now in local time with a UTC offset.</p>
+
+<hr>
+
+<h2>1.0.8</h2>
+<div class="date">2025-09-05</div>
+<p>Fixes relating to handling of the minimum heterodyne frequency.</p>
+<p>Fixes relating to resolving file name collisions.</p>
+<p>The trigger range can now extend down to 10 kHz.</p>
+
+<hr>
+
+<h2>1.0.7</h2>
+<div class="date">2025-09-04</div>
+<p>Improvements to the audio settings modal.</p>
+<p>Bumped target API version to 36.</p>
+<p>Adopted Timber logging system.</p>
+
+<hr>
+
+<h2>1.0.6</h2>
+<div class="date">2025-09-03</div>
+<p>Repeated release process for 1.0.5.</p>
+
+<hr>
+
+<h2>1.0.5</h2>
+<div class="date">2025-09-03</div>
+<p>Moved the GUANO wav file section to be after the data section, for compatibility with Anabat Insight labelling.</p>
+
+<hr>
+
+<h2>1.0.4</h2>
+<div class="date">2025-09-02</div>
+<p>The heterodyne markers can now be dragged right to the top or bottom of spectrogram.</p>
+<p>Fixed issue with rendering the display on API version 30.</p>
+<p>Included Android API number in the diagnostic log.</p>
+<p>Updated apg library.</p>
+
+<hr>
+
+<h2>1.0.3</h2>
+<div class="date">2025-08-28</div>
+<p>Reading wav files now correctly skips over duplicate wav file sections, avoiding errors with some files created by Titley products.</p>
+<p>Fixed a regression that prevented paging of large files working properly.</p>
+
+<hr>
+
+<h2>1.0.2</h2>
+<div class="date">2025-08-27</div>
+<p>Rationalized exiting from the app.</p>
+<p>The user can navigate to another app and back again with no interruption to recording or audio. Tapping the back button from the top level activity will however close down the app, after a yes/no prompt.</p>
+<p>Updated Android gradle plugin version.</p>
+
+<hr>
+
+<h2>1.0.1</h2>
+<div class="date">2025-08-26</div>
+<p>Audio boost is now in dB.</p>
+<p>Target API is now 35 (Android 15).</p>
+<p>Edge to edge mode is now used so the app can use the entire screen, including around the camera.</p>
+<p>The microphone sampling rate is now only set/read if more than one is supported by the microphone. Previously, this was done unnecessarily when only one sampling rate was available.</p>
+
+<hr>
+
+<h2>1.0.0</h2>
+<div class="date">2025-08-16</div>
+<p>Initial technical preview release.</p>
+
+</body>
+</html>

@@ -121,6 +121,7 @@ class SettingsUI(private val model: UIModel) {
         // (model.settings is a plain var and does not trigger recomposition on its own):
         var liveInputSource by rememberSaveable { mutableStateOf(model.settings.liveInputSource) }
         var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
+        var unlimitedFileLength by rememberSaveable { mutableStateOf(model.settings.unlimitedFileLength) }
 
         // Expand/collapse state for each collapsible section, indexed by SettingsSection.ordinal.
         // Held here (rather than inside the list items) so the LazyColumn can gate which sections'
@@ -500,12 +501,26 @@ class SettingsUI(private val model: UIModel) {
                         MyListSelector<Settings.MaxFileTimeOptions>(
                             Settings.MaxFileTimeOptions.entries,
                             "Maximum file length",
-                            model.settings.maxFileTimeMs
+                            model.settings.maxFileTimeMs,
+                            enabled = !unlimitedFileLength
                         ) { value: Int ->
                             // Signal the updated settings values:
                             scope.launch {
                                 model.updateStoredSettings(model.settings.copy(maxFileTimeMs = value))
                             }
+                        }
+                    }
+                }
+
+                item {
+                    MyCheckbox(
+                        "Unlimited file length", unlimitedFileLength
+                    ) { value: Boolean ->
+                        unlimitedFileLength = value
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(unlimitedFileLength = value)
+                            )
                         }
                     }
                 }

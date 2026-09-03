@@ -115,9 +115,12 @@ class FileWriter(
 
 
     /**
-     * The maximum size of a any file we write.
+     * The maximum size of a any file we write. Ignored when [unlimitedFileLength] is true.
      */
     private var maxFileEntries = 0
+
+    /** When true, files are not split by the maximum file length setting. */
+    private var unlimitedFileLength = false
 
     /**
      * The number of entries to include before the trigger when writing to
@@ -646,7 +649,10 @@ class FileWriter(
             put("$batgizmoNamespace|TriggerType", triggerType.str)
             put("$batgizmoNamespace|PretriggerS", prettyFloat3Dps(s.preTriggerTimeMs / 1000f))
             put("$batgizmoNamespace|PosttriggerS", prettyFloat3Dps(s.postTriggerTimeMs / 1000f))
-            put("$batgizmoNamespace|MaxFileTimeS", prettyFloat3Dps(s.maxFileTimeMs / 1000f))
+            if (s.unlimitedFileLength)
+                put("$batgizmoNamespace|MaxFileTimeS", "unlimited")
+            else
+                put("$batgizmoNamespace|MaxFileTimeS", prettyFloat3Dps(s.maxFileTimeMs / 1000f))
         }
 
         if (triggerType == TriggerType.AUTO) {
@@ -788,11 +794,12 @@ class FileWriter(
         maxFileEntries = round(sampleRate.toFloat() * model.settings.maxFileTimeMs / 1000).toInt()
         preTriggerEntries = round(sampleRate.toFloat() * model.settings.preTriggerTimeMs / 1000).toInt()
         postTriggerEntries = round(sampleRate.toFloat() * model.settings.postTriggerTimeMs / 1000).toInt()
+        unlimitedFileLength = model.settings.unlimitedFileLength
 
         // Make sure the maximum is long enough to accommodate the pre trigger. Multiple
         // files can be written to accommodate the post trigger if required
         maxFileEntries = maxOf(maxFileEntries, preTriggerEntries)
-        Timber.d("Resultant maxFileEntries = $maxFileEntries")
+        Timber.d("Resultant maxFileEntries = $maxFileEntries, unlimitedFileLength = $unlimitedFileLength")
     }
 
     private fun endFile(additionalGuanoFields: LinkedHashMap<String, String>?) {
@@ -886,16 +893,18 @@ class FileWriter(
                     "(1) entriesToWriteToCurrentFile = $entriesToWriteToCurrentFile, entriesAvailableCopy = $entriesAvailableCopy"
                 }
 
-                // Limit based on the maximum file size:
-                val spaceRemainingInCurrentFile = maxFileEntries - entriesActuallyWrittenToCurrentFile
-                if (entriesToWriteToCurrentFile > spaceRemainingInCurrentFile) {
-                    entriesToWriteToCurrentFile = spaceRemainingInCurrentFile
-                    Timber.d("Finishing this file: maximum file size exceeded: entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile, " +
-                            "maxFileEntries = $maxFileEntries")
-                    finishedCurrentFile = true
-                }
-                require(entriesToWriteToCurrentFile >= 0) {
-                    "(2) entriesToWriteToCurrentFile = $entriesToWriteToCurrentFile, spaceRemainingInThisFile = $spaceRemainingInCurrentFile"
+                // Limit based on the maximum file size, unless unlimited files are enabled:
+                if (!unlimitedFileLength) {
+                    val spaceRemainingInCurrentFile = maxFileEntries - entriesActuallyWrittenToCurrentFile
+                    if (entriesToWriteToCurrentFile > spaceRemainingInCurrentFile) {
+                        entriesToWriteToCurrentFile = spaceRemainingInCurrentFile
+                        Timber.d("Finishing this file: maximum file size exceeded: entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile, " +
+                                "maxFileEntries = $maxFileEntries")
+                        finishedCurrentFile = true
+                    }
+                    require(entriesToWriteToCurrentFile >= 0) {
+                        "(2) entriesToWriteToCurrentFile = $entriesToWriteToCurrentFile, spaceRemainingInThisFile = $spaceRemainingInCurrentFile"
+                    }
                 }
 
                 // Limit based on the total number of entries we planned to write in the file sequence:

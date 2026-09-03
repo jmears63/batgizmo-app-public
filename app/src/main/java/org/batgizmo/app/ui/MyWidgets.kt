@@ -84,6 +84,7 @@ fun <T> MyListSelector(
     enumEntries: List<T>,
     description: String,
     selectedValue: Int,
+    enabled: Boolean = true,
     optionEnabled: (T) -> Boolean = { true },
     onChange: (Int) -> Unit
 ) where T : Enum<T>, T: Settings.EnumHelper {
@@ -102,16 +103,22 @@ fun <T> MyListSelector(
     var selectedText by rememberSaveable { mutableStateOf(labelForValue(selectedValue)) }
     var expanded by rememberSaveable { mutableStateOf(false) }
 
+    // Never leave the menu open if the control becomes disabled.
+    if (!enabled && expanded) {
+        expanded = false
+    }
+
     // List of dropdown menu items
     ExposedDropdownMenuBox(
         expanded = expanded,
-        onExpandedChange = { expanded = !expanded }
+        onExpandedChange = { if (enabled) expanded = !expanded }
     ) {
         // TextField for input and dropdown
         TextField(
             value = selectedText,
             onValueChange = {  },
             readOnly = true,
+            enabled = enabled,
             label = { Text(description) },
             modifier = Modifier
                 .menuAnchor(MenuAnchorType.PrimaryNotEditable)
