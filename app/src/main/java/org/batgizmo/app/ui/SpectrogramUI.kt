@@ -1102,6 +1102,9 @@ class SpectrogramUI(
             }
         }
 
+        // Rebuild the frequency-axis range marks (auto-het / trigger) for the current mode.
+        uiState.autoHetAxisHighlightKey.intValue++
+
         // Trigger a re-render to take these changes into account:
         model.spectrogramBitmapHolder.signalUpdate()
     }
