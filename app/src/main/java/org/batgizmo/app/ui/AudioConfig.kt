@@ -158,16 +158,9 @@ class AudioConfig {
             return coerced
         }
 
-        // Direct is viewer-only (hidden in live). Time expansion stays visible in live but
-        // is greyed out / disabled — it only works on recorded material.
+        // Direct and time expansion are viewer-only: shown in live but greyed out / disabled.
         val isViewer = appMode == AppMode.VIEWER.value
-        val playbackModeOptions =
-            if (isViewer)
-                Settings.AudioPlaybackModeOptions.entries
-            else
-                Settings.AudioPlaybackModeOptions.entries.filter {
-                    it != Settings.AudioPlaybackModeOptions.DIRECT
-                }
+        val playbackModeOptions = Settings.AudioPlaybackModeOptions.entries
 
         // State
         val initialPlaybackMode = coercePlaybackModeForAppMode(
@@ -265,6 +258,7 @@ class AudioConfig {
                             audioPlaybackMode.intValue,
                             optionEnabled = { option ->
                                 when (option) {
+                                    Settings.AudioPlaybackModeOptions.DIRECT,
                                     Settings.AudioPlaybackModeOptions.TIME_EXPANSION ->
                                         isViewer
                                     Settings.AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE ->

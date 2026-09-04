@@ -58,13 +58,18 @@ int dsp_configure(int sample_rate,
         s_decimation_factor = 1;
 
     int audio_out_rate = sample_rate / s_decimation_factor;
+    const double aa_cutoff_hz =
+            (playback_mode == DSP_PLAYBACK_DIRECT)
+                ? (double) DOWNSAMPLING_AA_CUTOFF_DIRECT_HZ
+                : (double) DOWNSAMPLING_AA_CUTOFF_HETERODYNE_HZ;
     dsp_set_downsampling_iir_coefficient(
-            dsp_calculate_iir_coefficient(DOWNSAMPLING_AA_CUTOFF_HZ, sample_rate));
+            dsp_calculate_iir_coefficient(aa_cutoff_hz, sample_rate));
     __android_log_print(ANDROID_LOG_INFO, __FILE__,
                         "Audio parameters: sample_rate = %d, s_decimation_factor = %d, "
-                        "playback_mode = %d, pitch_ratio = %d, pitch_hpf = %d",
+                        "playback_mode = %d, pitch_ratio = %d, pitch_hpf = %d, "
+                        "aa_cutoff_hz = %.0f",
                         sample_rate, s_decimation_factor, playback_mode, pitch_ratio,
-                        pitch_hpf_enabled ? 1 : 0);
+                        pitch_hpf_enabled ? 1 : 0, aa_cutoff_hz);
 
     memset(state, 0, sizeof(*state));
 

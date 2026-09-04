@@ -80,7 +80,8 @@ typedef struct {
 typedef struct {
     int32_t decimation_counter;
     struct {
-        int32_t previous[DOWNSAMPLING_AA_STAGES];
+        /* One-pole state in Q31 (sample * 2^31) so quiet signals keep fractional energy. */
+        int64_t previous[DOWNSAMPLING_AA_STAGES];
     } downsampling_filter;
     dsp_heterodyne_state_t heterodyne;
     dsp_tdola_state_t tdola;

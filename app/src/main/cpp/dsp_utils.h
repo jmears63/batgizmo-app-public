@@ -30,8 +30,10 @@
 
 #define TARGET_AUDIO_OUT_RATE 48000
 
-/* Conservative AA cutoff so heterodyned audio is not audible above ~10 kHz. */
-#define DOWNSAMPLING_AA_CUTOFF_HZ 3000
+/* AA cutoff for heterodyned audio — keep bleed/feedback low (~audible band). */
+#define DOWNSAMPLING_AA_CUTOFF_HETERODYNE_HZ 3000
+/* AA cutoff for direct playback when decimating (Nyquist at 48 kHz out is 24 kHz). */
+#define DOWNSAMPLING_AA_CUTOFF_DIRECT_HZ 15000
 
 /* Pre-TD-OLA high-pass cutoff (cascaded one-pole stages in dsp_tdola). */
 #define TDOLA_HPF_CUTOFF_HZ 10000

@@ -26,7 +26,7 @@
 #include <math.h>
 
 typedef struct {
-    int32_t previous[DOWNSAMPLING_AA_STAGES];
+    int64_t previous[DOWNSAMPLING_AA_STAGES];
 } DownsamplingFilterState;
 
 static_assert(sizeof(DownsamplingFilterState) ==
@@ -53,16 +53,29 @@ void dsp_set_downsampling_iir_coefficient(int32_t coefficient) {
     s_downsampling_iir_coefficient = coefficient;
 }
 
+/*
+ * One-pole low-pass with Q31 state: y = a*x + (1-a)*y_prev.
+ * State retains sub-sample fraction so quiet signals are not rounded to zero.
+ * The (c * q31) >> 31 product is split to avoid needing 128-bit intermediates.
+ */
 int32_t dsp_apply_lpf(int32_t value, dsp_state_t *state) {
-    int64_t filtered = value;
+    const int64_t a = s_downsampling_iir_coefficient;
+    const int64_t omc = (1LL << 31) - a;
+    int64_t filtered_q31 = (int64_t) value << 31;
+
     for (int order = 0; order < DOWNSAMPLING_AA_STAGES; order++) {
-        filtered = (int64_t) s_downsampling_iir_coefficient * filtered +
-                   (int64_t) ((1LL << 31) - s_downsampling_iir_coefficient) *
-                   state->downsampling_filter.previous[order];
-        filtered >>= 31;
-        state->downsampling_filter.previous[order] = (int32_t) filtered;
+        const int64_t prev = state->downsampling_filter.previous[order];
+        const int64_t x_hi = filtered_q31 >> 31;
+        const int64_t x_lo = filtered_q31 - (x_hi << 31);
+        const int64_t y_hi = prev >> 31;
+        const int64_t y_lo = prev - (y_hi << 31);
+        const int64_t frac = a * x_lo + omc * y_lo;
+
+        filtered_q31 = a * x_hi + omc * y_hi + (frac >> 31);
+        state->downsampling_filter.previous[order] = filtered_q31;
     }
-    return (int32_t) filtered;
+
+    return (int32_t) (filtered_q31 >> 31);
 }
 
 bool dsp_decimate_keep(int decimation_factor, dsp_state_t *state) {
