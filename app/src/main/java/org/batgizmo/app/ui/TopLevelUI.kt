@@ -29,11 +29,16 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +57,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.LifecycleCoroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import uk.org.gimell.batgimzoapp.BuildConfig
 import org.batgizmo.app.DocumentHelper
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
@@ -218,6 +225,49 @@ class TopLevelUI(private val model: UIModel) {
                                 onSettingsUpdate()
                             }
                         }
+                    }
+
+                    // Compose these inside the app theme so dialogs match the rest of the UI.
+                    val showWhatsNew by model.showWhatsNew.collectAsStateWithLifecycle()
+                    var showReleaseNotesFromWhatsNew by rememberSaveable { mutableStateOf(false) }
+                    var dontShowUpdateAgain by rememberSaveable { mutableStateOf(false) }
+
+                    if (showWhatsNew) {
+                        AlertDialog(
+                            onDismissRequest = { model.dismissWhatsNew(dontShowUpdateAgain) },
+                            title = { Text("Updated") },
+                            text = {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text("This app has been updated to version ${BuildConfig.VERSION_NAME}.")
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = dontShowUpdateAgain,
+                                            onCheckedChange = { dontShowUpdateAgain = it }
+                                        )
+                                        Text("Don't show me this again")
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    model.dismissWhatsNew(dontShowUpdateAgain)
+                                    showReleaseNotesFromWhatsNew = true
+                                }) {
+                                    Text("Release Notes")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { model.dismissWhatsNew(dontShowUpdateAgain) }) {
+                                    Text("Close")
+                                }
+                            }
+                        )
+                    }
+
+                    if (showReleaseNotesFromWhatsNew) {
+                        ReleaseNotesDialog(onDismiss = {
+                            showReleaseNotesFromWhatsNew = false
+                        })
                     }
                 }
             }

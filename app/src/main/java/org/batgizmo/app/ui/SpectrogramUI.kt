@@ -44,7 +44,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import android.webkit.WebView
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -72,7 +75,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
@@ -97,6 +102,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -106,6 +112,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -207,6 +214,7 @@ class SpectrogramUI(
         val audioMode: MutableIntState = mutableIntStateOf(AudioMode.OFF.value),
         val showAudioConfig: MutableState<Boolean> = mutableStateOf(false),
         val showAudioFeedbackWarning: MutableState<Boolean> = mutableStateOf(false),
+        val showReleaseNotes: MutableState<Boolean> = mutableStateOf(false),
         val audioSettingsAlreadyShown: MutableState<Boolean> = mutableStateOf(false),
         val heterodyneRef1kHz: MutableState<Int?> = mutableStateOf(null),
         val heterodyneRef2kHz: MutableState<Int?> = mutableStateOf(null),
@@ -236,6 +244,7 @@ class SpectrogramUI(
             audioMode.intValue = AudioMode.OFF.value
             showAudioConfig.value = false
             showAudioFeedbackWarning.value = false
+            showReleaseNotes.value = false
             // Keep audioSettingsAlreadyShown across file open / mode reset so a short
             // press can reuse last settings; long-press still opens the modal. Cleared
             // separately on USB stream errors (new mic may need ref sanity checks).
@@ -707,6 +716,10 @@ class SpectrogramUI(
                 },
                 uiState.errorMessage.value
             )
+        }
+
+        if (uiState.showReleaseNotes.value) {
+            ReleaseNotesDialog(onDismiss = { uiState.showReleaseNotes.value = false })
         }
 
         if (uiState.showInternalMicFallbackDialog.value) {
@@ -1253,7 +1266,10 @@ class SpectrogramUI(
             HorizontalDivider()
 
             DropdownMenuItem(
-                onClick = {}, // No-op or show a dialog
+                onClick = {
+                    menuExpanded = false
+                    uiState.showReleaseNotes.value = true
+                },
                 text = { Text("Version: ${BuildConfig.VERSION_NAME}") }
             )
         }
@@ -2044,4 +2060,39 @@ class SpectrogramUI(
         Log.e(logTag, msg)
          */
     }
+}
+
+/**
+ * A dialog that displays the app release notes by rendering the bundled HTML asset in a WebView.
+ */
+@Composable
+fun ReleaseNotesDialog(onDismiss: () -> Unit) {
+    val isLandscape =
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = if (isLandscape) Modifier.fillMaxWidth(0.92f) else Modifier,
+        properties = DialogProperties(usePlatformDefaultWidth = !isLandscape),
+        title = { Text("Release Notes") },
+        text = {
+            AndroidView(
+                factory = { ctx ->
+                    // Load the release notes HTML from assets into a WebView.
+                    WebView(ctx).apply {
+                        setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                        loadUrl("file:///android_asset/releases.html")
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }

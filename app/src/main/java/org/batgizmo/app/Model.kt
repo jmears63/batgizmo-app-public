@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -74,6 +75,7 @@ import org.batgizmo.app.ui.SpectrogramUI
 import org.batgizmo.app.ui.TopLevelUI
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
+import uk.org.gimell.batgimzoapp.BuildConfig
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.exp
@@ -710,6 +712,20 @@ class UIModel(application: Application,
     var settings = Settings()
         private set  // public getter, private setter
 
+    // Tracks whether the app was just updated, for showing a "What's New" prompt.
+    private val keyLastSeenVersion = stringPreferencesKey("lastSeenVersion")
+    private val _showWhatsNew = MutableStateFlow(false)
+    val showWhatsNew: StateFlow<Boolean> = _showWhatsNew.asStateFlow()
+
+    fun dismissWhatsNew(suppressFurther: Boolean = false) {
+        _showWhatsNew.value = false
+        if (suppressFurther) {
+            viewModelScope.launch {
+                updateStoredSettings(settings.copy(suppressUpdateNotification = true))
+            }
+        }
+    }
+
     // Last AGC enable value pushed to native; avoid re-calling setAgcEnabled (which resets
     // the envelope) when unrelated settings are persisted (e.g. audio boost slider release).
     private var appliedAudioAgcEnabled: Boolean? = null
@@ -782,6 +798,20 @@ class UIModel(application: Application,
                 // Signal to the UI that the settings values are ready:
                 settingsReadyChannel.send(Unit)
             }
+        }
+
+        // Check if the app version has changed since last launch.
+        viewModelScope.launch(Dispatchers.IO) {
+            val prefs = settingsDataStore.data.first()
+            val lastSeen = prefs[keyLastSeenVersion]
+            val current = BuildConfig.VERSION_NAME
+            val snapshot = Settings()
+            snapshot.copyFromPreferences(prefs)
+            if (lastSeen != null && lastSeen != current && !snapshot.suppressUpdateNotification) {
+                _showWhatsNew.value = true
+            }
+            // Persist the current version.
+            settingsDataStore.edit { it[keyLastSeenVersion] = current }
         }
     }
 

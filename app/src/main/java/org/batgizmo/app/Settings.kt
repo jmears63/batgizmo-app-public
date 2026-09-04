@@ -65,6 +65,7 @@ data class Settings(
     var audioPitchHpfEnabled: Boolean = true,
     var loopedAudioPlayback: Boolean = false,
     var suppressAudioFeedbackWarning: Boolean = false,
+    var suppressUpdateNotification: Boolean = false,
     /** Shape preset for auto-tuned heterodyne tracking. */
     var autoHeterodyneMode: Int = AutoHeterodyneModeOptions.HOCKEY_STICK.value,
     /** Lower frequency limit (kHz) for auto heterodyne activity spans. */
@@ -487,6 +488,7 @@ data class Settings(
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
     private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
     private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
+    private val keySuppressUpdateNotification = booleanPreferencesKey("suppressUpdateNotification")
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
     private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
@@ -534,6 +536,7 @@ data class Settings(
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
         prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
         prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
+        prefs[keySuppressUpdateNotification] = suppressUpdateNotification
         prefs[keyAutoHeterodyneMode] = AutoHeterodyneModeOptions.coerce(autoHeterodyneMode)
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
@@ -629,6 +632,8 @@ data class Settings(
             loopedAudioPlayback = requireNotNull(prefs[keyLoopedAudioPlayback])
         if (prefs[keySuppressAudioFeedbackWarning] != null)
             suppressAudioFeedbackWarning = requireNotNull(prefs[keySuppressAudioFeedbackWarning])
+        if (prefs[keySuppressUpdateNotification] != null)
+            suppressUpdateNotification = requireNotNull(prefs[keySuppressUpdateNotification])
         if (prefs[keyAutoHeterodyneMode] != null)
             autoHeterodyneMode =
                 AutoHeterodyneModeOptions.coerce(requireNotNull(prefs[keyAutoHeterodyneMode]))

@@ -584,6 +584,18 @@ class SettingsUI(private val model: UIModel) {
                 }
 
                 item {
+                    MyCheckbox(
+                        "Suppress update notification", model.settings.suppressUpdateNotification
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(suppressUpdateNotification = value)
+                            )
+                        }
+                    }
+                }
+
+                item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
 
                         MyCheckbox(
