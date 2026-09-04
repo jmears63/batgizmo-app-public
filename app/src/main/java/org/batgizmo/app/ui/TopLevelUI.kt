@@ -162,6 +162,7 @@ class TopLevelUI(private val model: UIModel) {
 
                 // Log.d(this::class.simpleName, "Collect the value from settingsReadyFlow")
                 onSettingsUpdate()
+                model.maybeProbeHighRateUsbMicrophone()
             }
         }
 
@@ -244,7 +245,7 @@ class TopLevelUI(private val model: UIModel) {
                                             checked = dontShowUpdateAgain,
                                             onCheckedChange = { dontShowUpdateAgain = it }
                                         )
-                                        Text("Don't show me this again")
+                                        Text("Don't show me update info again")
                                     }
                                 }
                             },
@@ -305,6 +306,8 @@ class TopLevelUI(private val model: UIModel) {
 
     fun processViewIntent(context: Context, lifecycleScope: LifecycleCoroutineScope,
                           viewModel: UIModel, uri: Uri) {
+        // Also covers onNewIntent VIEW while the activity is already running.
+        model.noteLaunchedForFileView()
         lifecycleScope.launch {
             // In case we are currently viewing in multiple file mode:
             model.documentHelper.reset()

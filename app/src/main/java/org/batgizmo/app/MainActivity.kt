@@ -84,6 +84,11 @@ class MainActivity : ComponentActivity() {
         val factory = UIModelFactory(application, dataStore)
         val model = ViewModelProvider(this, factory).get(UIModel::class.java)
 
+        // Suppress the high-rate mic startup helper when opened via VIEW (e.g. a .wav).
+        if (intent?.action == Intent.ACTION_VIEW) {
+            model.noteLaunchedForFileView()
+        }
+
         requestLocationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
 
         // RECORD_AUDIO is requested when the user connects with the internal microphone.

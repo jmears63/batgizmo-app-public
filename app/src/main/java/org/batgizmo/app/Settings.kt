@@ -67,6 +67,7 @@ data class Settings(
     var audioOutputDeviceId: String = "",
     var suppressAudioFeedbackWarning: Boolean = false,
     var suppressUpdateNotification: Boolean = false,
+    var suppressHighRateMicOffer: Boolean = false,
     /** Shape preset for auto-tuned heterodyne tracking. */
     var autoHeterodyneMode: Int = AutoHeterodyneModeOptions.HOCKEY_STICK.value,
     /** Lower frequency limit (kHz) for auto heterodyne activity spans. */
@@ -493,6 +494,7 @@ data class Settings(
     private val keyAudioOutputDeviceId = stringPreferencesKey("audioOutputDeviceId")
     private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
     private val keySuppressUpdateNotification = booleanPreferencesKey("suppressUpdateNotification")
+    private val keySuppressHighRateMicOffer = booleanPreferencesKey("suppressHighRateMicOffer")
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
     private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
@@ -543,6 +545,7 @@ data class Settings(
         prefs[keyAudioOutputDeviceId] = audioOutputDeviceId
         prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
         prefs[keySuppressUpdateNotification] = suppressUpdateNotification
+        prefs[keySuppressHighRateMicOffer] = suppressHighRateMicOffer
         prefs[keyAutoHeterodyneMode] = AutoHeterodyneModeOptions.coerce(autoHeterodyneMode)
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
@@ -644,6 +647,8 @@ data class Settings(
             suppressAudioFeedbackWarning = requireNotNull(prefs[keySuppressAudioFeedbackWarning])
         if (prefs[keySuppressUpdateNotification] != null)
             suppressUpdateNotification = requireNotNull(prefs[keySuppressUpdateNotification])
+        if (prefs[keySuppressHighRateMicOffer] != null)
+            suppressHighRateMicOffer = requireNotNull(prefs[keySuppressHighRateMicOffer])
         if (prefs[keyAutoHeterodyneMode] != null)
             autoHeterodyneMode =
                 AutoHeterodyneModeOptions.coerce(requireNotNull(prefs[keyAutoHeterodyneMode]))

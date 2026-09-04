@@ -69,6 +69,7 @@ import org.batgizmo.app.pipeline.MicCaptureService
 import org.batgizmo.app.pipeline.DeviceMicInputSource
 import org.batgizmo.app.pipeline.UsbLiveInputSource
 import org.batgizmo.app.pipeline.UsbService
+import org.batgizmo.app.pipeline.UsbHighRateMicProbeResult
 import org.batgizmo.app.ui.GraphBase
 import org.batgizmo.app.ui.SpectrogramGestureAxis
 import org.batgizmo.app.ui.SpectrogramUI
@@ -653,8 +654,12 @@ class UIModel(application: Application,
     private val usbConnectFlow = usbConnectChannel.receiveAsFlow()
     private val usbErrorChannel = Channel<LiveStreamErrorResult>(Channel.BUFFERED)
     val usbErrorFlow = usbErrorChannel.receiveAsFlow()
+    private val usbProbeChannel = Channel<UsbHighRateMicProbeResult>(Channel.BUFFERED)
     private val usbService =
-        UsbService(getApplication(), this, usbConnectChannel, usbErrorChannel, viewModelScope)
+        UsbService(
+            getApplication(), this, usbConnectChannel, usbErrorChannel,
+            usbProbeChannel, viewModelScope
+        )
     private val micCaptureService =
         MicCaptureService(getApplication(), viewModelScope).also { mic ->
             mic.feedLiveAudioSamples = usbService::feedLiveAudioSamples
@@ -697,6 +702,9 @@ class UIModel(application: Application,
     private val _showWhatsNew = MutableStateFlow(false)
     val showWhatsNew: StateFlow<Boolean> = _showWhatsNew.asStateFlow()
 
+    /** Version-update dialog requested but held until the high-rate mic offer is finished. */
+    private var pendingWhatsNew = false
+
     fun dismissWhatsNew(suppressFurther: Boolean = false) {
         _showWhatsNew.value = false
         if (suppressFurther) {
@@ -704,6 +712,85 @@ class UIModel(application: Application,
                 updateStoredSettings(settings.copy(suppressUpdateNotification = true))
             }
         }
+    }
+
+    private val _highRateMicOffer = MutableStateFlow<UsbHighRateMicProbeResult?>(null)
+    val highRateMicOffer: StateFlow<UsbHighRateMicProbeResult?> = _highRateMicOffer.asStateFlow()
+
+    /** When true, successful live connect should also start audio monitoring. */
+    @Volatile
+    private var pendingStartAudioAfterLiveConnect = false
+
+    private var highRateUsbProbeAttempted = false
+    private var highRateUsbProbeCompleted = false
+
+    /**
+     * Call when the activity was started (or re-started) with ACTION_VIEW to open a file.
+     * Suppresses the high-rate USB mic startup helper for that launch.
+     */
+    fun noteLaunchedForFileView() {
+        launchedForFileView = true
+        // Drop any offer that raced ahead of the VIEW intent handling.
+        if (_highRateMicOffer.value != null) {
+            _highRateMicOffer.value = null
+            tryShowPendingWhatsNew()
+        }
+    }
+
+    @Volatile
+    private var launchedForFileView = false
+
+    fun dismissHighRateMicOffer(suppressFurther: Boolean = false) {
+        _highRateMicOffer.value = null
+        if (suppressFurther) {
+            viewModelScope.launch {
+                updateStoredSettings(settings.copy(suppressHighRateMicOffer = true))
+            }
+        }
+        tryShowPendingWhatsNew()
+    }
+
+    fun consumePendingStartAudioAfterLiveConnect(): Boolean {
+        val pending = pendingStartAudioAfterLiveConnect
+        pendingStartAudioAfterLiveConnect = false
+        return pending
+    }
+
+    fun armStartAudioAfterLiveConnect() {
+        pendingStartAudioAfterLiveConnect = true
+    }
+
+    /**
+     * Once per process, if the preferred live source is USB, probe for a high-rate
+     * (>= 192 kHz) microphone using the shared USB selection/permission path.
+     */
+    fun maybeProbeHighRateUsbMicrophone() {
+        if (highRateUsbProbeAttempted)
+            return
+        highRateUsbProbeAttempted = true
+        if (launchedForFileView ||
+            settings.suppressHighRateMicOffer ||
+            settings.liveInputSource != Settings.LiveInputSourceOptions.USB.value
+        ) {
+            highRateUsbProbeCompleted = true
+            tryShowPendingWhatsNew()
+            return
+        }
+        viewModelScope.launch(Dispatchers.Default) {
+            usbService.probeHighRateUsbMicrophone()
+        }
+    }
+
+    /** Show What’s New only after the startup mic probe/offer path has finished. */
+    private fun tryShowPendingWhatsNew() {
+        if (!pendingWhatsNew)
+            return
+        if (!highRateUsbProbeCompleted)
+            return
+        if (_highRateMicOffer.value != null)
+            return
+        pendingWhatsNew = false
+        _showWhatsNew.value = true
     }
 
     // Last AGC enable value pushed to native; avoid re-calling setAgcEnabled (which resets
@@ -788,10 +875,22 @@ class UIModel(application: Application,
             val snapshot = Settings()
             snapshot.copyFromPreferences(prefs)
             if (lastSeen != null && lastSeen != current && !snapshot.suppressUpdateNotification) {
-                _showWhatsNew.value = true
+                // Defer until after the high-rate mic startup offer (if any).
+                pendingWhatsNew = true
+                tryShowPendingWhatsNew()
             }
             // Persist the current version.
             settingsDataStore.edit { it[keyLastSeenVersion] = current }
+        }
+
+        viewModelScope.launch {
+            usbProbeChannel.receiveAsFlow().collect { result ->
+                highRateUsbProbeCompleted = true
+                if (result.found && !launchedForFileView)
+                    _highRateMicOffer.value = result
+                else
+                    tryShowPendingWhatsNew()
+            }
         }
     }
 

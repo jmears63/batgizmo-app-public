@@ -204,6 +204,9 @@ class SpectrogramUI(
         val showInternalMicFallbackDialog: MutableState<Boolean> = mutableStateOf(false),
         val resetUIOnErrorDialogDismissed: MutableState<Boolean> = mutableStateOf(false),
         val errorMessage: MutableState<String> = mutableStateOf(""),
+        val showHighRateMicOffer: MutableState<Boolean> = mutableStateOf(false),
+        val highRateMicOfferProduct: MutableState<String?> = mutableStateOf(null),
+        val highRateMicOfferRateHz: MutableState<Int?> = mutableStateOf(null),
         val processingFlag: MutableState<Boolean> = mutableStateOf(false),
         val pagingState: MutableState<PagingController?> = mutableStateOf(null),
         val pagingEnabled: MutableState<Boolean> = mutableStateOf(false),
@@ -234,6 +237,9 @@ class SpectrogramUI(
             showInternalMicFallbackDialog.value = false
             resetUIOnErrorDialogDismissed.value = false
             errorMessage.value = ""
+            showHighRateMicOffer.value = false
+            highRateMicOfferProduct.value = null
+            highRateMicOfferRateHz.value = null
             processingFlag.value = false
             pagingState.value = null
             pagingEnabled.value = false
@@ -381,6 +387,17 @@ class SpectrogramUI(
             // Main UI thread. The following suspends waiting for live data open events.
             viewModel.liveAudioStartFlow.collectLatest { result ->
                 onLiveAudioStarted(result, appMode)
+            }
+        }
+
+        // Offer to enter live when a high-rate USB bat mic is detected at startup:
+        LaunchedEffect(Unit) {
+            model.highRateMicOffer.collectLatest { offer ->
+                if (offer != null) {
+                    uiState.highRateMicOfferProduct.value = offer.productName
+                    uiState.highRateMicOfferRateHz.value = offer.sampleRateHz
+                    uiState.showHighRateMicOffer.value = true
+                }
             }
         }
 
@@ -756,6 +773,35 @@ class SpectrogramUI(
             }
         }
 
+        if (uiState.showHighRateMicOffer.value) {
+            val product = uiState.highRateMicOfferProduct.value ?: "USB microphone"
+            val rateHz = uiState.highRateMicOfferRateHz.value
+            val rateText = if (rateHz != null)
+                String.format(Locale.getDefault(), " (%.0f kHz)", rateHz / 1000f)
+            else
+                ""
+            val dontShowAgain = remember { mutableStateOf(false) }
+            ConfirmDialog(
+                onDismiss = {
+                    uiState.showHighRateMicOffer.value = false
+                    model.dismissHighRateMicOffer(dontShowAgain.value)
+                },
+                onConfirm = {
+                    uiState.showHighRateMicOffer.value = false
+                    model.dismissHighRateMicOffer(dontShowAgain.value)
+                    acceptHighRateMicOffer(appMode)
+                },
+                title = "Bat microphone detected",
+                message = "$product$rateText is connected.\n\n" +
+                    "Start live monitoring with acquisition and audio enabled?",
+                confirmText = "Start",
+                dismissText = "Not now",
+                checkboxLabel = "Don't show me this startup helper again",
+                checkboxChecked = dontShowAgain.value,
+                onCheckboxChange = { dontShowAgain.value = it },
+            )
+        }
+
         if (uiState.showAudioFeedbackWarning.value) {
             val dontShowAgain = remember { mutableStateOf(false) }
             ConfirmDialog(
@@ -781,7 +827,7 @@ class SpectrogramUI(
                 message = "Using the internal microphone can result in audio feedback. " +
                     "You may need to reduce the speaker volume, or use headphones.",
                 confirmText = "Continue",
-                checkboxLabel = "Don't show this warning again",
+                checkboxLabel = "Don't show me this audio feedback warning again",
                 checkboxChecked = dontShowAgain.value,
                 onCheckboxChange = { dontShowAgain.value = it },
             )
@@ -1858,12 +1904,21 @@ class SpectrogramUI(
             }
              */
             uiState.title.value = "$manufacturer$product$rateText"
+
+            if (model.consumePendingStartAudioAfterLiveConnect()) {
+                buttonState.audioChecked.value = true
+                uiState.audioMode.intValue = AudioMode.CONNECTING.value
+                // Auto-start from the high-rate mic offer: use current settings, skip the modal.
+                uiState.audioSettingsAlreadyShown.value = true
+                startAudioNow(appMode)
+            }
         } else {
             // Connected failed so revert the UI state:
             buttonState.acquisitionChecked.value = false
             uiState.liveMode.intValue = LiveMode.OFF.value
             uiState.title.value = null
             uiState.samplingRateHz.value = null
+            model.consumePendingStartAudioAfterLiveConnect()
             if (lcr.offerInternalMicFallback) {
                 uiState.showInternalMicFallbackDialog.value = true
             } else if (lcr.errorMessage != null) {
@@ -1884,6 +1939,14 @@ class SpectrogramUI(
             buttonState.acquisitionChecked.value = true
             openLiveCheckingPermissions(Settings.LiveInputSourceOptions.PHONE_MIC.value)
         }
+    }
+
+    private fun acceptHighRateMicOffer(appMode: MutableIntState) {
+        model.armStartAudioAfterLiveConnect()
+        appMode.intValue = AppMode.LIVE.value
+        uiState.liveMode.intValue = LiveMode.CONNECTING.value
+        buttonState.acquisitionChecked.value = true
+        openLiveCheckingPermissions(Settings.LiveInputSourceOptions.USB.value)
     }
 
     private fun onLiveAudioStarted(

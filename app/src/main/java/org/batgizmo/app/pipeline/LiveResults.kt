@@ -52,6 +52,20 @@ data class LiveAudioStartResult(
 )
 
 /**
+ * Result of a lightweight USB microphone probe for a high sample-rate bat mic.
+ * [found] is true only when a suitable endpoint reports a rate >= [HIGH_RATE_MIN_HZ].
+ */
+data class UsbHighRateMicProbeResult(
+    val found: Boolean,
+    val productName: String? = null,
+    val sampleRateHz: Int? = null,
+) {
+    companion object {
+        const val HIGH_RATE_MIN_HZ = 192_000
+    }
+}
+
+/**
  * Error reported by a live input stream (currently the USB native streaming path).
  */
 data class LiveStreamErrorResult(

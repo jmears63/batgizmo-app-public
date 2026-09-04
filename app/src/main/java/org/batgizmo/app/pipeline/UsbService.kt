@@ -124,6 +124,7 @@ class UsbService(private val context: Context,
                  private val model: UIModel,
                  private val usbConnectChannel: Channel<LiveConnectResult>,
                  private val usbErrorChannel: Channel<LiveStreamErrorResult>,
+                 private val usbProbeChannel: Channel<UsbHighRateMicProbeResult>,
                  private val scope: CoroutineScope) {
 
     companion object {
@@ -146,13 +147,25 @@ class UsbService(private val context: Context,
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
 
+    /**
+     * Work to run after the user responds to a USB permission dialog.
+     * The permission broadcast does not carry reliable extras, so we cache intent here.
+     */
     /*
      * Unfortunately the USB permission callback doesn't seem to include information
      * about which device permission was granted or reject for, so we cache the value in
      * the following variable. This is a hack and perhaps one day I will figure out
      * how to include the device info in the intent.
      */
-    private var theOnFeatureUnitDiscovered: ((Float, Float, Float, Float) -> Unit)? = null
+    private sealed class PendingAfterPermission {
+        data class Connect(
+            val onFeatureUnitDiscovered: (Float, Float, Float, Float) -> Unit
+        ) : PendingAfterPermission()
+
+        data object ProbeHighRate : PendingAfterPermission()
+    }
+
+    private var pendingAfterPermission: PendingAfterPermission? = null
 
     private val usbPermissionName = "${context.packageName}.USB_PERMISSION"
 
@@ -223,26 +236,36 @@ class UsbService(private val context: Context,
                         // We should have assigned the UsbDevice in question to device before
                         // requesting permission:
                         check(usbDevice != null) { "Internal error - device is null" }
+                        val pending = pendingAfterPermission
+                        pendingAfterPermission = null
                         usbDevice?.let { device ->
                             val granted = usbManager.hasPermission(device)
                             val grantedString = if (granted) "granted" else "NOT granted"
                             Timber.i("${device.productName} permission $usbPermissionName: $grantedString")
                             if (granted) {
-                                theOnFeatureUnitDiscovered?.let {
-                                    processDevice(device, it)
+                                when (pending) {
+                                    is PendingAfterPermission.Connect ->
+                                        processDevice(device, pending.onFeatureUnitDiscovered)
+                                    is PendingAfterPermission.ProbeHighRate ->
+                                        completeHighRateProbe(device)
+                                    null ->
+                                        Timber.w("USB permission granted but no pending action")
                                 }
                             } else {
-                                // It looks like the user declined to grant permission. This is not exactly
-                                // an error, but the handling is similar:
-
-                                usbConnectChannel
-                                    .send(
-                                        LiveConnectResult(
-                                            false,
-                                            manufacturerName = sanitizeUsbText(device.manufacturerName),
-                                            productName = sanitizeUsbText(device.productName)
+                                when (pending) {
+                                    is PendingAfterPermission.Connect ->
+                                        usbConnectChannel.send(
+                                            LiveConnectResult(
+                                                false,
+                                                manufacturerName = sanitizeUsbText(device.manufacturerName),
+                                                productName = sanitizeUsbText(device.productName)
+                                            )
                                         )
-                                    )
+                                    is PendingAfterPermission.ProbeHighRate ->
+                                        usbProbeChannel.send(UsbHighRateMicProbeResult(found = false))
+                                    null ->
+                                        Timber.w("USB permission denied but no pending action")
+                                }
                             }
                         }
                     }
@@ -262,6 +285,19 @@ class UsbService(private val context: Context,
             filter,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Context.RECEIVER_EXPORTED else 0
         )
+    }
+
+    /** Same device choice used for live connect and high-rate probing. */
+    private fun selectUsbMicrophoneDevice(): UsbDevice? =
+        usbManager.deviceList.values.firstOrNull()
+
+    private fun requestUsbPermission(device: UsbDevice) {
+        val permissionIntent = PendingIntent.getBroadcast(
+            context, 0, Intent(usbPermissionName),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        Timber.i("Requesting permission for device ${device.deviceName}")
+        usbManager.requestPermission(device, permissionIntent)
     }
 
     /*
@@ -284,37 +320,128 @@ class UsbService(private val context: Context,
                     though, so I will wait for someone to ask for it.
                  */
 
-                // Select the first item if present, and request permission to access it:
-                usbDevice = usbManager.deviceList.values.firstOrNull()
-                if (usbDevice == null) {
+                val device = selectUsbMicrophoneDevice()
+                usbDevice = device
+                if (device == null) {
                     Timber.i("No USB device found")
                     throw RuntimeException(LiveConnectResult.NO_USB_MICROPHONE_MESSAGE)
                 }
 
-                usbDevice?.let { device ->
-                    val hp = usbManager.hasPermission(device)   // Already got permission?
-                    if (hp) {
-                        Timber.i("Device ${device.deviceName} already has permission")
-                        processDevice(device, onFeatureUnitDiscovered)
-                    } else {
-                        // A hacky way to communicate with the intent handle callback code. There seems
-                        // to be no other way that works:
-                        usbDevice = device
-                        theOnFeatureUnitDiscovered = onFeatureUnitDiscovered
-                        val permissionIntent = PendingIntent.getBroadcast(
-                            context, 0, Intent(usbPermissionName),
-                            PendingIntent.FLAG_IMMUTABLE
-                        )
-
-                        // This following line requests the user interactively for permission, and
-                        // if they grant it, calls processDevice:
-                        Timber.i("Requesting permission for device ${device.deviceName}")
-                        usbManager.requestPermission(device, permissionIntent)
-                    }
+                if (usbManager.hasPermission(device)) {
+                    Timber.i("Device ${device.deviceName} already has permission")
+                    processDevice(device, onFeatureUnitDiscovered)
+                } else {
+                    pendingAfterPermission =
+                        PendingAfterPermission.Connect(onFeatureUnitDiscovered)
+                    requestUsbPermission(device)
                 }
             }
             finally {
                 // Any clean up goes here.
+            }
+        }
+    }
+
+    /**
+     * Lightweight probe: same device selection and permission path as [connect], but only
+     * resolves the preferred endpoint sample rate (no streaming). Emits on [usbProbeChannel].
+     */
+    suspend fun probeHighRateUsbMicrophone() {
+        mutex.withLock {
+            try {
+                val device = selectUsbMicrophoneDevice()
+                usbDevice = device
+                if (device == null) {
+                    Timber.i("High-rate probe: no USB device found")
+                    usbProbeChannel.send(UsbHighRateMicProbeResult(found = false))
+                    return
+                }
+
+                if (usbManager.hasPermission(device)) {
+                    Timber.i("High-rate probe: device ${device.deviceName} already has permission")
+                    completeHighRateProbe(device)
+                } else {
+                    pendingAfterPermission = PendingAfterPermission.ProbeHighRate
+                    requestUsbPermission(device)
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "High-rate USB probe failed")
+                usbProbeChannel.send(UsbHighRateMicProbeResult(found = false))
+            }
+        }
+    }
+
+    /**
+     * After permission is available, parse descriptors and report whether the preferred
+     * endpoint is a high-rate microphone (>= [UsbHighRateMicProbeResult.HIGH_RATE_MIN_HZ]).
+     */
+    private fun completeHighRateProbe(device: UsbDevice) {
+        try {
+            if (!usbManager.hasPermission(device)) {
+                usbProbeChannel.trySend(UsbHighRateMicProbeResult(found = false))
+                return
+            }
+
+            val rawDescriptors = readDeviceDescriptor(device)
+            val endpoints = parseEndpointsFromDescriptor(device, rawDescriptors)
+            val endpoint = endpoints.firstOrNull()
+            if (endpoint == null) {
+                Timber.i("High-rate probe: no suitable audio endpoint on ${device.productName}")
+                usbProbeChannel.trySend(UsbHighRateMicProbeResult(found = false))
+                return
+            }
+
+            val rate = probeEndpointSampleRate(device, endpoint)
+            val found = rate != null && rate >= UsbHighRateMicProbeResult.HIGH_RATE_MIN_HZ
+            Timber.i(
+                "High-rate probe: product=${sanitizeUsbText(device.productName)} " +
+                    "rate=$rate found=$found"
+            )
+            usbProbeChannel.trySend(
+                UsbHighRateMicProbeResult(
+                    found = found,
+                    productName = sanitizeUsbText(device.productName),
+                    sampleRateHz = rate
+                )
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "High-rate USB probe failed during descriptor/rate read")
+            usbProbeChannel.trySend(UsbHighRateMicProbeResult(found = false))
+        }
+    }
+
+    /**
+     * Sample rate for the preferred endpoint without starting the stream.
+     * UAC1 uses the rate already chosen while parsing; UAC2 needs a short claimed read.
+     */
+    private fun probeEndpointSampleRate(
+        device: UsbDevice,
+        endpoint: EndpointData
+    ): Int? {
+        endpoint.uac1SampleRate?.let { rate ->
+            if (rate > 0) return rate
+        }
+
+        val clockId = endpoint.uac2ClockId ?: return null
+        var connection: UsbDeviceConnection? = null
+        try {
+            connection = usbManager.openDevice(device)
+                ?: throw RuntimeException("Failed to open device ${device.deviceName} for rate probe")
+            val conn = connection
+            for (i in 0 until device.interfaceCount) {
+                val claimed = conn.claimInterface(device.getInterface(i), true)
+                require(claimed) { "Unable to claim interface for rate probe" }
+            }
+            return getUac2SampleRate(conn, clockId)
+        } finally {
+            connection?.let { conn ->
+                for (i in 0 until device.interfaceCount) {
+                    try {
+                        conn.releaseInterface(device.getInterface(i))
+                    } catch (_: Exception) {
+                    }
+                }
+                conn.close()
             }
         }
     }

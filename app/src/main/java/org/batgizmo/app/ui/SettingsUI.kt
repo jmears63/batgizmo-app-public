@@ -586,10 +586,10 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
 
-            settingsSection(SettingsSection.OTHER, expandedSections) {
+            settingsSection(SettingsSection.WARNINGS, expandedSections) {
                 item {
                     MyCheckbox(
-                        "Suppress UI warnings", model.settings.suppressAudioFeedbackWarning
+                        "Suppress audio feedback warnings", model.settings.suppressAudioFeedbackWarning
                     ) { value: Boolean ->
                         // Signal the updated settings values:
                         scope.launch {
@@ -600,7 +600,7 @@ class SettingsUI(private val model: UIModel) {
 
                 item {
                     MyCheckbox(
-                        "Suppress update notification", model.settings.suppressUpdateNotification
+                        "Suppress update info notification", model.settings.suppressUpdateNotification
                     ) { value: Boolean ->
                         scope.launch {
                             model.updateStoredSettings(
@@ -610,6 +610,21 @@ class SettingsUI(private val model: UIModel) {
                     }
                 }
 
+                item {
+                    MyCheckbox(
+                        "Suppress startup helper",
+                        model.settings.suppressHighRateMicOffer
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(suppressHighRateMicOffer = value)
+                            )
+                        }
+                    }
+                }
+            }
+
+            settingsSection(SettingsSection.DIAGNOSTICS, expandedSections) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
 
@@ -664,7 +679,8 @@ private enum class SettingsSection(val title: String) {
     AUTO_BNC("Auto Brightness/Contrast"),
     RENDERING("Rendering"),
     RECORDING("Recording"),
-    OTHER("Other"),
+    WARNINGS("Warnings"),
+    DIAGNOSTICS("Diagnostics"),
 }
 
 /**

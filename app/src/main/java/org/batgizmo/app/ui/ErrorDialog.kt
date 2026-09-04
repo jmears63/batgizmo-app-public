@@ -67,6 +67,7 @@ fun ConfirmDialog(
             Column(Modifier.fillMaxWidth()) {
                 Text(message)
                 if (checkboxLabel != null && onCheckboxChange != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = checkboxChecked,
