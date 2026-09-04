@@ -64,13 +64,6 @@ class SpectrogramDrawThread(
                 val canvas = surfaceHolder.lockHardwareCanvas()
                 canvas1 = canvas
                 if (canvas != null) {
-                    // Record the GPU's real texture-size limit so the pipeline can bound the
-                    // spectrogram bitmap to what this device can actually allocate:
-                    if (canvas.isHardwareAccelerated)
-                        model.noteMaxBitmapDimension(
-                            minOf(canvas.maximumBitmapWidth, canvas.maximumBitmapHeight)
-                        )
-
                     if (bitmap == null) {
                         // Blank the display if the bitmap is null:
                         canvas.drawColor(Color.Black.toArgb())

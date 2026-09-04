@@ -101,13 +101,6 @@ abstract class AbstractPipeline(
             return maxOf(scaled, minEntries)
         }
 
-        /** Smallest power of two that is greater than or equal to [n] (with a floor of 1). */
-        fun nextPowerOfTwo(n: Int): Int {
-            if (n <= 1) return 1
-            val highest = Integer.highestOneBit(n)
-            return if (highest == n) n else highest shl 1
-        }
-
         external fun nativeFindBnCRange(
             xMin: Int, xMax: Int,
             yMin: Int, yMax: Int,
@@ -1105,38 +1098,16 @@ abstract class AbstractPipeline(
         val rawPageDataCount = rawPageRange.exclusiveEnd - rawPageRange.start
 
         // Use calculated FFT parameters values rather values from settings:
-        var nFft = fftParameters.windowSamples
-        var halfNFft = nFft / 2      // nFft is always even, so no rounding occurs.
+        val nFft = fftParameters.windowSamples
+        val halfNFft = nFft / 2      // nFft is always even, so no rounding occurs.
 
         val fftOverlapCount = fftParameters.windowOverlap
-        var fftStride = (nFft - fftOverlapCount)
-        fftStride = fftStride.coerceIn(1, nFft)
+        val fftStride = (nFft - fftOverlapCount).coerceIn(1, nFft)
 
-        // Bound the spectrogram bitmap width (transformedTimeBucketCount, computed below) to the
-        // largest texture this device's GPU can allocate. Without this, a long page at a high
-        // sample rate with a small FFT window and/or high overlap produces an enormous bitmap that
-        // the driver cannot allocate, which surfaces as a fatal EGL_BAD_ALLOC on the render thread.
-        // We only intervene when the device limit would be exceeded, so capable devices and normal
-        // settings are unaffected; constrained cases degrade by coarsening time resolution.
-        val maxBitmapWidth = model.maxBitmapDimension
-        if (maxBitmapWidth > 1 && rawPageDataCount > nFft) {
-            // Smallest stride for which (rawPageDataCount - nFft) / stride + 1 <= maxBitmapWidth,
-            // using integer ceiling division:
-            val minStride = (rawPageDataCount - nFft + maxBitmapWidth - 2) / (maxBitmapWidth - 1)
-            if (minStride > fftStride) {
-                // If the required stride exceeds the window, grow the window to the next power of
-                // two so the stride never exceeds it. This keeps the inter-slice overlap
-                // (nFft - fftStride) non-negative and only coarsens resolution as much as needed.
-                if (minStride > nFft) {
-                    nFft = nextPowerOfTwo(minStride)
-                    halfNFft = nFft / 2
-                }
-                fftStride = minStride.coerceAtMost(nFft)
-                Timber.i(
-                    "Capping spectrogram width to $maxBitmapWidth: nFft=$nFft, fftStride=$fftStride"
-                )
-            }
-        }
+        // Spectrogram/amplitude bitmaps are sized from these parameters and allocated in
+        // setupPipeline. Oversized requests are not pre-capped here: createBitmap / buffer
+        // allocation throws OutOfMemoryError, which openFile/openLive catch and surface
+        // as a user-visible error.
 
         val rawTimeInterval = 1f / sampleRate
         val transformedTimeInterval: Float = rawTimeInterval * fftStride

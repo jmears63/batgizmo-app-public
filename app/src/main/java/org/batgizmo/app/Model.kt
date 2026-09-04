@@ -185,14 +185,6 @@ class UIModel(application: Application,
             System.loadLibrary("batgizmo-native")
         }
 
-        /**
-         * Conservative default for the largest bitmap dimension the GPU can render as a texture,
-         * used until a hardware canvas reports the real limit. 8192 is safe on effectively all
-         * GPUs, including older low-end devices, and bounds the spectrogram bitmap so we never
-         * request a texture the device cannot allocate (which surfaces as a fatal EGL_BAD_ALLOC).
-         */
-        const val DEFAULT_MAX_BITMAP_DIMENSION = 8192
-
         @OptIn(ExperimentalUnsignedTypes::class)
         private external fun nativeInitialize(
             colourMap: ShortArray,
@@ -640,22 +632,6 @@ class UIModel(application: Application,
     // spectrogram and amplitude:
     val spectrogramBitmapHolder = BitmapHolder()
     val amplitudeBitmapHolder = BitmapHolder()
-
-    /**
-     * The largest bitmap dimension the GPU can render as a texture, used to bound the spectrogram
-     * bitmap so we only ever request textures the device can allocate. It starts at a conservative
-     * default and is updated to the device's real capability once a hardware canvas reports it,
-     * so capable devices run at full resolution and only constrained devices degrade.
-     */
-    @Volatile
-    var maxBitmapDimension: Int = DEFAULT_MAX_BITMAP_DIMENSION
-        private set
-
-    /** Record the GPU's texture-size limit, as reported by a hardware-accelerated canvas. */
-    fun noteMaxBitmapDimension(dimension: Int) {
-        if (dimension > 0)
-            maxBitmapDimension = dimension
-    }
 
     // Fail safe values that shouldn't get used:
     private val defaultFftParameters =
