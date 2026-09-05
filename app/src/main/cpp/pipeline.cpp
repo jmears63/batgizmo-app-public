@@ -68,12 +68,12 @@ static jint installColourMap(JNIEnv *env, jshortArray colour_map, jint colour_ma
 }
 
 /**
- * This is invoked from the ViewModel so should only get called once, regardless of
+ * This is invoked once from ColourMapHelper so should only get called once, regardless of
  * screen reconfiguration etc. So one off leaks from this function are OK.
  */
 extern "C"
 JNIEXPORT jint JNICALL
-Java_org_batgizmo_app_UIModel_00024Companion_nativeInitialize(JNIEnv *env, jobject thiz,
+Java_org_batgizmo_app_ColourMapHelper_00024Companion_nativeInitialize(JNIEnv *env, jobject thiz,
                                                               jshortArray colour_map,
                                                               jint colour_map_size,
                                                               jshort amplitude_graph_colour) {
@@ -94,7 +94,7 @@ Java_org_batgizmo_app_UIModel_00024Companion_nativeInitialize(JNIEnv *env, jobje
 /** Replace the spectrogram colour map used by doColourMapping. Safe to call after init. */
 extern "C"
 JNIEXPORT jint JNICALL
-Java_org_batgizmo_app_UIModel_00024Companion_nativeSetColourMap(JNIEnv *env, jobject thiz,
+Java_org_batgizmo_app_ColourMapHelper_00024Companion_nativeSetColourMap(JNIEnv *env, jobject thiz,
                                                                 jshortArray colour_map,
                                                                 jint colour_map_size,
                                                                 jshort amplitude_graph_colour) {

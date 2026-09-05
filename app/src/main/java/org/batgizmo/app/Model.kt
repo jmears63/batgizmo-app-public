@@ -185,22 +185,6 @@ class UIModel(application: Application,
             System.loadLibrary("batgizmo-native")
         }
 
-        @OptIn(ExperimentalUnsignedTypes::class)
-        private external fun nativeInitialize(
-            colourMap: ShortArray,
-            mapEntries: Int,
-            amplitudeGraphColour: Short
-        ): Int
-
-        private external fun nativeSetColourMap(
-            colourMap: ShortArray,
-            mapEntries: Int,
-            amplitudeGraphColour: Short
-        ): Int
-
-        /** Index into the colour map used for the amplitude-graph stroke colour. */
-        private const val AMPLITUDE_GRAPH_COLOUR_MAP_INDEX = 180
-
         private const val minSrcDeltaLogical: Float = 0.001f
 
         /**
@@ -547,9 +531,10 @@ class UIModel(application: Application,
 
     private var audioOutputActive = false
 
-    var colourMapSize: Int? = null
-    /** Colour map id currently installed in native code; null until first apply. */
-    private var appliedColourMapId: Int? = null
+    private val colourMapHelper = ColourMapHelper(getApplication())
+    /** Entry count of the colour map currently installed; used by the render pipeline. */
+    val colourMapSize: Int?
+        get() = colourMapHelper.mapSize
 
     // Used to notify back to the UI that an attempt at opening a file
     // is either successful or not.
@@ -816,20 +801,7 @@ class UIModel(application: Application,
         // Initialize the UI to a known mode.
         resetUIMode(requestedMode = AppMode.LIVE)
 
-        val colourMap = loadColourMapRgb565(settings.colourMap)
-        colourMapSize = colourMap.size
-        appliedColourMapId = settings.colourMap
-        Timber.d(
-            "Setting colourMapSize to $colourMapSize on model instance ${
-                System.identityHashCode(this)
-            }."
-        )
-        val rc = nativeInitialize(
-            colourMap,
-            colourMap.size,
-            amplitudeColourFromMap(colourMap)
-        )
-        check(rc == 0) { "native layer initialization must succeed" }
+        colourMapHelper.initialize(settings.colourMap)
 
         /**
          * Get the preference values from storage asynchronously. When the values arrive, they
@@ -843,7 +815,7 @@ class UIModel(application: Application,
             flow.collect { prefs ->
                 mutex.withLock {
                     settings.copyFromPreferences(prefs)
-                    if (applyColourMap(settings.colourMap)) {
+                    if (colourMapHelper.apply(settings.colourMap)) {
                         pipeline?.fullRenderFromSource()
                         triggerBitblt()
                     }
@@ -896,69 +868,12 @@ class UIModel(application: Application,
                 }
                 // Invoke edit on the datastore to update and persist the changes:
                 settingsDataStore.edit { prefs -> settings.copyToPreferences(prefs) }
-                if (colourMapChanged && applyColourMap(settings.colourMap)) {
+                if (colourMapChanged && colourMapHelper.apply(settings.colourMap)) {
                     pipeline?.fullRenderFromSource()
                     triggerBitblt()
                 }
             }
         }
-    }
-
-    /**
-     * Load a colour-map CSV and convert it to RGB565 entries for native code.
-     */
-    private fun loadColourMapRgb565(colourMapId: Int): ShortArray {
-        val filename = Settings.ColourMapOptions.fromValue(colourMapId).assetFilename
-        var mapRows = readColourMap(filename)
-        require(mapRows.size >= 64) { "the colour map contains too few colours" }
-
-        // It's prudent to sort the rows into ascending order:
-        mapRows = mapRows.sortedBy { it[0] as Float }
-
-        val colourMap = ShortArray(mapRows.size)     // JNI doesn't support UShort.
-        for ((i, entry) in mapRows.withIndex()) {
-            val r: Int = entry[1] as Int
-            val g: Int = entry[2] as Int
-            val b: Int = entry[3] as Int
-            colourMap[i] = rgbToRGB565(r, g, b)
-        }
-        return colourMap
-    }
-
-    /**
-     * Install [colourMapId] into Kotlin state and native code.
-     * Caller must hold [mutex]. Returns true if the installed map changed.
-     */
-    private fun applyColourMap(colourMapId: Int): Boolean {
-        if (appliedColourMapId == colourMapId && colourMapSize != null)
-            return false
-
-        val colourMap = loadColourMapRgb565(colourMapId)
-        colourMapSize = colourMap.size
-        appliedColourMapId = colourMapId
-        val rc = nativeSetColourMap(
-            colourMap,
-            colourMap.size,
-            amplitudeColourFromMap(colourMap)
-        )
-        check(rc == 0) { "nativeSetColourMap must succeed" }
-        Timber.d("Applied colour map id=$colourMapId size=$colourMapSize")
-        return true
-    }
-
-    private fun amplitudeColourFromMap(colourMap: ShortArray): Short =
-        colourMap[minOf(AMPLITUDE_GRAPH_COLOUR_MAP_INDEX, colourMap.lastIndex)]
-
-    /**
-     * Convert an 8 bit RGB colour to RGB565.
-     */
-    private fun rgbToRGB565(red: Int, green: Int, blue: Int): Short {
-        val r5 = (red shr 3) and 0x1F   // Convert 8-bit red to 5-bit
-        val g6 = (green shr 2) and 0x3F // Convert 8-bit green to 6-bit
-        val b5 = (blue shr 3) and 0x1F  // Convert 8-bit blue to 5-bit
-
-        val result = ((r5 shl 11) or (g6 shl 5) or b5).toShort() // Pack into 16-bit value
-        return result
     }
 
     val oomMessage = "Your device has insufficient free memory for rendering spectrograms of this size.\n\n"+
@@ -1676,25 +1591,6 @@ class UIModel(application: Application,
         mutableAmplitudeAxisRangeFlow.value = defaultAmplitudeAxisRange
 
         currentFftParameters = defaultFftParameters
-    }
-
-    private fun readColourMap(filename: String): List<Array<Any>> {
-        val context: Context = getApplication()
-
-        val result = mutableListOf<Array<Any>>()
-        context.assets.open(filename).bufferedReader().useLines { lines ->
-            lines.forEach { line ->
-                val values = line.split(",").map { it.trim() }
-                if (values.size == 4) {
-                    val x = values[0].toFloat()
-                    val r = values[1].toInt()
-                    val g = values[2].toInt()
-                    val b = values[3].toInt()
-                    result.add(arrayOf(x, r, g, b))
-                }
-            }
-        }
-        return result
     }
 
     /**
