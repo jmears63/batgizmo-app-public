@@ -22,14 +22,10 @@
 
 package org.batgizmo.app.ui
 
-import android.Manifest
 import android.app.Activity
 import android.content.Context
-import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
-import android.system.ErrnoException
-import android.system.Os
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
@@ -113,12 +109,10 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.ContextCompat
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowHeightSizeClass
 import androidx.window.core.layout.WindowSizeClass
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -133,8 +127,6 @@ import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.LiveAudioStartResult
-import org.batgizmo.app.pipeline.LiveConnectResult
-import org.batgizmo.app.pipeline.LiveStreamErrorResult
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
@@ -145,6 +137,8 @@ import java.util.Locale
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.milliseconds
 
+private typealias LiveMode = LiveSessionController.LiveMode
+
 class SpectrogramUI(
     private val model: UIModel
 ) {
@@ -152,6 +146,16 @@ class SpectrogramUI(
     val localShowHeterodyneReferenceLine = compositionLocalOf<Boolean> { true }
     val localOverlayTextMode = compositionLocalOf<Int> {
         Settings.OverlayTextModeOptions.BASIC.value
+    }
+
+    /**
+     * Possible UI states relating to audio mode.
+     * Note that these are just UI states, not underlying audio processing.
+     */
+    private enum class AudioMode(val value: Int) {
+        OFF(0),
+        CONNECTING(1),
+        ON(2)
     }
 
     // Represent the state of buttons in the UI:
@@ -273,38 +277,23 @@ class SpectrogramUI(
 
     private val audioConfig = AudioConfig()
 
-    /** Set from [Compose] to request [Manifest.permission.RECORD_AUDIO] before internal mic use. */
-    private var openLiveWithPermissions: ((Int?) -> Unit)? = null
-
-    private var pendingLiveInputSourceOverride: Int? = null
-    private var pendingLiveUseSettingsSource: Boolean = false
-
+    private val liveSession by lazy {
+        LiveSessionController(
+            model = model,
+            uiState = uiState,
+            buttonState = buttonState,
+            stopAudioAndResetUi = ::stopAudioAndResetUi,
+            onAudioPlaybackModeReselectionRequired = ::onAudioPlaybackModeReselectionRequired,
+            startAudioNow = ::startAudioNow,
+            audioModeOff = AudioMode.OFF.value,
+            audioModeConnecting = AudioMode.CONNECTING.value,
+        )
+    }
 
     init {
         // Set the initial state:
         spectrogramGraph.reset()
         amplitudeGraph.reset()
-    }
-
-    /**
-     * Possible UI states relating to live mode.
-     * Note that these are just UI states, not underlying USB connection states.
-     */
-    private enum class LiveMode(val value: Int) {
-        OFF(0),
-        CONNECTING(1),
-        STREAMING(2),
-        PAUSED(3)
-    }
-
-    /**
-     * Possible UI states relating to audio mode.
-     * Note that these are just UI states, not underlying audio processing.
-     */
-    private enum class AudioMode(val value: Int) {
-        OFF(0),
-        CONNECTING(1),
-        ON(2)
     }
 
     /**
@@ -324,27 +313,15 @@ class SpectrogramUI(
        Timber.d("SpectrogramUI.Compose called")
 
         val context = LocalContext.current
-        val scope = rememberCoroutineScope()
 
         val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
-            val override = if (pendingLiveUseSettingsSource) null else pendingLiveInputSourceOverride
-            pendingLiveInputSourceOverride = null
-            pendingLiveUseSettingsSource = false
-            if (granted) {
-                model.openLive(::fileWriterErrorHandler, override)
-            } else {
-                buttonState.acquisitionChecked.value = false
-                uiState.liveMode.intValue = LiveMode.OFF.value
-                uiState.errorMessage.value =
-                    "Microphone permission is required to use the internal microphone."
-                uiState.showErrorDialog.value = true
-            }
+            liveSession.onRecordAudioPermissionResult(granted)
         }
 
-        openLiveWithPermissions = { liveInputSourceOverride ->
-            ensureRecordAudioAndOpenLive(
+        liveSession.attachOpenLiveWithPermissions { liveInputSourceOverride ->
+            liveSession.ensureRecordAudioAndOpenLive(
                 context,
                 recordAudioPermissionLauncher,
                 liveInputSourceOverride
@@ -370,7 +347,7 @@ class SpectrogramUI(
         LaunchedEffect(Unit) {
             // Main UI thread. The following suspends waiting for live data open events.
             viewModel.liveConnectFlow.collectLatest { result ->
-                onLiveConnected(result, appMode)
+                liveSession.onLiveConnected(result, appMode)
             }
         }
 
@@ -378,7 +355,7 @@ class SpectrogramUI(
         LaunchedEffect(Unit) {
             // Main UI thread. The following suspends waiting for live data open events.
             viewModel.usbErrorFlow.collectLatest { result ->
-                onUsbError(result)
+                liveSession.onUsbError(result)
             }
         }
 
@@ -421,7 +398,7 @@ class SpectrogramUI(
             connectedLiveInputSource,
             model.settings.liveInputSource
         ) {
-            updateAudioButtonEnabled(appMode.intValue)
+            liveSession.updateAudioButtonEnabled(appMode.intValue)
         }
 
         /**
@@ -755,7 +732,7 @@ class SpectrogramUI(
                     onDismiss = { uiState.showInternalMicFallbackDialog.value = false },
                     onConfirm = { micId ->
                         uiState.showInternalMicFallbackDialog.value = false
-                        switchToInternalMicAndConnect(scope, micId)
+                        liveSession.switchToInternalMicAndConnect(scope, micId)
                     },
                 )
             } else {
@@ -764,7 +741,7 @@ class SpectrogramUI(
                     onDismiss = { uiState.showInternalMicFallbackDialog.value = false },
                     onConfirm = {
                         uiState.showInternalMicFallbackDialog.value = false
-                        switchToInternalMicAndConnect(scope)
+                        liveSession.switchToInternalMicAndConnect(scope)
                     },
                     title = "No USB microphone",
                     message = "No suitable USB microphone was detected. " +
@@ -789,7 +766,7 @@ class SpectrogramUI(
                 onConfirm = {
                     uiState.showHighRateMicOffer.value = false
                     model.dismissHighRateMicOffer(dontShowAgain.value)
-                    acceptHighRateMicOffer(appMode)
+                    liveSession.acceptHighRateMicOffer(appMode)
                 },
                 title = "Bat microphone detected",
                 message = "$product$rateText is connected.\n\n" +
@@ -1098,30 +1075,6 @@ class SpectrogramUI(
             if (!autoHet || localShowHeterodyneReferenceLine.current)
                 heterodyneCursors.Compose()
        }
-    }
-
-    /** Recording needs live data flowing; paused acquisition is not enough. */
-    private fun isLiveRecordingAvailable(appModeInt: Int): Boolean =
-        appModeInt == AppMode.LIVE.value &&
-            uiState.liveMode.intValue == LiveMode.STREAMING.value
-
-    private fun updateRecordingButtonsEnabled(isLiveRecordingAvailable: Boolean) {
-        buttonState.manualRecordingEnabled.value =
-            isLiveRecordingAvailable &&
-                (!buttonState.triggeredRecordingChecked.value ||
-                    buttonState.manualRecordingChecked.value)
-        buttonState.triggeredRecordingEnabled.value =
-            isLiveRecordingAvailable &&
-                (!buttonState.manualRecordingChecked.value ||
-                    buttonState.triggeredRecordingChecked.value)
-    }
-
-    private fun updateAudioButtonEnabled(appModeInt: Int) {
-        val liveRecordingAvailable = isLiveRecordingAvailable(appModeInt)
-        val isViewingAndDataLoaded =
-            appModeInt == AppMode.VIEWER.value && uiState.dataPresent.value
-        buttonState.audioEnabled.value = liveRecordingAvailable || isViewingAndDataLoaded
-        updateRecordingButtonsEnabled(liveRecordingAvailable)
     }
 
     private fun updateHeterodyneUIState() {
@@ -1436,68 +1389,6 @@ class SpectrogramUI(
         }
     }
 
-    private fun acquisitionButtonHandler(scope: CoroutineScope,
-                                         appMode: MutableIntState,
-                                         liveMode: MutableIntState,
-                                         checked: Boolean) {
-        // Assumption: we are already in live mode. The button is disabled
-        // in viewer mode, to avoid the need to asynchronously switch UI mode
-        // and connect to USB in parallel, with the risk of a race.
-        if (appMode.intValue != AppMode.LIVE.value) {
-            Timber.w("Internal error: not in live mode")
-        }
-
-        when (uiState.liveMode.intValue) {
-            LiveMode.OFF.value -> {
-                if (checked) {
-                    Timber.i("Live mode: connecting.")
-
-                    // Start live data acquisition asynchronously:
-                    liveMode.intValue = LiveMode.CONNECTING.value
-                    openLiveCheckingPermissions()
-                }
-                else {
-                    // Unchecked and already OFF, no action.
-                }
-            }
-            LiveMode.CONNECTING.value -> {
-                // Already connecting, nothing to do at present.
-                if (BuildConfig.DEBUG)
-                    Timber.d("Live mode: currently connecting, no action taken.")
-                /*
-                if (!checked) {
-                }
-                 */
-            }
-            LiveMode.STREAMING.value -> {
-                if (!checked) {
-                    // Currently streaming data, so we need to pause:
-                    Timber.i("Live mode: pausing.")
-                    uiState.liveMode.intValue = LiveMode.PAUSED.value
-                    model.pauseLiveStream()
-
-                    // Do an auto BnC etc whenever acquisition is paused.
-                    model.doColourMappingAndRender(model.settings.autoBnCEnabledLive,
-                        model.settings.autoBaselineEnabled)
-                }
-                else {
-                    // Checked and already streaming, no action.
-                }
-            }
-            LiveMode.PAUSED.value -> {
-                if (checked) {
-                    // Currently paused, so we need to resume:
-                    Timber.i("Live mode: resuming from pause.")
-                    uiState.liveMode.intValue = LiveMode.STREAMING.value
-                    model.resumeLiveStream()
-                }
-                else {
-                    // Unchecked and already paused, no action.
-                }
-            }
-        }
-    }
-
     private fun stopAudioAndResetUi() {
         model.stopAudio()
         uiState.audioMode.intValue = AudioMode.OFF.value
@@ -1632,7 +1523,7 @@ class SpectrogramUI(
                 }
 
                 // Start/stop acquisition as required:
-                acquisitionButtonHandler(scope, appMode, liveMode, checked)
+                liveSession.acquisitionButtonHandler(appMode, liveMode, checked)
             }
         )
 
@@ -1843,112 +1734,6 @@ class SpectrogramUI(
         }
     }
 
-    private fun openLiveCheckingPermissions(liveInputSourceOverride: Int? = null) {
-        openLiveWithPermissions?.invoke(liveInputSourceOverride)
-            ?: model.openLive(::fileWriterErrorHandler, liveInputSourceOverride)
-    }
-
-    private fun ensureRecordAudioAndOpenLive(
-        context: Context,
-        permissionLauncher: ManagedActivityResultLauncher<String, Boolean>,
-        liveInputSourceOverride: Int?,
-    ) {
-        val liveInputSource = liveInputSourceOverride ?: model.settings.liveInputSource
-        if (liveInputSource != Settings.LiveInputSourceOptions.PHONE_MIC.value) {
-            model.openLive(::fileWriterErrorHandler, liveInputSourceOverride)
-            return
-        }
-
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            model.openLive(::fileWriterErrorHandler, liveInputSourceOverride)
-            return
-        }
-
-        pendingLiveUseSettingsSource = liveInputSourceOverride == null
-        pendingLiveInputSourceOverride = liveInputSourceOverride
-        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-    }
-
-    private fun onLiveConnected(
-        lcr: LiveConnectResult,
-        appMode: MutableIntState
-    ) {
-
-        Timber.i("onLiveConnected called: ${lcr}")
-
-        if (lcr.connectedOK) {
-            uiState.liveMode.intValue = LiveMode.STREAMING.value
-
-            // buttonState.slidersButtonEnabled.value = true
-            uiState.dataPresent.value = true
-
-            // The title bar contains the microphone type. In an ideal world we would
-            // sanitize the text received back from the microphone.
-            val product = lcr.productName ?: "USB Device"
-            var rateText = ""
-            val hz = lcr.sampleRate
-            if (hz != null) {
-                rateText = String.format(Locale.getDefault(), " @ %.1f kHz", hz / 1000f)
-                uiState.samplingRateHz.value = hz
-                onAudioPlaybackModeReselectionRequired(hz)
-            }
-            else {
-                uiState.samplingRateHz.value = null
-            }
-            var manufacturer = ""
-            /*  The manufacturer name is often included in the product name.
-            lcr.manufacturerName?.let {
-                manufacturer = String.format("%s ", it)
-            }
-             */
-            uiState.title.value = "$manufacturer$product$rateText"
-
-            if (model.consumePendingStartAudioAfterLiveConnect()) {
-                buttonState.audioChecked.value = true
-                uiState.audioMode.intValue = AudioMode.CONNECTING.value
-                // Auto-start from the high-rate mic offer: use current settings, skip the modal.
-                uiState.audioSettingsAlreadyShown.value = true
-                startAudioNow(appMode)
-            }
-        } else {
-            // Connected failed so revert the UI state:
-            buttonState.acquisitionChecked.value = false
-            uiState.liveMode.intValue = LiveMode.OFF.value
-            uiState.title.value = null
-            uiState.samplingRateHz.value = null
-            model.consumePendingStartAudioAfterLiveConnect()
-            if (lcr.offerInternalMicFallback) {
-                uiState.showInternalMicFallbackDialog.value = true
-            } else if (lcr.errorMessage != null) {
-                val msg = lcr.errorMessage
-                uiState.errorMessage.value = "Unable to connect live.\n\n$msg"
-                uiState.showErrorDialog.value = true
-            }
-        }
-    }
-
-    private fun switchToInternalMicAndConnect(scope: CoroutineScope, micId: String? = null) {
-        scope.launch {
-            // Persist the chosen microphone (awaited) before connecting so the fallback uses it.
-            if (micId != null) {
-                model.updateStoredSettings(model.settings.copy(internalMicId = micId))
-            }
-            uiState.liveMode.intValue = LiveMode.CONNECTING.value
-            buttonState.acquisitionChecked.value = true
-            openLiveCheckingPermissions(Settings.LiveInputSourceOptions.PHONE_MIC.value)
-        }
-    }
-
-    private fun acceptHighRateMicOffer(appMode: MutableIntState) {
-        model.armStartAudioAfterLiveConnect()
-        appMode.intValue = AppMode.LIVE.value
-        uiState.liveMode.intValue = LiveMode.CONNECTING.value
-        buttonState.acquisitionChecked.value = true
-        openLiveCheckingPermissions(Settings.LiveInputSourceOptions.USB.value)
-    }
-
     private fun onLiveAudioStarted(
         asr: LiveAudioStartResult,
         appMode: MutableIntState
@@ -1961,42 +1746,6 @@ class SpectrogramUI(
             // Connected failed so revert the UI state:
             uiState.audioMode.intValue = AudioMode.OFF.value
         }
-    }
-
-    /**
-     * This method is called there is an error subsequent to successful
-     * connection to the USB microphone.
-     */
-    private fun onUsbError(result: LiveStreamErrorResult) {
-        model.closePipeline()   // Idempotent. Also stops audio and file writing.
-
-        uiState.liveMode.intValue = LiveMode.OFF.value
-        uiState.audioMode.intValue = AudioMode.OFF.value
-        // Force the audio config model to be shown again if the microphone has been removed, so
-        // that frequency sanity checks can be applied for the new microphone:
-        uiState.audioSettingsAlreadyShown.value = false
-        uiState.dataPresent.value = false
-
-        buttonState.acquisitionChecked.value = false
-        buttonState.manualRecordingEnabled.value = false
-        buttonState.triggeredRecordingChecked.value = false
-        buttonState.audioEnabled.value = false
-        buttonState.slidersButtonEnabled.value = false
-        buttonState.slidersButtonChecked.value = false
-
-
-        uiState.title.value = null
-
-        var errnoText = try {
-            Os.strerror(result.errno)
-        }
-        catch (e: ErrnoException) {
-            "Unknown errno"
-        }
-
-        uiState.errorMessage.value = "USB microphone communication error - please check that it is correctly plugged in.\n\n" +
-                "errno = ${result.errno}: $errnoText"
-        uiState.showErrorDialog.value = true
     }
 
     fun onSettingsUpdate(newSettings: Settings, previousSettings: Settings?) {
@@ -2017,7 +1766,7 @@ class SpectrogramUI(
             if (newSettings.liveInputSource != prev.liveInputSource &&
                 uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
             ) {
-                updateAudioButtonEnabled(AppMode.LIVE.value)
+                liveSession.updateAudioButtonEnabled(AppMode.LIVE.value)
             }
             if (newSettings.autoHeterodyneLoMinKhz != prev.autoHeterodyneLoMinKhz ||
                 newSettings.autoHeterodyneLoMaxKhz != prev.autoHeterodyneLoMaxKhz ||
@@ -2044,11 +1793,6 @@ class SpectrogramUI(
             settings.autoBnCEnabledLive
         else
             settings.autoBnCEnabledViewer
-
-    private fun closeLive() {
-        stopAudioAndResetUi()
-        model.closePipeline()   // Idempotent.
-    }
 
     private fun closeViewer() {
         // Timber.d("closeViewer called")
@@ -2079,7 +1823,7 @@ class SpectrogramUI(
         resetUI()
 
         if (previousMode == AppMode.LIVE.value) {
-            closeLive()
+            liveSession.closeLive()
         }
 
         if (previousMode == AppMode.VIEWER.value) {
@@ -2103,7 +1847,7 @@ class SpectrogramUI(
         }
 
         if (previousMode == AppMode.LIVE.value) {
-            closeLive()
+            liveSession.closeLive()
         }
 
         buttonState.acquisitionEnabled.value = true
@@ -2114,20 +1858,7 @@ class SpectrogramUI(
         model.locationTracker.startPeriodicUpdates()
 
         if (streaming)
-            openLiveCheckingPermissions()
-    }
-    
-    private fun fileWriterErrorHandler(msg: String) {
-        buttonState.manualRecordingChecked.value = false
-        buttonState.triggeredRecordingChecked.value = false
-        updateRecordingButtonsEnabled(isLiveRecordingAvailable(AppMode.LIVE.value))
-
-        /*  Removed for now, makes for a confusing UX.
-        uiState.showErrorDialog.value = true
-        uiState.errorMessage.value = msg
-
-        Log.e(logTag, msg)
-         */
+            liveSession.openLiveCheckingPermissions()
     }
 }
 
