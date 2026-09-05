@@ -79,7 +79,6 @@ import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
-import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.system.measureTimeMillis
 
@@ -203,11 +202,6 @@ class UIModel(application: Application,
         private const val AMPLITUDE_GRAPH_COLOUR_MAP_INDEX = 180
 
         private const val minSrcDeltaLogical: Float = 0.001f
-
-        /** Auto-het reference EWMA time constant (seconds). */
-        private const val AUTO_HET_REF_TAU_S = 0.5f
-        private const val AUTO_HET_OFFSET_HZ = 500f
-        private const val AUTO_HET_DEFAULT_HZ = 50_000f
 
         /**
          * Make sure the supplied inner range is at least minSrcDeltaLogical, and doesn't
@@ -551,31 +545,7 @@ class UIModel(application: Application,
     private val audioProgressChannel = Channel<Int>(Channel.CONFLATED)
     val audioProgressFlow = audioProgressChannel.receiveAsFlow()
 
-    /**
-     * Auto-tuned heterodyne: tracked LO in kHz for the spectrogram cursor (null when inactive).
-     */
-    private val mutableAutoHeterodyneRefkHz = MutableStateFlow<Int?>(null)
-    val autoHeterodyneRefkHzFlow: StateFlow<Int?> = mutableAutoHeterodyneRefkHz.asStateFlow()
-
     private var audioOutputActive = false
-    private var autoHetSmoothedHz: Float? = null
-    private val autoHetActivity = AutoHeterodyneActivityTracker()
-    /** Last spectrogram time bucket processed by the activity tracker. */
-    private var autoHetLastProcessedBucket: Int? = null
-    /** Viewer: skip enqueue until the playhead enters a new time bucket. */
-    private var autoHetLastEnqueuedBucket: Int? = null
-    private var autoHetViewerStride: Int? = null
-    private var autoHetViewerRawOffset: Int? = null
-    private var autoHetViewerTimeBucketCount: Int? = null
-    private val autoHetWorkChannel = Channel<AutoHetWork>(Channel.BUFFERED)
-    private var autoHetWorkerJob: Job? = null
-    /** Serializes activity/reference updates. */
-    private val autoHetMutex = Mutex()
-
-    private sealed interface AutoHetWork {
-        data class TimeBuckets(val range: IntRange) : AutoHetWork
-        data class ViewerSample(val sampleIndex: Int) : AutoHetWork
-    }
 
     var colourMapSize: Int? = null
     /** Colour map id currently installed in native code; null until first apply. */
@@ -809,6 +779,22 @@ class UIModel(application: Application,
     // pipeline potentially treading on the heels of the previous one@
     var pipelineCloseJob: Job? = null
 
+    /**
+     * Auto-tuned heterodyne orchestration (activity tracking, LO smoothing, worker).
+     * Declared after [usbService] / [mutex] so apply-LO can use both.
+     */
+    private val autoHeterodyne = AutoHeterodyneController(
+        scope = viewModelScope,
+        pipeline = { pipeline },
+        settings = { settings },
+        isAudioOutputActive = { audioOutputActive },
+        applyHeterodyneLo = { refkHz ->
+            mutex.withLock {
+                usbService.setHeterodyne(refkHz, null)
+            }
+        }
+    )
+    val autoHeterodyneRefkHzFlow: StateFlow<Int?> = autoHeterodyne.refkHzFlow
 
     // Location things:
     private val locationMutableFlow = MutableStateFlow<Location?>(null)
@@ -1339,9 +1325,9 @@ class UIModel(application: Application,
                         )
                 val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
                 if (isAutoHet)
-                    resetAutoHeterodyneTracker()
+                    autoHeterodyne.resetTracker()
                 val heterodyne1kHz =
-                    if (isAutoHet) autoHeterodyneInitialRefkHz()
+                    if (isAutoHet) autoHeterodyne.initialRefkHz()
                     else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
                 val heterodyne2kHz =
                     if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
@@ -1361,7 +1347,7 @@ class UIModel(application: Application,
                         )
                         audioOutputActive = true
                         if (isAutoHet)
-                            mutableAutoHeterodyneRefkHz.value = heterodyne1kHz
+                            autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
                         audioStartResult = LiveAudioStartResult(startedOK = true)
                     }
 
@@ -1378,7 +1364,7 @@ class UIModel(application: Application,
                         micCaptureService.liveAudioMonitorEnabled = started
                         audioOutputActive = started
                         if (started && isAutoHet)
-                            mutableAutoHeterodyneRefkHz.value = heterodyne1kHz
+                            autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
                         audioStartResult = LiveAudioStartResult(startedOK = started)
                     }
 
@@ -1399,8 +1385,8 @@ class UIModel(application: Application,
                     pipeline?.sampleRateHz() ?: return@launch
                 )
             ) {
-                refreshAutoHetViewerCache()
-                startAutoHetWorker()
+                autoHeterodyne.refreshViewerCache()
+                autoHeterodyne.startWorker()
             }
 
             Timber.i("startAudio end: runtime.{maxMemory, totalMemory, freeMemory) = " +
@@ -1436,9 +1422,9 @@ class UIModel(application: Application,
                             )
                     val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
                     if (isAutoHet)
-                        resetAutoHeterodyneTracker()
+                        autoHeterodyne.resetTracker()
                     val heterodyne1kHz =
-                        if (isAutoHet) autoHeterodyneInitialRefkHz()
+                        if (isAutoHet) autoHeterodyne.initialRefkHz()
                         else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
                     usbService.startAudioFromBuffer(
                         heterodyne1kHz,
@@ -1459,7 +1445,7 @@ class UIModel(application: Application,
 
                     audioOutputActive = true
                     if (isAutoHet)
-                        mutableAutoHeterodyneRefkHz.value = heterodyne1kHz
+                        autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
                     audioStartResult = LiveAudioStartResult(startedOK = true)
                 }
             }
@@ -1472,18 +1458,18 @@ class UIModel(application: Application,
             if (audioOutputActive &&
                 settings.isAutoTunedHeterodynePlayback(sampleRateHz)
             ) {
-                refreshAutoHetViewerCache()
-                startAutoHetWorker()
+                autoHeterodyne.refreshViewerCache()
+                autoHeterodyne.startWorker()
             }
         }
     }
 
     fun stopAudio() {
         viewModelScope.launch(Dispatchers.Default) {
-            stopAutoHetWorker()
+            autoHeterodyne.stopWorker()
             mutex.withLock {
                 audioOutputActive = false
-                resetAutoHeterodyneTracker()
+                autoHeterodyne.resetTracker()
                 micCaptureService.liveAudioMonitorEnabled = false
                 usbService.stopAudio()
             }
@@ -1645,200 +1631,12 @@ class UIModel(application: Application,
         }
     }
 
-    private suspend fun resetAutoHeterodyneTracker() {
-        autoHetMutex.withLock {
-            autoHetSmoothedHz = null
-            mutableAutoHeterodyneRefkHz.value = null
-            autoHetLastProcessedBucket = null
-            autoHetLastEnqueuedBucket = null
-            autoHetActivity.reset()
-        }
-    }
-
-    /** Clear activity state after FFT/zoom changes without dropping the current LO. */
-    private suspend fun resetAutoHeterodyneActivityState() {
-        autoHetMutex.withLock {
-            autoHetLastProcessedBucket = null
-            autoHetLastEnqueuedBucket = null
-            autoHetActivity.reset()
-        }
-    }
-
-    private suspend fun refreshAutoHetViewerCache() {
-        val mapping = pipeline?.spectrogramTimeMapping() ?: return
-        autoHetViewerStride = mapping.fftStride
-        autoHetViewerRawOffset = mapping.rawOffsetToPage
-        autoHetViewerTimeBucketCount = mapping.timeBucketCount
-    }
-
-    private fun viewerBucketForSample(sampleIndex: Int): Int? {
-        val stride = autoHetViewerStride ?: return null
-        val offset = autoHetViewerRawOffset ?: return null
-        val count = autoHetViewerTimeBucketCount ?: return null
-        return ((sampleIndex - offset) / stride).coerceIn(0, count - 1)
-    }
-
-    private fun startAutoHetWorker() {
-        if (autoHetWorkerJob?.isActive == true)
-            return
-        autoHetWorkerJob = viewModelScope.launch(
-            Dispatchers.Default + CoroutineName("autoHetWorker")
-        ) {
-            for (work in autoHetWorkChannel) {
-                when (work) {
-                    is AutoHetWork.TimeBuckets ->
-                        processAutoHeterodyneTimeBuckets(work.range)
-                    is AutoHetWork.ViewerSample -> {
-                        val pl = pipeline ?: continue
-                        val bucket =
-                            pl.timeBucketForRawSampleIndex(work.sampleIndex) ?: continue
-                        val buckets = autoHetMutex.withLock {
-                            val last = autoHetLastProcessedBucket
-                            when {
-                                last != null && bucket < last -> bucket..bucket
-                                last != null && bucket > last -> (last + 1)..bucket
-                                else -> bucket..bucket
-                            }
-                        }
-                        processAutoHeterodyneTimeBuckets(buckets)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun stopAutoHetWorker() {
-        autoHetWorkerJob?.cancel()
-        autoHetWorkerJob = null
-        drainChannel(autoHetWorkChannel)
-        autoHetLastEnqueuedBucket = null
-        autoHetViewerStride = null
-        autoHetViewerRawOffset = null
-        autoHetViewerTimeBucketCount = null
-    }
-
-    private fun autoHeterodyneActivitySearchBandHz(): Pair<Float, Float> =
-        Settings.AUTO_HET_LO_LIMIT_MIN_KHZ * 1000f to
-            Settings.AUTO_HET_LO_LIMIT_MAX_KHZ * 1000f
-
-    private fun autoHeterodyneSpanFilterBandHz(): Pair<Float, Float> {
-        val (minKhz, maxKhz) = settings.normalizedAutoHeterodyneLoRange()
-        return minKhz * 1000f to maxKhz * 1000f
-    }
-
-    private fun autoHeterodyneInitialRefkHz(): Int {
-        val defaultLo =
-            ((AUTO_HET_DEFAULT_HZ - AUTO_HET_OFFSET_HZ) / 1000f).roundToInt()
-        val maxkHz = ((pipeline?.sampleRateHz() ?: 384_000) / 2000) - 1
-        return defaultLo.coerceAtMost(maxkHz)
-    }
-
-    /**
-     * Live path: after each spectrogram slice, update the auto-tuned LO from new time buckets.
-     */
     fun onLiveSpectrumBucketsForAutoHeterodyne(buckets: IntRange) {
-        if (!audioOutputActive)
-            return
-        val sampleRateHz = pipeline?.sampleRateHz() ?: return
-        if (!settings.isAutoTunedHeterodynePlayback(sampleRateHz))
-            return
-        if (buckets.isEmpty())
-            return
-
-        autoHetWorkChannel.trySend(AutoHetWork.TimeBuckets(buckets))
+        autoHeterodyne.onLiveSpectrumBuckets(buckets)
     }
 
-    /**
-     * Viewer path: drive auto-tuned LO from the spectrogram column under the playhead.
-     */
     fun updateAutoHeterodyneAtRawSample(sampleIndex: Int) {
-        if (!audioOutputActive)
-            return
-        val sampleRateHz = pipeline?.sampleRateHz() ?: return
-        if (!settings.isAutoTunedHeterodynePlayback(sampleRateHz))
-            return
-
-        val bucket = viewerBucketForSample(sampleIndex)
-        if (bucket != null) {
-            if (bucket == autoHetLastEnqueuedBucket)
-                return
-            autoHetLastEnqueuedBucket = bucket
-        }
-        autoHetWorkChannel.trySend(AutoHetWork.ViewerSample(sampleIndex))
-    }
-
-    private suspend fun processAutoHeterodyneTimeBuckets(buckets: IntRange) {
-        val refkHz = autoHetMutex.withLock {
-            val pl = pipeline ?: return
-            val dt = pl.transformedTimeIntervalSeconds() ?: return
-            if (dt <= 0f)
-                return
-            val (minHz, maxHz) = autoHeterodyneActivitySearchBandHz()
-            val (filterMinHz, filterMaxHz) = autoHeterodyneSpanFilterBandHz()
-            val bucketList = buckets.toList()
-            if (bucketList.isEmpty())
-                return
-
-            val geo = pl.frequencyBandGeometry(minHz, maxHz) ?: return
-            autoHetActivity.ensureGeometry(
-                geo.bandBins, geo.minFreqBucket, geo.dfHz, dt
-            )
-            val band = autoHetActivity.bandScratch(geo.bandBins)
-
-            var lastRef: Int? = null
-            for (bucket in bucketList) {
-                val lastBucket = autoHetLastProcessedBucket
-                if (lastBucket != null && bucket < lastBucket) {
-                    // Looped viewer (or other rewind): tracker state must match column data.
-                    autoHetActivity.reset()
-                    autoHetLastProcessedBucket = null
-                    autoHetLastEnqueuedBucket = null
-                } else if (lastBucket != null && bucket <= lastBucket) {
-                    continue
-                }
-
-                pl.fillFrequencyBand(bucket, minHz, maxHz, band) ?: continue
-                val obs = autoHetActivity.processColumn(
-                    band, dt, settings.autoHeterodyneMode, filterMinHz, filterMaxHz
-                )
-                autoHetLastProcessedBucket = bucket
-                if (obs != null)
-                    lastRef = applyAutoHeterodyneObservation(obs.hz, dt)
-            }
-            lastRef
-        } ?: return
-
-        mutex.withLock {
-            usbService.setHeterodyne(refkHz, null)
-        }
-    }
-
-    /**
-     * EWMA reference from activity-span observation (τ = [AUTO_HET_REF_TAU_S]).
-     * LO = reference − 500 Hz. Caller must hold [autoHetMutex]. Returns LO kHz.
-     */
-    private fun applyAutoHeterodyneObservation(
-        observationHz: Float,
-        dtSeconds: Float
-    ): Int? {
-        val obsHz = observationHz
-        val prev = autoHetSmoothedHz
-        val smoothed =
-            if (prev == null)
-                obsHz
-            else {
-                val alpha = (1.0 - exp((-dtSeconds / AUTO_HET_REF_TAU_S).toDouble())).toFloat()
-                    .coerceIn(0f, 1f)
-                alpha * obsHz + (1f - alpha) * prev
-            }
-        autoHetSmoothedHz = smoothed
-
-        val maxkHz = ((pipeline?.sampleRateHz() ?: 384_000) / 2000) - 1
-        val refkHz = ((smoothed - AUTO_HET_OFFSET_HZ) / 1000f).roundToInt()
-            .coerceAtMost(maxkHz)
-
-        mutableAutoHeterodyneRefkHz.value = refkHz
-        return refkHz
+        autoHeterodyne.updateAtRawSample(sampleIndex)
     }
 
     fun pipelineSampleRateHz(): Int? = pipeline?.sampleRateHz()
@@ -2005,7 +1803,7 @@ class UIModel(application: Application,
                     if (newSettings.autoHeterodyneLoMinKhz != it.autoHeterodyneLoMinKhz ||
                         newSettings.autoHeterodyneLoMaxKhz != it.autoHeterodyneLoMaxKhz
                     ) {
-                        resetAutoHeterodyneActivityState()
+                        autoHeterodyne.resetActivityState()
                     }
                 }
 
@@ -2155,8 +1953,8 @@ class UIModel(application: Application,
                         sampleRateHz != null &&
                         settings.isAutoTunedHeterodynePlayback(sampleRateHz)
                     ) {
-                        resetAutoHeterodyneActivityState()
-                        refreshAutoHetViewerCache()
+                        autoHeterodyne.resetActivityState()
+                        autoHeterodyne.refreshViewerCache()
                     }
                 }
 
