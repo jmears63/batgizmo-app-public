@@ -1671,17 +1671,17 @@ class SpectrogramUI(
         stopAudioAndResetUi()
         val filename = DocumentHelper.getFileName(context, uriData.uri)
 
-        openFile(uriData.uri, filename ?: "(unknown)")
+        openFile(uriData.uri, filename ?: "(unknown)", waitForPaneSizesToSettle = true)
 
         buttonState.previousFileEnabled.value = uriData.previousAvailable
         buttonState.nextFileEnabled.value = uriData.nextAvailable
     }
 
-    private fun openFile(uri: Uri, filename: String) {
+    private fun openFile(uri: Uri, filename: String, waitForPaneSizesToSettle: Boolean = false) {
         uiState.processingFlag.value = true
         uiState.rawPageRange.value = null
         uiState.pagingState.value = null
-        model.openFile(uri, filename)
+        model.openFile(uri, filename, waitForPaneSizesToSettle)
     }
 
     private fun onViewingFileOpened(

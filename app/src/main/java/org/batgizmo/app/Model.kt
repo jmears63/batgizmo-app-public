@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.ColourMapStep
 import org.batgizmo.app.pipeline.FileViewerPipeline
@@ -356,6 +357,11 @@ class UIModel(application: Application,
             )
 
             pipeline = p
+            rememberPipelineBuild(
+                fftParameters,
+                spectrogramSizeDp ?: defaultSize,
+                amplitudeSizeDp
+            )
             setConnectedLiveInputSource(liveInputSourceSetting)
 
             if (resetLiveVisibleRanges) {
@@ -579,6 +585,57 @@ class UIModel(application: Application,
     // How long to wait for pane sizes to settle before rebuilding, long enough to absorb a
     // transient system relayout (e.g. the microphone privacy indicator appearing then leaving):
     private val sizeChangeDebounceMs = 1200L
+    // Cap how long file-open will wait for that quiet period (picker return can bounce a few times):
+    private val paneSizeSettleTimeoutMs = 4000L
+
+    /**
+     * After open/live pipeline build: record the FFT params and pane sizes actually used, and
+     * cancel any pending size-debounce job. Otherwise open can race with layout bounce:
+     * build on a mid-bounce size while [lastBuiltSpectrogramSizeDp] still matches the eventual
+     * settled size, so the debounce skips reload and a bad first render sticks.
+     */
+    private fun rememberPipelineBuild(
+        fftParameters: AbstractPipeline.FftParameters,
+        builtSpectrogramSizeDp: DpSize,
+        builtAmplitudeSizeDp: DpSize?
+    ) {
+        sizeChangeJob?.cancel()
+        sizeChangeJob = null
+        currentFftParameters = fftParameters
+        lastBuiltSpectrogramSizeDp = builtSpectrogramSizeDp
+        lastBuiltAmplitudeSizeDp = builtAmplitudeSizeDp
+    }
+
+    /**
+     * Wait until spectrogram/amplitude pane sizes have been unchanged for [sizeChangeDebounceMs]
+     * (same quiet period as bounce handling), or until [paneSizeSettleTimeoutMs] elapses.
+     * Used before opening a file after the document picker, when returning often triggers a
+     * layout bounce that would otherwise race the first render.
+     */
+    private suspend fun awaitPaneSizesSettled() {
+        val completed = withTimeoutOrNull(paneSizeSettleTimeoutMs) {
+            while (true) {
+                val (spec, amp) = mutex.withLock {
+                    Pair(spectrogramSizeDp, amplitudeSizeDp)
+                }
+                delay(sizeChangeDebounceMs)
+                val settled = mutex.withLock {
+                    spectrogramSizeDp != null &&
+                        spectrogramSizeDp == spec &&
+                        amplitudeSizeDp == amp
+                }
+                if (settled) {
+                    Timber.d("Pane sizes settled: $spec, $amp")
+                    return@withTimeoutOrNull true
+                }
+                Timber.d("Pane sizes still changing; waiting again")
+            }
+            @Suppress("UNREACHABLE_CODE")
+            false
+        }
+        if (completed != true)
+            Timber.w("Timed out waiting for pane sizes to settle; opening anyway")
+    }
 
     // Single global instance of the bitmap holder we will use for rendering the
     // spectrogram and amplitude:
@@ -816,13 +873,22 @@ class UIModel(application: Application,
      *
      * This method leaves the file open if it is successful, so that data can be read from it.
      * It can be closes by calling reset().
+     *
+     * @param waitForPaneSizesToSettle if true, wait for spectrogram pane sizes to stop changing
+     *   (layout bounce after the document picker) before building the pipeline. Not needed for
+     *   next/previous within an already-stable viewer layout.
      */
-    fun openFile(uri: Uri, filename: String) {
+    fun openFile(uri: Uri, filename: String, waitForPaneSizesToSettle: Boolean = false) {
         val context: Context = getApplication()
 
         val model = this
         var result: OpenWavFileResult? = null
         viewModelScope.launch(Dispatchers.Default + CoroutineName("openFile coroutine")) {
+
+            if (waitForPaneSizesToSettle) {
+                Timber.d("openFile: waiting for pane sizes to settle ($filename)")
+                awaitPaneSizesSettled()
+            }
 
             // Allow any previous pipeline async cleanup to complete before we create a new one,
             // to avoid overlap and races:
@@ -859,9 +925,10 @@ class UIModel(application: Application,
                         wfi.numChannels.toInt(), wfi.bytesPerValue * 8
                     )
                     // Assume square if we don't know yet:
+                    val builtSpectrogramSizeDp = spectrogramSizeDp ?: DpSize(100.dp, 100.dp)
                     val fftParameters = p.getDefaultFftParameters(
                         wfi.sampleRate,
-                        spectrogramSizeDp ?: DpSize(100.dp, 100.dp)
+                        builtSpectrogramSizeDp
                     )
 
                     // Do a full render from file:
@@ -871,6 +938,13 @@ class UIModel(application: Application,
                     )
 
                     pipeline = p
+                    // Align last-built sizes with this render so a bounce that settles to a
+                    // different size still reloads, instead of skipping as a no-op bounce:
+                    rememberPipelineBuild(
+                        fftParameters,
+                        builtSpectrogramSizeDp,
+                        amplitudeSizeDp
+                    )
                     wavFileInfo.set(wfi)
                     // This has a side affect of updating the axis ranges in the UI:
                     internalSetSpectrogramVisibleRange(FloatRange(0f, 1f), FloatRange(0f, 1f))
