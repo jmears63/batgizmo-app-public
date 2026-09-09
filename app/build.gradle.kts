@@ -20,7 +20,7 @@ android {
         minSdk = 29
         targetSdk = 37
         versionCode = 31
-        versionName = "2.1.0"
+        versionName = "feature/bbn"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
