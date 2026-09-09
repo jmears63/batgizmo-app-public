@@ -53,7 +53,7 @@ class AutoHeterodyneController(
 ) {
     companion object {
         /** Auto-het reference EWMA time constant (seconds). */
-        private const val REF_TAU_S = 0.5f
+        private const val REF_TAU_S = 0.3f
         private const val OFFSET_HZ = 500f
         private const val DEFAULT_HZ = 50_000f
     }

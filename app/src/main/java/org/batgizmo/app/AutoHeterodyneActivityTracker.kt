@@ -33,12 +33,13 @@ import kotlin.math.sqrt
  * Auto heterodyne activity tracker: per-bin EWMA mean and variance of linear
  * power (τ = [ACTIVITY_TAU_S]). Active bins have σ/μ above [MIN_COEFF_VAR].
  * Contiguous active runs in one time column are activity spans; spans outside
- * [rangeMinHz, rangeMaxHz] are truncated or discarded. The span with the highest
- * peak activity among surviving spans wins. Observation within that span depends on
+ * [rangeMinHz, rangeMaxHz] are truncated or discarded. Span choice depends on
  * [Settings.AutoHeterodyneModeOptions]:
- * - Hockey Stick: lowest-frequency bin
- * - Rhinolophus: highest-frequency bin
- * - Generic/Myotis: peak-activity bin
+ * - Hockey Stick: among spans near the column's peak activity, the lowest-
+ *   frequency span (observation = its low edge)
+ * - Rhinolophus: among spans near the column's peak activity, the highest-
+ *   frequency span (observation = its high edge)
+ * - Generic/Myotis: highest peak-activity span (observation = peak-activity bin)
  */
 class AutoHeterodyneActivityTracker {
     data class Observation(val hz: Float, val db: Float, val coeffVar: Float)
@@ -101,7 +102,7 @@ class AutoHeterodyneActivityTracker {
 
     /**
      * Ingest one spectrogram column ([band] in dB). Returns an observation from
-     * the highest-peak activity span per [mode], or null if none / not warm.
+     * the mode-selected activity span, or null if none / not warm.
      */
     fun processColumn(
         band: FloatArray,
@@ -147,8 +148,10 @@ class AutoHeterodyneActivityTracker {
 
     /**
      * Contiguous active bins form spans. Spans outside [rangeMinHz, rangeMaxHz] are
-     * truncated to the overlap or discarded. Among surviving spans, choose the one
-     * with the highest peak σ/μ; pick the observation bin within that span per [mode].
+     * truncated to the overlap or discarded. Generic/Myotis pick the highest peak
+     * σ/μ. Hockey Stick / Rhinolophus first require peak σ/μ within
+     * [EDGE_SPAN_CV_RATIO] of the column max, then pick the lowest / highest
+     * frequency span so weak low- or high-pitched noise does not win.
      */
     private fun selectObservationFromActivitySpans(
         band: FloatArray,
@@ -157,10 +160,8 @@ class AutoHeterodyneActivityTracker {
         rangeMinHz: Float,
         rangeMaxHz: Float
     ): Observation? {
-        var bestPeakCv = MIN_COEFF_VAR
-        var bestObsF = -1
-        var bestObsCv = 0f
-        var bestObsDb = Float.NEGATIVE_INFINITY
+        val modeValue = Settings.AutoHeterodyneModeOptions.coerce(mode)
+        val spans = ArrayList<SpanCandidate>(8)
 
         var spanStart = -1
         var spanEnd = -1
@@ -208,28 +209,13 @@ class AutoHeterodyneActivityTracker {
                 truncEndDb = band[f]
             }
 
-            if (truncStart < 0)
-                return
-
-            if (truncPeakCv > bestPeakCv) {
-                bestPeakCv = truncPeakCv
-                when (Settings.AutoHeterodyneModeOptions.coerce(mode)) {
-                    Settings.AutoHeterodyneModeOptions.HOCKEY_STICK.value -> {
-                        bestObsF = truncStart
-                        bestObsCv = truncStartCv
-                        bestObsDb = truncStartDb
-                    }
-                    Settings.AutoHeterodyneModeOptions.RHINOLOPHUS.value -> {
-                        bestObsF = truncEnd
-                        bestObsCv = truncEndCv
-                        bestObsDb = truncEndDb
-                    }
-                    else -> {
-                        bestObsF = truncPeakF
-                        bestObsCv = truncPeakCv
-                        bestObsDb = truncPeakDb
-                    }
-                }
+            if (truncStart >= 0) {
+                spans.add(
+                    SpanCandidate(
+                        truncStart, truncEnd, truncPeakF, truncPeakCv,
+                        truncStartCv, truncStartDb, truncEndCv, truncEndDb, truncPeakDb
+                    )
+                )
             }
             spanStart = -1
             spanEnd = -1
@@ -259,14 +245,60 @@ class AutoHeterodyneActivityTracker {
         }
         closeSpan()
 
-        if (bestObsF < 0)
+        if (spans.isEmpty())
             return null
+
+        var maxPeakCv = 0f
+        for (s in spans) {
+            if (s.peakCv > maxPeakCv)
+                maxPeakCv = s.peakCv
+        }
+        val edgeCvFloor = maxPeakCv * EDGE_SPAN_CV_RATIO
+
+        var best: SpanCandidate? = null
+        for (s in spans) {
+            val current = best
+            val better = when (modeValue) {
+                Settings.AutoHeterodyneModeOptions.HOCKEY_STICK.value ->
+                    s.peakCv >= edgeCvFloor &&
+                        (current == null || s.start < current.start)
+                Settings.AutoHeterodyneModeOptions.RHINOLOPHUS.value ->
+                    s.peakCv >= edgeCvFloor &&
+                        (current == null || s.end > current.end)
+                else ->
+                    current == null || s.peakCv > current.peakCv
+            }
+            if (better)
+                best = s
+        }
+
+        val won = best ?: return null
+        val (obsF, obsCv, obsDb) = when (modeValue) {
+            Settings.AutoHeterodyneModeOptions.HOCKEY_STICK.value ->
+                Triple(won.start, won.startCv, won.startDb)
+            Settings.AutoHeterodyneModeOptions.RHINOLOPHUS.value ->
+                Triple(won.end, won.endCv, won.endDb)
+            else ->
+                Triple(won.peakF, won.peakCv, won.peakDb)
+        }
         return Observation(
-            (minFreqBucket + bestObsF) * dfHz,
-            bestObsDb,
-            bestObsCv
+            (minFreqBucket + obsF) * dfHz,
+            obsDb,
+            obsCv
         )
     }
+
+    private data class SpanCandidate(
+        val start: Int,
+        val end: Int,
+        val peakF: Int,
+        val peakCv: Float,
+        val startCv: Float,
+        val startDb: Float,
+        val endCv: Float,
+        val endDb: Float,
+        val peakDb: Float,
+    )
 
     private fun isWarm(): Boolean = columnCount >= minWarmColumns
 
@@ -279,6 +311,11 @@ class AutoHeterodyneActivityTracker {
         const val ACTIVITY_TAU_S = 0.5f
         /** Minimum σ/μ (linear power) for an active bin. */
         const val MIN_COEFF_VAR = 5f
+        /**
+         * Hockey Stick / Rhinolophus: only spans whose peak σ/μ is at least this
+         * fraction of the column's strongest span may compete for the edge pick.
+         */
+        const val EDGE_SPAN_CV_RATIO = 0.5f
         /** Ignore bins whose EWMA power is below this dB level. */
         const val MIN_MEAN_POWER_DB = -30f
     }
