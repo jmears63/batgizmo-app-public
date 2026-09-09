@@ -89,7 +89,7 @@ abstract class GraphBase(
     fun ComposeFrame(
         modifier: Modifier,
         showGrid: Boolean,
-        overlayComposer: (@Composable (Modifier) -> Unit)? = null,
+        overlayComposer: (@Composable (Modifier, GraphPadding) -> Unit)? = null,
         frameGestures: ((GraphPadding, CoroutineScope) -> Modifier)? = null,
     ) {
         /**
@@ -201,19 +201,15 @@ abstract class GraphBase(
             // Gestures and overlay sit above the border canvas so they receive pointer events.
             p?.let { safeBorderPadding ->
                 val scope = rememberCoroutineScope()
-                val padding = PaddingValues(
-                    start = maxOf(safeBorderPadding.leftDp.dp, 0.dp),
-                    top = safeBorderPadding.topDp.dp,
-                    end = safeBorderPadding.rightDp.dp,
-                    bottom = safeBorderPadding.bottomDp.dp + 0.5.dp
-                )
 
                 if (frameGestures != null) {
                     Box(Modifier.fillMaxSize().then(frameGestures(safeBorderPadding, scope)))
                 }
 
+                // Overlay chrome uses the full frame (only its own padding); plot
+                // inset is passed separately so cursors can stay axis-aligned.
                 if (overlayComposer != null) {
-                    overlayComposer(Modifier.padding(padding))
+                    overlayComposer(Modifier.fillMaxSize(), safeBorderPadding)
                 }
             }
         }

@@ -95,7 +95,7 @@ class SpectrogramGraph(
         viewModel: UIModel,
         showGrid: Boolean,
         title: String?,
-        overlayComposer: @Composable (Modifier) -> Unit
+        overlayComposer: @Composable (Modifier, GraphPadding) -> Unit
     ) {
         val triggeredRecording by model.spectrogramButtonState.triggeredRecordingChecked
         updateFrequencyAxisHighlights(triggeredRecording)
