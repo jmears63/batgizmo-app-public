@@ -38,33 +38,24 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import org.batgizmo.app.ml.MlResult
+import org.batgizmo.app.ml.MlDetection
 
 private const val ML_RESULTS_MAX_LINES = 5
 
-/** Placeholder content until live [MlResult] data is wired up. */
-private val mlResultsSampleText = "line one\nline two\nline three"
-
 /**
- * Spectrogram overlay panel for [MlResult] detections.
- * Reserves space for [ML_RESULTS_MAX_LINES] lines; width is supplied by the caller.
+ * Spectrogram overlay panel for the running ML summary: unique labels with the
+ * maximum confidence seen so far. Reserves space for [ML_RESULTS_MAX_LINES] lines.
  */
 @Composable
 fun MlResultsPanel(
     modifier: Modifier = Modifier,
-    result: MlResult? = null,
+    summary: List<MlDetection> = emptyList(),
 ) {
     val panelHeight = with(LocalDensity.current) {
         (SpectrogramOverlayStyle.textSize * ML_RESULTS_MAX_LINES).toDp()
     }
     val textStyle = SpectrogramOverlayStyle.textStyle
-    val lines = result?.detections
-        ?.take(ML_RESULTS_MAX_LINES)
-        ?.map { detection ->
-            "${detection.label}  ${"%.0f".format(detection.confidence * 100)}%"
-        }
-        .orEmpty()
-        .ifEmpty { mlResultsSampleText.lines().take(ML_RESULTS_MAX_LINES) }
+    val lines = summary.take(ML_RESULTS_MAX_LINES)
 
     Box(
         modifier
@@ -77,9 +68,9 @@ fun MlResultsPanel(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.Start,
         ) {
-            for (line in lines) {
+            for (detection in lines) {
                 Text(
-                    text = line,
+                    text = "${detection.label}  ${"%.0f".format(detection.confidence * 100)}%",
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

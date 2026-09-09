@@ -50,11 +50,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.batgizmo.app.ml.MlClient
+import org.batgizmo.app.ml.MlClientStub
+import org.batgizmo.app.ml.MlDetection
+import org.batgizmo.app.ml.MlResult
+import org.batgizmo.app.ml.mergeMlSummary
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.ColourMapStep
 import org.batgizmo.app.pipeline.FileViewerPipeline
@@ -528,6 +534,23 @@ class UIModel(application: Application,
     private val mutableDetailsTextFlow = MutableStateFlow<String?>(null)
     val detailsTextFlow: StateFlow<String?> = mutableDetailsTextFlow.asStateFlow()
 
+    /**
+     * Queue of ML analysis outcomes. Unlimited so [send] never drops results.
+     * Drained only by the ViewModel merge loop into [mlSummaryFlow].
+     */
+    private val mlResultChannel = Channel<MlResult>(Channel.UNLIMITED)
+
+    /**
+     * Running ML summary: unique labels with the maximum confidence seen so far.
+     * Survives recomposition and configuration changes with the ViewModel.
+     */
+    private val mutableMlSummaryFlow = MutableStateFlow<List<MlDetection>>(emptyList())
+    val mlSummaryFlow: StateFlow<List<MlDetection>> = mutableMlSummaryFlow.asStateFlow()
+
+    /** Live ML client for the current sample rate, or null when inactive. */
+    private var mlClient: MlClient? = null
+    private var mlClientSampleRateHz: Int? = null
+
     private val audioProgressChannel = Channel<Int>(Channel.CONFLATED)
     val audioProgressFlow = audioProgressChannel.receiveAsFlow()
 
@@ -810,6 +833,15 @@ class UIModel(application: Application,
 
         colourMapHelper.initialize(settings.colourMap)
         startupPrompts.start()
+
+        // Drain ML result queue into the persistent summary.
+        viewModelScope.launch(CoroutineName("mlSummaryMerge")) {
+            for (result in mlResultChannel) {
+                mutableMlSummaryFlow.update { current ->
+                    mergeMlSummary(current, result)
+                }
+            }
+        }
 
         /**
          * Get the preference values from storage asynchronously. When the values arrive, they
@@ -1574,11 +1606,32 @@ class UIModel(application: Application,
         wavFileInfo.set(null)
 
         mutableDetailsTextFlow.value = null
+        mutableMlSummaryFlow.value = emptyList()
+        mlClient = null
+        mlClientSampleRateHz = null
         mutableMicrophoneVolumeParametersFlow.value = null
         mutableMicrophoneGainFlow.value = null
 
         resetRanges()
     }
+
+    /**
+     * Ensure an [MlClient] exists for [sampleRateHz]. Results are queued and merged
+     * into [mlSummaryFlow]. Uses [MlClientStub] until a real backend is wired.
+     */
+    fun ensureMlClient(sampleRateHz: Int) {
+        require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
+        if (mlClient != null && mlClientSampleRateHz == sampleRateHz)
+            return
+        mlClientSampleRateHz = sampleRateHz
+        mlClient = MlClientStub(sampleRateHz) { result ->
+            // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
+            mlResultChannel.trySend(result)
+        }
+    }
+
+    /** Current ML client, if [ensureMlClient] has been called. */
+    fun mlClientOrNull(): MlClient? = mlClient
 
     private fun resetRanges() {
         mutableTimeVisibleRangeFlow.value = defaultTimeVisibleRange

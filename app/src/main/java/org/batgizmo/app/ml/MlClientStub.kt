@@ -61,8 +61,20 @@ class MlClientStub(
                 MlResult(
                     detections = listOf(
                         MlDetection(
-                            label = "SimulatedSpecies",
-                            confidence = 0.99f,
+                            label = "Common pipistrelle",
+                            confidence = 0.87f,
+                        ),
+                        MlDetection(
+                            label = "Noctule",
+                            confidence = 0.60f,
+                        ),
+                        MlDetection(
+                            label = "Daubenton",
+                            confidence = 0.70f,
+                        ),
+                        MlDetection(
+                            label = "Daubenton",
+                            confidence = 0.87f,
                         )
                     )
                 )
