@@ -33,12 +33,15 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Production [MlClientBase] that runs real ML analysis (via [MlProcessor]).
  *
  * Chunk ownership transfers here from [MlClientBase.submit]; [processChunk]
  * only enqueues work so the caller is not blocked on inference.
+ *
+ * Resampling runs on a small thread pool; LiteRT inference stays on one thread.
  */
 class MlClient(
     context: Context,
@@ -47,22 +50,52 @@ class MlClient(
 
     private val processor = MlProcessor(context.applicationContext)
 
-    /** Single low-priority worker so resampling/inference stays off Default/IO pools. */
-    private val lowPriorityDispatcher: ExecutorCoroutineDispatcher =
+    private val resampleParallelism = MlProcessor.defaultResampleParallelism()
+
+    private val resampleThreadIndex = AtomicInteger(0)
+
+    private val resampleDispatcher: ExecutorCoroutineDispatcher =
+        Executors.newFixedThreadPool(resampleParallelism) { runnable ->
+            Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                runnable.run()
+            }, "MlResample-${resampleThreadIndex.getAndIncrement()}")
+        }.asCoroutineDispatcher()
+
+    private val inferDispatcher: ExecutorCoroutineDispatcher =
         Executors.newSingleThreadExecutor { runnable ->
             Thread({
                 Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
                 runnable.run()
-            }, "MlProcessor")
+            }, "MlInfer")
         }.asCoroutineDispatcher()
 
     private val scope = CoroutineScope(
-        SupervisorJob() + lowPriorityDispatcher + CoroutineName("MlClient")
+        SupervisorJob() + CoroutineName("MlClient")
     )
     private val runJob: Job = scope.launch {
-        processor.run { result ->
+        processor.run(
+            resampleDispatcher = resampleDispatcher,
+            inferDispatcher = inferDispatcher,
+            resampleParallelism = resampleParallelism,
+        ) { result ->
             deliverResult(result)
         }
+    }
+
+    /** Live vs viewer enqueue policy; forwarded to [MlProcessor]. */
+    fun setOverflowPolicy(policy: MlOverflowPolicy) {
+        processor.setOverflowPolicy(policy)
+    }
+
+    /** Discard queued chunks (not the in-flight one). */
+    fun clearQueue() {
+        processor.clearQueue()
+    }
+
+    override fun reset(sampleRateHz: Int) {
+        processor.clearQueue()
+        super.reset(sampleRateHz)
     }
 
     override fun processChunk(
@@ -78,7 +111,8 @@ class MlClient(
         processor.close()
         runJob.cancel()
         scope.cancel()
-        lowPriorityDispatcher.close()
+        resampleDispatcher.close()
+        inferDispatcher.close()
         super.shutdown()
     }
 }

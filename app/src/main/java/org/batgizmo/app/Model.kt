@@ -59,6 +59,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.batgizmo.app.ml.MlClient
 import org.batgizmo.app.ml.MlClientBase
 import org.batgizmo.app.ml.MlDetection
+import org.batgizmo.app.ml.MlOverflowPolicy
 import org.batgizmo.app.ml.MlResult
 import org.batgizmo.app.ml.mergeMlSummary
 import org.batgizmo.app.pipeline.AbstractPipeline
@@ -980,6 +981,9 @@ class UIModel(application: Application,
                 try {
                     Timber.d("openFile called for $filename")
 
+                    // Drop any prior Auto Id work before tearing down the old pipeline.
+                    discardQueuedMlWork()
+
                     // Take a snapshot of the parameters used to build this pipeline.
                     val pps = settings.pipelineParameters.copy()
 
@@ -1649,9 +1653,10 @@ class UIModel(application: Application,
 
     suspend fun internalClosePipeline() {
 
-        // Stop accepting live ML samples and flush any partial chunk first.
+        // Stop Auto Id and abandon any waiting work (do not flush — close should not
+        // keep analysing after the user leaves the viewer/live session).
         liveMlAccepting = false
-        flushMlClientFinal()
+        discardQueuedMlWork()
 
         // Finish with the file writer:
         fileWriter?.shutdown()
@@ -1671,8 +1676,13 @@ class UIModel(application: Application,
 
         mutableDetailsTextFlow.value = null
         synchronized(mlLock) {
-            mutableMlSummaryFlow.value = emptyList()
             clearMlClientLocked()
+            // Drop results already delivered but not yet merged, then clear summary again
+            // so an in-flight chunk cannot repopulate the panel after close.
+            while (mlResultChannel.tryReceive().isSuccess) {
+                // discard
+            }
+            mutableMlSummaryFlow.value = emptyList()
         }
         mutableMicrophoneVolumeParametersFlow.value = null
         mutableMicrophoneGainFlow.value = null
@@ -1693,17 +1703,24 @@ class UIModel(application: Application,
      *
      * @param forceReset if true, always [MlClientBase.reset] even when the rate is unchanged
      *   (e.g. starting analysis of a new file page).
+     * @param overflowPolicy live [MlOverflowPolicy.DropIfFull] vs viewer [MlOverflowPolicy.QueueAll]
      */
-    fun ensureMlClient(sampleRateHz: Int, forceReset: Boolean = false) {
+    fun ensureMlClient(
+        sampleRateHz: Int,
+        forceReset: Boolean = false,
+        overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull,
+    ) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         synchronized(mlLock) {
-            val client = mlClient ?: MlClient(getApplication()) { result ->
+            val client = (mlClient as? MlClient) ?: MlClient(getApplication()) { result ->
                 // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
                 mlResultChannel.trySend(result)
             }.also { mlClient = it }
+            client.setOverflowPolicy(overflowPolicy)
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz
+                mutableMlSummaryFlow.value = emptyList()
             }
         }
     }
@@ -1728,8 +1745,22 @@ class UIModel(application: Application,
     }
 
     /**
+     * Drop any waiting ML work and clear the on-screen summary.
+     * An in-flight chunk may still finish; new page submit uses [forceReset].
+     */
+    private fun discardQueuedMlWork() {
+        mutableMlSummaryFlow.value = emptyList()
+        synchronized(mlLock) {
+            (mlClient as? MlClient)?.clearQueue()
+        }
+    }
+
+    /**
      * When Auto Id is enabled and [pipeline] is a file viewer with assigned raw PCM,
      * reset the ML client and submit that page's samples.
+     *
+     * Intended for file open, left/right paging, and turning Auto Id on — not for
+     * zoom or other view-only reloads.
      */
     private fun submitFilePageToMl(pipeline: AbstractPipeline) {
         if (!settings.autoId) return
@@ -1738,8 +1769,12 @@ class UIModel(application: Application,
         if (sampleRateHz <= 0) return
         val (buffer, range) = pipeline.getAssignedRawDataBuffer() ?: return
 
-        mutableMlSummaryFlow.value = emptyList()
-        ensureMlClient(sampleRateHz, forceReset = true)
+        discardQueuedMlWork()
+        ensureMlClient(
+            sampleRateHz,
+            forceReset = true,
+            overflowPolicy = MlOverflowPolicy.QueueAll,
+        )
         synchronized(mlLock) {
             mlClient?.submit(buffer, range.start, range.length, isLast = true)
         }
@@ -1982,12 +2017,16 @@ class UIModel(application: Application,
         pipeline?.let {
             viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
                 mutex.withLock {
+                    // Stop analysing the previous page immediately (reload can take a while).
+                    discardQueuedMlWork()
                     reload(
                         settings,
                         rawPageRange,
                         autoBnCRequiredFlow.value,
                         resetVisibleRange = true
                     )
+                    // New file page only: feed Auto Id (not on zoom/FFT-only reloads).
+                    pipeline?.let { p -> submitFilePageToMl(p) }
                 }
             }
         }
@@ -2029,8 +2068,6 @@ class UIModel(application: Application,
                         autoHeterodyne.resetActivityState()
                         autoHeterodyne.refreshViewerCache()
                     }
-                    // Page (or FFT) rebuild: re-feed raw PCM when Auto Id is on.
-                    submitFilePageToMl(p)
                 }
 
                 if (resetVisibleRange)
