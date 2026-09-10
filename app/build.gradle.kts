@@ -69,6 +69,10 @@ android {
         compose = true
         buildConfig = true
     }
+    // Keep .tflite mmappable from the APK (required by Interpreter MappedByteBuffer load).
+    androidResources {
+        noCompress += "tflite"
+    }
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -97,6 +101,7 @@ dependencies {
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.timber)
     implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.litert)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

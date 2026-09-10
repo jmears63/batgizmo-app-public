@@ -22,6 +22,7 @@
 
 package org.batgizmo.app.ml
 
+import android.content.Context
 import android.os.Process
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
@@ -40,10 +41,11 @@ import java.util.concurrent.Executors
  * only enqueues work so the caller is not blocked on inference.
  */
 class MlClient(
+    context: Context,
     onResult: (MlResult) -> Unit,
 ) : MlClientBase(onResult) {
 
-    private val processor = MlProcessor()
+    private val processor = MlProcessor(context.applicationContext)
 
     /** Single low-priority worker so resampling/inference stays off Default/IO pools. */
     private val lowPriorityDispatcher: ExecutorCoroutineDispatcher =

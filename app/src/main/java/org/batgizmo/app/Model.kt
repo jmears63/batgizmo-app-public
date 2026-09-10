@@ -1697,7 +1697,7 @@ class UIModel(application: Application,
     fun ensureMlClient(sampleRateHz: Int, forceReset: Boolean = false) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         synchronized(mlLock) {
-            val client = mlClient ?: MlClient { result ->
+            val client = mlClient ?: MlClient(getApplication()) { result ->
                 // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
                 mlResultChannel.trySend(result)
             }.also { mlClient = it }

@@ -22,12 +22,14 @@
 
 package org.batgizmo.app.ml
 
+import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import org.batgizmo.app.ml.MlProcessor.Companion.CHUNK_SIZE_AT_REQUIRED_RATE
 import org.batgizmo.app.ml.MlProcessor.Companion.REQUIRED_SAMPLE_RATE_HZ
 import timber.log.Timber
+import kotlin.math.min
 
 /**
  * ML processing backend.
@@ -36,7 +38,9 @@ import timber.log.Timber
  * by [run] on a worker coroutine. When the queue is full, [tryEnqueue] drops the
  * new chunk so producers never block.
  */
-class MlProcessor {
+class MlProcessor(
+    context: Context,
+) {
     /**
      * One owned PCM chunk awaiting analysis.
      * [buffer] is fully owned; [offset] / [count] select the live region.
@@ -50,13 +54,25 @@ class MlProcessor {
 
     companion object {
         /** Sample rate expected by the model. */
-        const val REQUIRED_SAMPLE_RATE_HZ = 256_000
+        const val REQUIRED_SAMPLE_RATE_HZ = BattyBirdNet.SAMPLE_RATE_HZ
 
         /** Samples per chunk at [REQUIRED_SAMPLE_RATE_HZ]. */
-        const val CHUNK_SIZE_AT_REQUIRED_RATE = 144000
+        const val CHUNK_SIZE_AT_REQUIRED_RATE = BattyBirdNet.SIG_SAMPLES
 
         /** Max chunks waiting for [run]; extras are dropped by [tryEnqueue]. */
         private const val MAX_QUEUED_CHUNKS = 2
+
+        /** Omit weak scores from the UI summary (show only confidence > 70%). */
+        private const val MIN_CONFIDENCE = 0.7f
+
+        private val NON_BAT_LABELS = setOf(
+            "noise",
+            "background",
+            "silence",
+            "other",
+            "audiomoth",
+            "Tettigoniidea_Cricket",
+        )
 
         init {
             System.loadLibrary("batgizmo-native")
@@ -87,11 +103,30 @@ class MlProcessor {
             count: Int,
             inputSampleRateHz: Int,
         ): ShortArray?
+
+        /** Convert int16 PCM to float in roughly [-1, 1], pad/truncate to [SIG_SAMPLES]. */
+        private fun pcmToModelWindow(pcm: ShortArray): FloatArray {
+            val window = FloatArray(CHUNK_SIZE_AT_REQUIRED_RATE)
+            val n = min(pcm.size, CHUNK_SIZE_AT_REQUIRED_RATE)
+            for (i in 0 until n) {
+                window[i] = pcm[i] / 32768f
+            }
+            return window
+        }
+
+        /** Use the part after `_` when present (common name); else the whole label. */
+        private fun formatLabel(label: String): String {
+            val sep = label.indexOf('_')
+            if (sep < 0 || sep >= label.lastIndex) return label
+            return label.substring(sep + 1)
+        }
     }
 
+    private val appContext = context.applicationContext
     private val queue = Channel<ChunkSubmission>(capacity = MAX_QUEUED_CHUNKS)
 
-    private var chunkCount: Int = 0 // Count how many chunks we have processed.
+    private var chunkCount: Int = 0
+    private var model: BattyBirdNet? = null
 
     /**
      * Offer a chunk for background processing without blocking.
@@ -146,12 +181,25 @@ class MlProcessor {
             }
         } catch (_: CancellationException) {
             // Normal on shutdown.
+        } finally {
+            model?.close()
+            model = null
         }
     }
 
-    /** Stop accepting chunks and end [run]'s receive loop. */
+    /** Stop accepting chunks and end [run]'s receive loop (model released in [run]). */
     fun close() {
         queue.close()
+    }
+
+    private fun ensureModel(): BattyBirdNet? {
+        model?.let { return it }
+        return try {
+            BattyBirdNet(appContext.assets).also { model = it }
+        } catch (e: Exception) {
+            Timber.e(e, "MlProcessor: failed to load BattyBirdNet")
+            null
+        }
     }
 
     /**
@@ -167,8 +215,6 @@ class MlProcessor {
                 "at ${submission.sampleRateHz} Hz"
         )
 
-        // Resample the chunk data to the sampling rate the model needs. This should
-        // result in the correct chunk size for the model (CHUNK_SIZE_AT_REQUIRED_RATE):
         val resampled = nativeResampleToRequiredRate(
             submission.buffer,
             submission.offset,
@@ -180,12 +226,37 @@ class MlProcessor {
             return MlResult()
         }
 
-        Timber.i(
-            "MlProcessor: chunk #$chunkCount resampled to ${resampled.size} samples " +
-                "at $REQUIRED_SAMPLE_RATE_HZ Hz"
-        )
+        if (resampled.size != CHUNK_SIZE_AT_REQUIRED_RATE) {
+            Timber.w(
+                "MlProcessor: chunk #$chunkCount resampled length ${resampled.size} " +
+                    "(expected $CHUNK_SIZE_AT_REQUIRED_RATE); pad/truncate"
+            )
+        }
 
-        // TODO: run model inference on [resampled] at REQUIRED_SAMPLE_RATE_HZ.
-        return MlResult()
+        val bbn = ensureModel() ?: return MlResult()
+
+        return try {
+            val scores = bbn.predict(pcmToModelWindow(resampled))
+            val detections = ArrayList<MlDetection>()
+            for (i in scores.indices) {
+                val score = scores[i]
+                val label = bbn.labels[i]
+                if (label in NON_BAT_LABELS || score <= MIN_CONFIDENCE) continue
+                detections.add(MlDetection(formatLabel(label), score))
+            }
+            detections.sortByDescending { it.confidence }
+            if (detections.isEmpty()) {
+                Timber.i("MlProcessor: chunk #$chunkCount detections: (none)")
+            } else {
+                val listed = detections.joinToString { d ->
+                    "${d.label}=${"%.0f".format(d.confidence * 100)}%"
+                }
+                Timber.i("MlProcessor: chunk #$chunkCount detections: $listed")
+            }
+            MlResult(detections = detections)
+        } catch (e: Exception) {
+            Timber.e(e, "MlProcessor: inference failed on chunk #$chunkCount")
+            MlResult()
+        }
     }
 }

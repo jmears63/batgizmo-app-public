@@ -1,0 +1,39 @@
+BirdNET embeddings model (Android)
+==================================
+
+Asset: BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite
+
+Why this file exists
+--------------------
+BattyBirdNET needs BirdNET feature embeddings (the penultimate layer), then
+passes them to the regional UK classifier (BattyBirdNET-UK-256kHz.tflite).
+
+In the BBNPoC Python demo, the full BirdNET TFLite model is loaded with
+experimental_preserve_all_tensors=True so the code can read tensor index 545
+(GLOBAL_AVG_POOL/Mean, shape [batch, 1024]) — one before the final classifier
+output (546).
+
+Android LiteRT's Interpreter only exposes declared model inputs/outputs; there
+is no preserve_all_tensors / get_tensor(arbitrary index) path equivalent to
+Python. So we cannot pull that intermediate tensor from the stock BirdNET file
+at runtime.
+
+How this asset was produced
+---------------------------
+Offline, using ai-edge-litert flatbuffer helpers on the stock FP32 BirdNET
+model (BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite):
+
+  1. Read the model with flatbuffer_utils.read_model_with_mutable_tensors(...)
+  2. Set subgraph 0 outputs from [546] to [545]
+  3. Write BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite
+
+No retrain or TF re-export: only the TFLite metadata for "what is an output"
+was changed. Ops after tensor 545 are unused for our pipeline.
+
+Verification: the embeddings-only model's output matched get_tensor(545) from
+the original model run with experimental_preserve_all_tensors=True.
+
+Related assets
+--------------
+- BattyBirdNET-UK-256kHz.tflite — regional linear head on 1024-d embeddings
+- BattyBirdNET-UK-256kHz_Labels.txt — one label per classifier output column
