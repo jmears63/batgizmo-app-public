@@ -128,7 +128,6 @@ import org.batgizmo.app.Settings
 import org.batgizmo.app.SunriseSunset
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
-import org.batgizmo.app.ml.MlProcessor
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.LiveAudioStartResult
 import org.batgizmo.app.ui.TopLevelUI.AppMode
@@ -140,7 +139,6 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 private typealias LiveMode = LiveSessionController.LiveMode
 
@@ -152,6 +150,7 @@ class SpectrogramUI(
     val localOverlayTextMode = compositionLocalOf<Int> {
         Settings.OverlayTextModeOptions.BASIC.value
     }
+    val localAutoId = compositionLocalOf<Boolean> { false }
 
     /**
      * Possible UI states relating to audio mode.
@@ -381,15 +380,6 @@ class SpectrogramUI(
                     uiState.showHighRateMicOffer.value = true
                 }
             }
-        }
-
-        // TODO(temporary): exercise ML client → summary → panel path after UI is up.
-        LaunchedEffect(Unit) {
-            delay(5.seconds)
-            model.ensureMlClient(sampleRateHz = 384_000)
-            val dummy = ShortArray(MlProcessor.CHUNK_SIZE)
-            model.mlClientOrNull()?.submit(dummy, 0, dummy.size)
-            Timber.d("Submitted temporary ML dummy chunk (${dummy.size} samples)")
         }
 
         // Enable buttons depending on audio state:
@@ -887,11 +877,15 @@ class SpectrogramUI(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Top
                 ) {
-                    val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
-                    MlResultsPanel(
-                        modifier = Modifier.weight(1f),
-                        summary = mlSummary,
-                    )
+                    if (localAutoId.current) {
+                        val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
+                        MlResultsPanel(
+                            modifier = Modifier.weight(1f),
+                            summary = mlSummary,
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
 
                     if (uiState.audioMode.intValue == AudioMode.ON.value) {
                         Column(

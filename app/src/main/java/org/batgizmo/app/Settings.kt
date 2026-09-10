@@ -84,6 +84,8 @@ data class Settings(
     var autoTriggerThresholdDb: Float = 40f,
     var autoTriggerRangeMinkHz: Float = 16f,
     var autoTriggerRangeMaxkHz: Float = 120f,
+    /** Experimental: enable automatic species ID via ML. */
+    var autoId: Boolean = false,
     var pipelineParameters: PipelineParameters = PipelineParameters()
 ) {
     // Provide some abstraction to allow different enums to be handled the same way:
@@ -498,6 +500,7 @@ data class Settings(
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
     private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
+    private val keyAutoId = booleanPreferencesKey("autoId")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -552,6 +555,7 @@ data class Settings(
         autoHeterodyneLoMaxKhz = loMaxKhz
         prefs[keyAutoHeterodyneLoMinKhz] = loMinKhz
         prefs[keyAutoHeterodyneLoMaxKhz] = loMaxKhz
+        prefs[keyAutoId] = autoId
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -656,6 +660,8 @@ data class Settings(
             autoHeterodyneLoMinKhz = requireNotNull(prefs[keyAutoHeterodyneLoMinKhz])
         if (prefs[keyAutoHeterodyneLoMaxKhz] != null)
             autoHeterodyneLoMaxKhz = requireNotNull(prefs[keyAutoHeterodyneLoMaxKhz])
+        if (prefs[keyAutoId] != null)
+            autoId = requireNotNull(prefs[keyAutoId])
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
         autoHeterodyneLoMaxKhz = loMaxKhz

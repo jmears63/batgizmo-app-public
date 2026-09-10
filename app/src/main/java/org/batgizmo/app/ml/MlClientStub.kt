@@ -36,19 +36,18 @@ import kotlin.time.Duration.Companion.milliseconds
  * After a short delay, delivers a fixed detection so callers can exercise the
  * async result callback path without a real model.
  *
- * Consumes each chunk by not retaining [process]'s buffer, so the garbage
+ * Consumes each chunk by not retaining [processChunk]'s buffer, so the garbage
  * collector can reclaim it after this call returns.
  */
 class MlClientStub(
-    sampleRateHz: Int,
     onResult: (MlResult) -> Unit,
-) : MlClient(sampleRateHz, onResult) {
+) : MlClient(onResult) {
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineName("MlClientStub")
     )
 
-    override fun process(
+    override fun processChunk(
         buffer: ShortArray,
         offset: Int,
         count: Int,

@@ -118,6 +118,7 @@ class TopLevelUI(private val model: UIModel) {
         val overlayTextMode =
             rememberSaveable { mutableIntStateOf(model.settings.overlayTextMode) }
         val leftHandedMode = rememberSaveable { mutableStateOf(model.settings.leftHandButtons) }
+        val autoId = rememberSaveable { mutableStateOf(model.settings.autoId) }
 
         // Have we received the settings values yet?
         val settingsAvailable = rememberSaveable { mutableStateOf(false) }
@@ -145,6 +146,7 @@ class TopLevelUI(private val model: UIModel) {
             showHeterodyneReferenceLine.value = model.settings.showHeterodyneReferenceLine
             overlayTextMode.intValue = model.settings.overlayTextMode
             leftHandedMode.value = model.settings.leftHandButtons
+            autoId.value = model.settings.autoId
 
             // It's OK to draw the full UI now:
             settingsAvailable.value = true
@@ -197,7 +199,8 @@ class TopLevelUI(private val model: UIModel) {
                         spectrogramUI.localShowGrid provides showGrid.value,
                         spectrogramUI.localShowHeterodyneReferenceLine provides
                             showHeterodyneReferenceLine.value,
-                        spectrogramUI.localOverlayTextMode provides overlayTextMode.intValue
+                        spectrogramUI.localOverlayTextMode provides overlayTextMode.intValue,
+                        spectrogramUI.localAutoId provides autoId.value
                     ) {
                         val configuration = LocalConfiguration.current
                         val orientation = remember { mutableIntStateOf(configuration.orientation) }

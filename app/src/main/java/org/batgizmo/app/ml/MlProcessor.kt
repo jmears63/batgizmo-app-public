@@ -22,6 +22,10 @@
 
 package org.batgizmo.app.ml
 
+import org.batgizmo.app.ml.MlProcessor.Companion.CHUNK_SIZE_AT_REQUIRED_RATE
+import org.batgizmo.app.ml.MlProcessor.Companion.REQUIRED_SAMPLE_RATE_HZ
+
+
 /**
  * ML processing backend.
  *
@@ -30,6 +34,24 @@ package org.batgizmo.app.ml
  */
 class MlProcessor {
     companion object {
-        const val CHUNK_SIZE = 144000
+        /** Sample rate at which [CHUNK_SIZE_AT_REQUIRED_RATE] is defined. */
+        private const val REQUIRED_SAMPLE_RATE_HZ = 256_000
+
+        /** Samples per chunk at [REQUIRED_SAMPLE_RATE_HZ]. */
+        private const val CHUNK_SIZE_AT_REQUIRED_RATE = 144000
+
+        /**
+         * Chunk length in samples for [sampleRateHz], scaled so duration matches
+         * [CHUNK_SIZE_AT_REQUIRED_RATE] samples at [REQUIRED_SAMPLE_RATE_HZ].
+         */
+        fun chunkSizeForSampleRate(sampleRateHz: Int): Int {
+            require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
+            // Ceiling division so a fractional sample count rounds up.
+            val scaled =
+                (CHUNK_SIZE_AT_REQUIRED_RATE.toLong() * sampleRateHz +
+                    REQUIRED_SAMPLE_RATE_HZ - 1) /
+                    REQUIRED_SAMPLE_RATE_HZ
+            return scaled.toInt().coerceAtLeast(1)
+        }
     }
 }

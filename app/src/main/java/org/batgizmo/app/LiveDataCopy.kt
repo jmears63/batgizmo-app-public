@@ -59,6 +59,42 @@ object LiveDataCopy {
         }
     }
 
+    /**
+     * Copy [descriptor] into a contiguous [dest] starting at index 0.
+     * [dest] must be at least [LiveDataBridge.BufferDescriptor.samples] long.
+     * Returns the number of samples written.
+     */
+    fun copyIntoLinearBuffer(
+        descriptor: LiveDataBridge.BufferDescriptor,
+        dest: ShortArray,
+        nativeUSB: NativeUSB
+    ): Int {
+        require(dest.size >= descriptor.samples) {
+            "dest size ${dest.size} < samples ${descriptor.samples}"
+        }
+        return when (descriptor) {
+            is LiveDataBridge.BufferDescriptor.Native ->
+                nativeUSB.copyURBBufferData(
+                    descriptor.nativeAddress,
+                    descriptor.samples,
+                    dest,
+                    0,
+                    dest.size
+                )
+
+            is LiveDataBridge.BufferDescriptor.Heap -> {
+                System.arraycopy(
+                    descriptor.data,
+                    descriptor.offset,
+                    dest,
+                    0,
+                    descriptor.samples
+                )
+                descriptor.samples
+            }
+        }
+    }
+
     private fun copyHeapIntoRing(
         source: ShortArray,
         sourceOffset: Int,

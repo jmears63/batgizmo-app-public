@@ -76,6 +76,8 @@ class USBSourceStep(
                 // The for statement will check if a cancel is pending, and if so pass control
                 // to the finally block for cleanup and to prevent this job becoming a zombie:
                 for (bufferDescriptor in LiveDataBridge.renderingChannel) {
+                    maybeSubmitLiveAudioToMl(bufferDescriptor)
+
                     if (rawDataCapacity > 0) {
                         // Copy live data into rawDataBuffer with wrap:
                         val copiedCount = LiveDataCopy.copyIntoRingBuffer(
@@ -189,6 +191,30 @@ class USBSourceStep(
                 }
             } finally {
                 // We get here when the loop is cancelled on shutdown.
+            }
+        }
+    }
+
+    private fun maybeSubmitLiveAudioToMl(bufferDescriptor: LiveDataBridge.BufferDescriptor) {
+        if (!model.shouldSubmitLiveAudioToMl()) return
+        when (bufferDescriptor) {
+            is LiveDataBridge.BufferDescriptor.Heap ->
+                model.maybeSubmitLiveAudioToMl(
+                    bufferDescriptor.data,
+                    bufferDescriptor.offset,
+                    bufferDescriptor.samples
+                )
+
+            is LiveDataBridge.BufferDescriptor.Native -> {
+                val samples = bufferDescriptor.samples
+                if (samples <= 0) return
+                val scratch = ShortArray(samples)
+                val copied = LiveDataCopy.copyIntoLinearBuffer(
+                    bufferDescriptor,
+                    scratch,
+                    nativeUSB
+                )
+                model.maybeSubmitLiveAudioToMl(scratch, 0, copied)
             }
         }
     }

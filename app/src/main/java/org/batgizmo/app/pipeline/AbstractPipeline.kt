@@ -382,6 +382,17 @@ abstract class AbstractPipeline(
         return null
     }
 
+    /**
+     * Raw PCM currently populated in the page buffer, or null if none has been
+     * assigned yet. The [HORange] indexes into the returned [ShortArray].
+     */
+    fun getAssignedRawDataBuffer(): Pair<ShortArray, HORange>? {
+        val ranged = pipelineData?.rangedRawDataBuffer ?: return null
+        val range = ranged.assignedRange
+        if (range == HORange.EMPTY) return null
+        return Pair(ranged.buffer, range)
+    }
+
     data class FrequencyBandGeometry(
         val minFreqBucket: Int,
         val bandBins: Int,

@@ -624,6 +624,18 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
 
+            settingsSection(SettingsSection.EXPERIMENTAL, expandedSections) {
+                item {
+                    MyCheckbox(
+                        "Auto Id", model.settings.autoId
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(model.settings.copy(autoId = value))
+                        }
+                    }
+                }
+            }
+
             settingsSection(SettingsSection.DIAGNOSTICS, expandedSections) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -680,6 +692,7 @@ private enum class SettingsSection(val title: String) {
     RENDERING("Rendering"),
     RECORDING("Recording"),
     WARNINGS("Warnings"),
+    EXPERIMENTAL("Experimental"),
     DIAGNOSTICS("Diagnostics"),
 }
 

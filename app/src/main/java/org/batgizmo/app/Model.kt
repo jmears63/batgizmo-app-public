@@ -291,6 +291,8 @@ class UIModel(application: Application,
         usbService.availableAudioOutputs()
 
     private suspend fun cleanupPartialLiveConnect(liveInputSource: LiveInputSource) {
+        liveMlAccepting = false
+        flushMlClientFinal()
         fileWriter?.shutdown()
         fileWriter = null
         pipeline?.shutdown()
@@ -298,6 +300,10 @@ class UIModel(application: Application,
         setConnectedLiveInputSource(null)
         liveInputSource.disconnect()
         activeLiveInputSource = null
+        synchronized(mlLock) {
+            mlClient = null
+            mlClientSampleRateHz = null
+        }
     }
 
     private suspend fun connectLiveInputAndBuildPipeline(
@@ -393,6 +399,12 @@ class UIModel(application: Application,
             )
             fileWriter?.run()
 
+            if (settings.autoId) {
+                mutableMlSummaryFlow.value = emptyList()
+                ensureMlClient(result.sampleRate, forceReset = true)
+                liveMlAccepting = true
+            }
+
             if (settings.autoBaselineEnabled) {
                 tryRestoreNoiseBaseline(p)
             }
@@ -437,6 +449,9 @@ class UIModel(application: Application,
 
         fileWriter?.shutdown()
         fileWriter = null
+
+        liveMlAccepting = false
+        flushMlClientFinal()
 
         pipeline?.shutdown()
         pipeline = null
@@ -550,6 +565,19 @@ class UIModel(application: Application,
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClient? = null
     private var mlClientSampleRateHz: Int? = null
+
+    /**
+     * Serializes [mlClient] mutate/submit so live [USBSourceStep] (no UIModel mutex) cannot
+     * race settings/close. Never take [mutex] while holding this lock.
+     */
+    private val mlLock = Any()
+
+    /**
+     * When true, live PCM from [USBSourceStep] may be submitted to [mlClient]. Cleared on
+     * pause / Auto Id off / close; set on live connect and resume when Auto Id is enabled.
+     */
+    @Volatile
+    private var liveMlAccepting = false
 
     private val audioProgressChannel = Channel<Int>(Channel.CONFLATED)
     val audioProgressFlow = audioProgressChannel.receiveAsFlow()
@@ -876,6 +904,8 @@ class UIModel(application: Application,
                 val liveInputSourceChanged =
                     updatedSettings.liveInputSource != settings.liveInputSource
                 val colourMapChanged = updatedSettings.colourMap != settings.colourMap
+                val autoIdEnabled = updatedSettings.autoId && !settings.autoId
+                val autoIdDisabled = !updatedSettings.autoId && settings.autoId
                 settings = updatedSettings
                 if (liveInputSourceChanged) {
                     liveInputSourceOverrideSession = false
@@ -885,6 +915,27 @@ class UIModel(application: Application,
                 if (colourMapChanged && colourMapHelper.apply(settings.colourMap)) {
                     pipeline?.fullRenderFromSource()
                     triggerBitblt()
+                }
+                if (autoIdEnabled) {
+                    pipeline?.let { p ->
+                        when (p) {
+                            is FileViewerPipeline -> submitFilePageToMl(p)
+                            is LiveUSBPipeline -> {
+                                mutableMlSummaryFlow.value = emptyList()
+                                ensureMlClient(p.sampleRateHz(), forceReset = true)
+                                liveMlAccepting = true
+                            }
+                            else -> {}
+                        }
+                    }
+                } else if (autoIdDisabled) {
+                    liveMlAccepting = false
+                    flushMlClientFinal()
+                    synchronized(mlLock) {
+                        mlClient = null
+                        mlClientSampleRateHz = null
+                    }
+                    mutableMlSummaryFlow.value = emptyList()
                 }
             }
         }
@@ -984,6 +1035,8 @@ class UIModel(application: Application,
                     internalDoColourMappingAndRender(
                         settings.autoBnCEnabledViewer,
                         settings.autoBaselineEnabled)
+
+                    submitFilePageToMl(p)
 
                     // Signal to the UI that we have successfully opened the file and initialized
                     // the pipeline:
@@ -1457,6 +1510,9 @@ class UIModel(application: Application,
         viewModelScope.launch(Dispatchers.Default + CoroutineName("openLive coroutine")) {
             mutex.withLock {
                 activeLiveInputSource?.pause()
+                // End the current ML stream; resume will reset and accept again.
+                liveMlAccepting = false
+                flushMlClientFinal()
             }
         }
     }
@@ -1557,6 +1613,12 @@ class UIModel(application: Application,
                     if (!sourceChanged) {
                         activeLiveInputSource?.resume()
                     }
+
+                    if (settings.autoId) {
+                        mutableMlSummaryFlow.value = emptyList()
+                        ensureMlClient(p.sampleRateHz(), forceReset = true)
+                        liveMlAccepting = true
+                    }
                 }
             }
 
@@ -1589,6 +1651,10 @@ class UIModel(application: Application,
 
     suspend fun internalClosePipeline() {
 
+        // Stop accepting live ML samples and flush any partial chunk first.
+        liveMlAccepting = false
+        flushMlClientFinal()
+
         // Finish with the file writer:
         fileWriter?.shutdown()
         fileWriter = null
@@ -1606,9 +1672,11 @@ class UIModel(application: Application,
         wavFileInfo.set(null)
 
         mutableDetailsTextFlow.value = null
-        mutableMlSummaryFlow.value = emptyList()
-        mlClient = null
-        mlClientSampleRateHz = null
+        synchronized(mlLock) {
+            mutableMlSummaryFlow.value = emptyList()
+            mlClient = null
+            mlClientSampleRateHz = null
+        }
         mutableMicrophoneVolumeParametersFlow.value = null
         mutableMicrophoneGainFlow.value = null
 
@@ -1616,22 +1684,76 @@ class UIModel(application: Application,
     }
 
     /**
-     * Ensure an [MlClient] exists for [sampleRateHz]. Results are queued and merged
-     * into [mlSummaryFlow]. Uses [MlClientStub] until a real backend is wired.
+     * Ensure an [MlClient] exists and has been [MlClient.reset] for [sampleRateHz].
+     * Results are queued and merged into [mlSummaryFlow]. Uses [MlClientStub]
+     * until a real backend is wired.
+     *
+     * @param forceReset if true, always [MlClient.reset] even when the rate is unchanged
+     *   (e.g. starting analysis of a new file page).
      */
-    fun ensureMlClient(sampleRateHz: Int) {
+    fun ensureMlClient(sampleRateHz: Int, forceReset: Boolean = false) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
-        if (mlClient != null && mlClientSampleRateHz == sampleRateHz)
-            return
-        mlClientSampleRateHz = sampleRateHz
-        mlClient = MlClientStub(sampleRateHz) { result ->
-            // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
-            mlResultChannel.trySend(result)
+        synchronized(mlLock) {
+            val client = mlClient ?: MlClientStub { result ->
+                // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
+                mlResultChannel.trySend(result)
+            }.also { mlClient = it }
+            if (forceReset || mlClientSampleRateHz != sampleRateHz) {
+                client.reset(sampleRateHz)
+                mlClientSampleRateHz = sampleRateHz
+            }
         }
     }
 
     /** Current ML client, if [ensureMlClient] has been called. */
-    fun mlClientOrNull(): MlClient? = mlClient
+    fun mlClientOrNull(): MlClient? = synchronized(mlLock) { mlClient }
+
+    /** True when live Auto Id should accept the next raw buffer. */
+    fun shouldSubmitLiveAudioToMl(): Boolean =
+        settings.autoId && liveMlAccepting
+
+    /**
+     * Cheap path from [USBSourceStep]: copy samples into [MlClient] chunk buffers when
+     * Auto Id is accepting. Does not take [mutex].
+     */
+    fun maybeSubmitLiveAudioToMl(buffer: ShortArray, offset: Int, count: Int) {
+        if (!shouldSubmitLiveAudioToMl() || count <= 0) return
+        synchronized(mlLock) {
+            if (!shouldSubmitLiveAudioToMl()) return
+            mlClient?.submit(buffer, offset, count, isLast = false)
+        }
+    }
+
+    /**
+     * When Auto Id is enabled and [pipeline] is a file viewer with assigned raw PCM,
+     * reset the ML client and submit that page's samples.
+     */
+    private fun submitFilePageToMl(pipeline: AbstractPipeline) {
+        if (!settings.autoId) return
+        if (pipeline !is FileViewerPipeline) return
+        val sampleRateHz = pipeline.sampleRateHz()
+        if (sampleRateHz <= 0) return
+        val (buffer, range) = pipeline.getAssignedRawDataBuffer() ?: return
+
+        mutableMlSummaryFlow.value = emptyList()
+        ensureMlClient(sampleRateHz, forceReset = true)
+        synchronized(mlLock) {
+            mlClient?.submit(buffer, range.start, range.length, isLast = true)
+        }
+        Timber.d(
+            "Submitted file page to MlClient: ${range.length} samples at $sampleRateHz Hz " +
+                "(range $range)"
+        )
+    }
+
+    /** Pad/process any partial ML chunk ([MlClient.submit] with [isLast] true). */
+    private fun flushMlClientFinal() {
+        synchronized(mlLock) {
+            val client = mlClient ?: return
+            if (mlClientSampleRateHz == null) return
+            client.submit(ShortArray(0), 0, 0, isLast = true)
+        }
+    }
 
     private fun resetRanges() {
         mutableTimeVisibleRangeFlow.value = defaultTimeVisibleRange
@@ -1904,6 +2026,8 @@ class UIModel(application: Application,
                         autoHeterodyne.resetActivityState()
                         autoHeterodyne.refreshViewerCache()
                     }
+                    // Page (or FFT) rebuild: re-feed raw PCM when Auto Id is on.
+                    submitFilePageToMl(p)
                 }
 
                 if (resetVisibleRange)
