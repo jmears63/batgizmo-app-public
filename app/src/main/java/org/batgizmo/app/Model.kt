@@ -57,7 +57,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.batgizmo.app.ml.MlClient
-import org.batgizmo.app.ml.MlClientStub
+import org.batgizmo.app.ml.MlClientBase
 import org.batgizmo.app.ml.MlDetection
 import org.batgizmo.app.ml.MlResult
 import org.batgizmo.app.ml.mergeMlSummary
@@ -301,8 +301,7 @@ class UIModel(application: Application,
         liveInputSource.disconnect()
         activeLiveInputSource = null
         synchronized(mlLock) {
-            mlClient = null
-            mlClientSampleRateHz = null
+            clearMlClientLocked()
         }
     }
 
@@ -563,7 +562,7 @@ class UIModel(application: Application,
     val mlSummaryFlow: StateFlow<List<MlDetection>> = mutableMlSummaryFlow.asStateFlow()
 
     /** Live ML client for the current sample rate, or null when inactive. */
-    private var mlClient: MlClient? = null
+    private var mlClient: MlClientBase? = null
     private var mlClientSampleRateHz: Int? = null
 
     /**
@@ -932,8 +931,7 @@ class UIModel(application: Application,
                     liveMlAccepting = false
                     flushMlClientFinal()
                     synchronized(mlLock) {
-                        mlClient = null
-                        mlClientSampleRateHz = null
+                        clearMlClientLocked()
                     }
                     mutableMlSummaryFlow.value = emptyList()
                 }
@@ -1674,8 +1672,7 @@ class UIModel(application: Application,
         mutableDetailsTextFlow.value = null
         synchronized(mlLock) {
             mutableMlSummaryFlow.value = emptyList()
-            mlClient = null
-            mlClientSampleRateHz = null
+            clearMlClientLocked()
         }
         mutableMicrophoneVolumeParametersFlow.value = null
         mutableMicrophoneGainFlow.value = null
@@ -1683,18 +1680,24 @@ class UIModel(application: Application,
         resetRanges()
     }
 
+    /** Caller must hold [mlLock]. */
+    private fun clearMlClientLocked() {
+        mlClient?.shutdown()
+        mlClient = null
+        mlClientSampleRateHz = null
+    }
+
     /**
-     * Ensure an [MlClient] exists and has been [MlClient.reset] for [sampleRateHz].
-     * Results are queued and merged into [mlSummaryFlow]. Uses [MlClientStub]
-     * until a real backend is wired.
+     * Ensure an [MlClientBase] exists and has been [MlClientBase.reset] for [sampleRateHz].
+     * Results are queued and merged into [mlSummaryFlow]. Uses production [MlClient].
      *
-     * @param forceReset if true, always [MlClient.reset] even when the rate is unchanged
+     * @param forceReset if true, always [MlClientBase.reset] even when the rate is unchanged
      *   (e.g. starting analysis of a new file page).
      */
     fun ensureMlClient(sampleRateHz: Int, forceReset: Boolean = false) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         synchronized(mlLock) {
-            val client = mlClient ?: MlClientStub { result ->
+            val client = mlClient ?: MlClient { result ->
                 // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
                 mlResultChannel.trySend(result)
             }.also { mlClient = it }
@@ -1706,14 +1709,14 @@ class UIModel(application: Application,
     }
 
     /** Current ML client, if [ensureMlClient] has been called. */
-    fun mlClientOrNull(): MlClient? = synchronized(mlLock) { mlClient }
+    fun mlClientOrNull(): MlClientBase? = synchronized(mlLock) { mlClient }
 
     /** True when live Auto Id should accept the next raw buffer. */
     fun shouldSubmitLiveAudioToMl(): Boolean =
         settings.autoId && liveMlAccepting
 
     /**
-     * Cheap path from [USBSourceStep]: copy samples into [MlClient] chunk buffers when
+     * Cheap path from [USBSourceStep]: copy samples into [MlClientBase] chunk buffers when
      * Auto Id is accepting. Does not take [mutex].
      */
     fun maybeSubmitLiveAudioToMl(buffer: ShortArray, offset: Int, count: Int) {
@@ -1746,7 +1749,7 @@ class UIModel(application: Application,
         )
     }
 
-    /** Pad/process any partial ML chunk ([MlClient.submit] with [isLast] true). */
+    /** Pad/process any partial ML chunk ([MlClientBase.submit] with [isLast] true). */
     private fun flushMlClientFinal() {
         synchronized(mlLock) {
             val client = mlClient ?: return

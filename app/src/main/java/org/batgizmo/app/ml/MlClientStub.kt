@@ -31,7 +31,7 @@ import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * Test-only [MlClient] that simulates an ML backend.
+ * Test-only [MlClientBase] that simulates an ML backend.
  *
  * After a short delay, delivers a fixed detection so callers can exercise the
  * async result callback path without a real model.
@@ -41,7 +41,7 @@ import kotlin.time.Duration.Companion.milliseconds
  */
 class MlClientStub(
     onResult: (MlResult) -> Unit,
-) : MlClient(onResult) {
+) : MlClientBase(onResult) {
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineName("MlClientStub")

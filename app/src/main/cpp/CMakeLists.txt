@@ -38,10 +38,15 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         dsp_tdola.cpp
         dsp_te.cpp
         audio_out.cpp
+        ml_resample.cpp
 )
 
 # Include the KissFFT directory
 include_directories(${CMAKE_SOURCE_DIR}/kissfft)
+
+# r8brain-free-src 7.5 is header-only with the default Ooura FFT (fft/fft4g.h).
+# No separate .cpp to compile unless R8B_PFFFT / R8B_PFFFT_DOUBLE is enabled.
+include_directories(${CMAKE_SOURCE_DIR}/r8brain-free-src-7.5)
 
 # Add KissFFT sources
 add_library(kissfft SHARED
