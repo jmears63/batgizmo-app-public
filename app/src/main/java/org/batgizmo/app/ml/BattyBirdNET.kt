@@ -23,6 +23,7 @@
 package org.batgizmo.app.ml
 
 import android.content.res.AssetManager
+import org.json.JSONObject
 import org.tensorflow.lite.Interpreter
 import java.io.FileInputStream
 import java.nio.MappedByteBuffer
@@ -47,9 +48,19 @@ class BattyBirdNET(
     numThreads: Int = DEFAULT_NUM_THREADS,
 ) : AutoCloseable {
 
-    /** Classifier label names, one per output column of [predict]. */
-    val labels: List<String>
+    /**
+     * Language / column names from the labels JSON `description` array
+     * (e.g. `"Latin"`, `"English"`), in file order.
+     */
+    val languages: List<String>
 
+    /**
+     * Stable per-class keys (first labels column, Latin names), aligned with
+     * classifier outputs. Used for non-display filtering.
+     */
+    val labelKeys: List<String>
+
+    private val labelRows: List<List<String>>
     private val embedder: Interpreter
     private val classifier: Interpreter
 
@@ -57,7 +68,10 @@ class BattyBirdNET(
     private val numClasses: Int
 
     init {
-        labels = loadLabels(assetManager, LABELS_ASSET)
+        val table = loadLabelsJson(assetManager, LABELS_JSON_ASSET)
+        languages = table.description
+        labelRows = table.rows
+        labelKeys = labelRows.map { row -> row.first() }
 
         val options = Interpreter.Options().apply {
             setNumThreads(numThreads)
@@ -71,12 +85,24 @@ class BattyBirdNET(
         classifier.allocateTensors()
         numClasses = classifier.getOutputTensor(0).shape()[1]
 
-        require(labels.size == numClasses) {
-            "Label count (${labels.size}) does not match classifier outputs ($numClasses)"
+        require(labelRows.size == numClasses) {
+            "Label count (${labelRows.size}) does not match classifier outputs ($numClasses)"
+        }
+        require(labelRows.all { it.size == languages.size }) {
+            "Each labels row must have ${languages.size} names (one per description language)"
         }
         require(classifier.getInputTensor(0).shape()[1] == embeddingDim) {
             "Classifier input dim ${classifier.getInputTensor(0).shape()[1]} != embedding dim $embeddingDim"
         }
+    }
+
+    /**
+     * Display names for [languageIndex] (column in the labels JSON), one per
+     * classifier output. Out-of-range indexes fall back to 0.
+     */
+    fun labelsFor(languageIndex: Int): List<String> {
+        val col = coerceLanguageIndex(languageIndex)
+        return labelRows.map { row -> row[col] }
     }
 
     /**
@@ -106,7 +132,7 @@ class BattyBirdNET(
      * Classify audio windows into bat (and noise) class confidences.
      *
      * @param samples shape `(batch, [SIG_SAMPLES])`
-     * @return sigmoid scores of shape `(batch, n_labels)`, aligned with [labels]
+     * @return sigmoid scores of shape `(batch, n_labels)`, aligned with [labelKeys]
      */
     fun predict(samples: Array<FloatArray>): Array<FloatArray> {
         val features = extractEmbeddings(samples)
@@ -120,12 +146,18 @@ class BattyBirdNET(
         return Array(batch) { i -> flatSigmoid(logits[i]) }
     }
 
-    /** Classify a single window; returns scores aligned with [labels]. */
+    /** Classify a single window; returns scores aligned with [labelKeys]. */
     fun predict(samples: FloatArray): FloatArray = predict(arrayOf(samples))[0]
 
     override fun close() {
         embedder.close()
         classifier.close()
+    }
+
+    /** Clamp [languageIndex] into `[0, languages.lastIndex]`, or `0` if empty. */
+    fun coerceLanguageIndex(languageIndex: Int): Int {
+        if (languages.isEmpty()) return 0
+        return if (languageIndex in languages.indices) languageIndex else 0
     }
 
     companion object {
@@ -137,10 +169,26 @@ class BattyBirdNET(
 
         const val DEFAULT_NUM_THREADS = 4
 
+        /** Default species-name language index when unset or out of range. */
+        const val DEFAULT_LANGUAGE_INDEX = 0
+
         private const val EMBEDDING_ASSET =
             "ml/BattyBirdNET/BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite"
         private const val CLASSIFIER_ASSET = "ml/BattyBirdNET/BattyBirdNET-UK-256kHz.tflite"
-        private const val LABELS_ASSET = "ml/BattyBirdNET/BattyBirdNET-UK-256kHz_Labels.txt"
+        private const val LABELS_JSON_ASSET =
+            "ml/BattyBirdNET/BattyBirdNET-UK-256kHz_Labels.json"
+
+        private data class LabelsTable(
+            val description: List<String>,
+            val rows: List<List<String>>,
+        )
+
+        /**
+         * Language / column names from the labels JSON `description` array
+         * (e.g. `"Latin"`, `"English"`), in file order.
+         */
+        fun loadLabelLanguages(assetManager: AssetManager): List<String> =
+            loadLabelsJson(assetManager, LABELS_JSON_ASSET).description
 
         /**
          * Map classifier logits to `[0, 1]` with a clipped sigmoid.
@@ -156,9 +204,24 @@ class BattyBirdNET(
             }
         }
 
-        private fun loadLabels(assetManager: AssetManager, assetPath: String): List<String> {
-            return assetManager.open(assetPath).bufferedReader().use { reader ->
-                reader.readLines()
+        private fun loadLabelsJson(assetManager: AssetManager, assetPath: String): LabelsTable {
+            assetManager.open(assetPath).bufferedReader().use { reader ->
+                val root = JSONObject(reader.readText())
+                val descriptionJson = root.getJSONArray("description")
+                val description = List(descriptionJson.length()) { i ->
+                    descriptionJson.getString(i)
+                }
+                require(description.isNotEmpty()) { "labels JSON description must be non-empty" }
+
+                val labelsJson = root.getJSONArray("labels")
+                val rows = List(labelsJson.length()) { i ->
+                    val rowJson = labelsJson.getJSONArray(i)
+                    require(rowJson.length() == description.size) {
+                        "labels[$i] has ${rowJson.length()} names; expected ${description.size}"
+                    }
+                    List(rowJson.length()) { j -> rowJson.getString(j) }
+                }
+                return LabelsTable(description, rows)
             }
         }
 

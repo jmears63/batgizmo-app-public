@@ -893,6 +893,8 @@ class UIModel(application: Application,
                 val colourMapChanged = updatedSettings.colourMap != settings.colourMap
                 val autoIdEnabled = updatedSettings.autoId && !settings.autoId
                 val autoIdDisabled = !updatedSettings.autoId && settings.autoId
+                val autoIdLanguageChanged =
+                    updatedSettings.autoIdLanguage != settings.autoIdLanguage
                 settings = updatedSettings
                 if (liveInputSourceChanged) {
                     liveInputSourceOverrideSession = false
@@ -922,6 +924,14 @@ class UIModel(application: Application,
                         clearMlClientLocked()
                     }
                     mlSummaryAccumulator.clear(MlSummaryMode.Live)
+                } else if (updatedSettings.autoId && autoIdLanguageChanged) {
+                    synchronized(mlLock) {
+                        (mlClient as? MlClient)?.setLabelLanguage(updatedSettings.autoIdLanguage)
+                    }
+                    when (val p = pipeline) {
+                        is FileViewerPipeline -> submitFilePageToMl(p)
+                        else -> mlSummaryAccumulator.clear(MlSummaryMode.Live)
+                    }
                 }
             }
         }
@@ -1702,6 +1712,7 @@ class UIModel(application: Application,
                 mlSummaryAccumulator.submitResult(result)
             }.also { mlClient = it }
             client.setOverflowPolicy(overflowPolicy)
+            client.setLabelLanguage(settings.autoIdLanguage)
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz

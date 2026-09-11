@@ -69,6 +69,7 @@ import kotlinx.coroutines.launch
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
+import org.batgizmo.app.ml.BattyBirdNET
 
 class SettingsUI(private val model: UIModel) {
 
@@ -631,6 +632,36 @@ class SettingsUI(private val model: UIModel) {
                     ) { value: Boolean ->
                         scope.launch {
                             model.updateStoredSettings(model.settings.copy(autoId = value))
+                        }
+                    }
+                }
+
+                item {
+                    val languages = remember {
+                        BattyBirdNET.loadLabelLanguages(context.assets)
+                    }
+                    val languageOptions = remember(languages) {
+                        languages.mapIndexed { index, name -> index.toString() to name }
+                    }
+                    var autoIdLanguage by rememberSaveable {
+                        mutableStateOf(model.settings.autoIdLanguage)
+                    }
+                    // Clamp a stored index that is no longer valid for this JSON.
+                    val selectedIndex =
+                        if (autoIdLanguage in languages.indices) autoIdLanguage else 0
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyDynamicSelector(
+                            options = languageOptions,
+                            description = "Auto Id language",
+                            selectedValue = selectedIndex.toString()
+                        ) { value: String ->
+                            val index = value.toIntOrNull()?.takeIf { it in languages.indices } ?: 0
+                            autoIdLanguage = index
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(autoIdLanguage = index)
+                                )
+                            }
                         }
                     }
                 }

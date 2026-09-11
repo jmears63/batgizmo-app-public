@@ -1,0 +1,88 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    [
+      "Barbastella barbastellus",
+      "Western barbastelle"
+    ],
+    [
+      "Myotis bechsteinii",
+      "Bechsteins bat"
+    ],
+    [
+      "Myotis daubentonii",
+      "Daubentons bat"
+    ],
+    [
+      "Myotis myotis",
+      "Greater mouse-eared bat"
+    ],
+    [
+      "Myotis mystacinus",
+      "Whiskered bat"
+    ],
+    [
+      "Myotis nattereri",
+      "Natterers bat"
+    ],
+    [
+      "Nyctalus leisleri",
+      "Leislers bat"
+    ],
+    [
+      "Nyctalus noctula",
+      "Common noctule"
+    ],
+    [
+      "Pipistrellus nathusii",
+      "Nathusius pipistrelle"
+    ],
+    [
+      "Pipistrellus pipistrellus",
+      "Common pipistrelle"
+    ],
+    [
+      "Pipistrellus pygmaeus",
+      "Soprano pipistrelle"
+    ],
+    [
+      "Plecotus auritus",
+      "Brown long eared bat"
+    ],
+    [
+      "Rhinolophus ferrumequinum",
+      "Greater horseshoe bat"
+    ],
+    [
+      "Rhinolophus hipposideros",
+      "Lesser horseshoe bat"
+    ],
+    [
+      "Tettigoniidea",
+      "Cricket"
+    ],
+    [
+      "audiomoth",
+      "audiomoth"
+    ],
+    [
+      "background",
+      "background"
+    ],
+    [
+      "noise",
+      "noise"
+    ],
+    [
+      "other",
+      "other"
+    ],
+    [
+      "silence",
+      "silence"
+    ]
+  ]
+}

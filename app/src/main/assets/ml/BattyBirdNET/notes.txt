@@ -38,4 +38,5 @@ the original model run with experimental_preserve_all_tensors=True.
 Related assets
 --------------
 - BattyBirdNET-UK-256kHz.tflite — regional linear head on 1024-d embeddings
-- BattyBirdNET-UK-256kHz_Labels.txt — one label per classifier output column
+- BattyBirdNET-UK-256kHz_Labels.json — per-class Latin/English names (UI + filtering)
+- BattyBirdNET-UK-256kHz_Labels.txt — legacy one-label-per-line file (retained, unused)

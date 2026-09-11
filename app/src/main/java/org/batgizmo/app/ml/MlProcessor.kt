@@ -106,13 +106,17 @@ class MlProcessor(
         /** Omit weak scores from the UI summary (show only confidence > 70%). */
         private const val MIN_CONFIDENCE = 0.7f
 
-        private val NON_BAT_LABELS = setOf(
+        /**
+         * Non-bat / non-species classes, matched against stable Latin [BattyBirdNET.labelKeys]
+         * (first labels JSON column).
+         */
+        private val NON_BAT_LABEL_KEYS = setOf(
             "noise",
             "background",
             "silence",
             "other",
             "audiomoth",
-            "Tettigoniidea_Cricket",
+            "Tettigoniidea",
         )
 
         init {
@@ -155,13 +159,6 @@ class MlProcessor(
             }
             return window
         }
-
-        /** Use the part after `_` when present (common name); else the whole label. */
-        private fun formatLabel(label: String): String {
-            val sep = label.indexOf('_')
-            if (sep < 0 || sep >= label.lastIndex) return label
-            return label.substring(sep + 1)
-        }
     }
 
     private val appContext = context.applicationContext
@@ -177,11 +174,20 @@ class MlProcessor(
     @Volatile
     private var overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull
 
+    /** Species-name language index from settings; out-of-range falls back to 0. */
+    @Volatile
+    private var labelLanguageIndex: Int = BattyBirdNET.DEFAULT_LANGUAGE_INDEX
+
     private var model: BattyBirdNET? = null
 
     /** Switch live drop-vs-viewer queue-all behaviour. Safe to call from any thread. */
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
         overflowPolicy = policy
+    }
+
+    /** Update display-name language index for subsequent detections. Safe from any thread. */
+    fun setLabelLanguage(languageIndex: Int) {
+        labelLanguageIndex = languageIndex
     }
 
     /**
@@ -381,12 +387,12 @@ class MlProcessor(
 
         return try {
             val scores = bbn.predict(job.window)
+            val displayLabels = bbn.labelsFor(labelLanguageIndex)
             val detections = ArrayList<MlDetection>()
             for (i in scores.indices) {
                 val score = scores[i]
-                val label = bbn.labels[i]
-                if (label in NON_BAT_LABELS || score <= MIN_CONFIDENCE) continue
-                detections.add(MlDetection(formatLabel(label), score))
+                if (bbn.labelKeys[i] in NON_BAT_LABEL_KEYS || score <= MIN_CONFIDENCE) continue
+                detections.add(MlDetection(displayLabels[i], score))
             }
             detections.sortByDescending { it.confidence }
             if (detections.isEmpty()) {

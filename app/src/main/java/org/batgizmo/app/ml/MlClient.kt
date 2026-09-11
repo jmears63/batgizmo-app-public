@@ -88,6 +88,11 @@ class MlClient(
         processor.setOverflowPolicy(policy)
     }
 
+    /** Species-name language index for the ML panel; forwarded to [MlProcessor]. */
+    fun setLabelLanguage(languageIndex: Int) {
+        processor.setLabelLanguage(languageIndex)
+    }
+
     /** Discard queued chunks (not the in-flight one). */
     fun clearQueue() {
         processor.clearQueue()

@@ -86,6 +86,11 @@ data class Settings(
     var autoTriggerRangeMaxkHz: Float = 120f,
     /** Experimental: enable automatic species ID via ML. */
     var autoId: Boolean = false,
+    /**
+     * Language for Auto Id species names: index into the labels JSON
+     * `description` array. Out-of-range values are treated as 0.
+     */
+    var autoIdLanguage: Int = DEFAULT_AUTO_ID_LANGUAGE,
     var pipelineParameters: PipelineParameters = PipelineParameters()
 ) {
     // Provide some abstraction to allow different enums to be handled the same way:
@@ -450,6 +455,9 @@ data class Settings(
         const val DEFAULT_AUTO_HET_LO_MIN_KHZ = 16
         const val DEFAULT_AUTO_HET_LO_MAX_KHZ = 120
 
+        /** Default Auto Id species-name language index (labels JSON `description`). */
+        const val DEFAULT_AUTO_ID_LANGUAGE = 0
+
         /** Valid auto heterodyne activity-span frequency limits (kHz). */
         const val AUTO_HET_LO_LIMIT_MIN_KHZ = 10
         const val AUTO_HET_LO_LIMIT_MAX_KHZ = 130
@@ -501,6 +509,7 @@ data class Settings(
     private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
     private val keyAutoId = booleanPreferencesKey("autoId")
+    private val keyAutoIdLanguage = intPreferencesKey("autoIdLanguageIndex")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -556,6 +565,7 @@ data class Settings(
         prefs[keyAutoHeterodyneLoMinKhz] = loMinKhz
         prefs[keyAutoHeterodyneLoMaxKhz] = loMaxKhz
         prefs[keyAutoId] = autoId
+        prefs[keyAutoIdLanguage] = autoIdLanguage
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -662,6 +672,8 @@ data class Settings(
             autoHeterodyneLoMaxKhz = requireNotNull(prefs[keyAutoHeterodyneLoMaxKhz])
         if (prefs[keyAutoId] != null)
             autoId = requireNotNull(prefs[keyAutoId])
+        if (prefs[keyAutoIdLanguage] != null)
+            autoIdLanguage = requireNotNull(prefs[keyAutoIdLanguage])
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
         autoHeterodyneLoMaxKhz = loMaxKhz
