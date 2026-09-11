@@ -879,12 +879,14 @@ class SpectrogramUI(
                 ) {
                     if (localAutoId.current) {
                         val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
+                        val mlSummaryMode by model.mlSummaryModeFlow.collectAsStateWithLifecycle()
                         MlResultsPanel(
                             modifier = Modifier.weight(1f),
                             summary = mlSummary,
+                            mode = mlSummaryMode,
                         )
                     } else {
-                        Spacer(Modifier.weight(1f))
+                        Spacer(modifier.weight(1f))
                     }
 
                     if (uiState.audioMode.intValue == AudioMode.ON.value) {

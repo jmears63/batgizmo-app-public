@@ -554,6 +554,7 @@ class UIModel(application: Application,
      */
     private val mlSummaryAccumulator = MlSummaryAccumulator()
     val mlSummaryFlow = mlSummaryAccumulator.summary
+    val mlSummaryModeFlow = mlSummaryAccumulator.mode
 
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClientBase? = null

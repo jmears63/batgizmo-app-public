@@ -31,7 +31,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import org.batgizmo.app.ml.MlSummaryAccumulator.Companion.MAX_SUMMARY_ENTRIES
 import timber.log.Timber
 
 /** Live vs file-viewer summary policy. Set via [MlSummaryAccumulator.clear]. */
@@ -39,7 +38,7 @@ enum class MlSummaryMode {
     /** Most-recent-first; only the top [MlSummaryAccumulator.MAX_SUMMARY_ENTRIES] are kept. */
     Live,
 
-    /** Highest-confidence-first; labels remain until the next [MlSummaryAccumulator.clear]. */
+    /** Highest-confidence-first; only the top [MlSummaryAccumulator.MAX_SUMMARY_ENTRIES] are kept. */
     Viewer,
 }
 
@@ -48,9 +47,10 @@ enum class MlSummaryMode {
  * label, keeping the highest confidence seen so far, with [lastSeenAtEpochSec]
  * for age styling.
  *
- * Sort order depends on [MlSummaryMode]: live = most recently seen first (capped
- * at [MAX_SUMMARY_ENTRIES], older labels drop off); viewer = highest confidence
- * first. The panel shows at most [MAX_SUMMARY_ENTRIES] rows.
+ * Sort / retention depend on [MlSummaryMode] ([mode] / [clear]):
+ * - live = most recently seen first
+ * - viewer = highest confidence first
+ * Both modes keep at most [MAX_SUMMARY_ENTRIES] labels in state.
  *
  * Owns the result queue and merge loop. Callers [submitResult] from inference
  * threads and [clear] on session/page boundaries (passing [MlSummaryMode]).
@@ -68,11 +68,13 @@ class MlSummaryAccumulator {
 
     private val mutableSummary = MutableStateFlow<List<MlSummaryEntry>>(emptyList())
 
-    /** Running summary for the Auto Id overlay. */
+    /** Running summary for the Auto Id overlay (already capped and ordered). */
     val summary: StateFlow<List<MlSummaryEntry>> = mutableSummary.asStateFlow()
 
-    @Volatile
-    private var mode: MlSummaryMode = MlSummaryMode.Live
+    private val mutableMode = MutableStateFlow(MlSummaryMode.Live)
+
+    /** Current live/viewer policy; updated by [clear]. */
+    val mode: StateFlow<MlSummaryMode> = mutableMode.asStateFlow()
 
     private var mergeJob: Job? = null
 
@@ -105,7 +107,7 @@ class MlSummaryAccumulator {
      * subsequent sorting / retention.
      */
     fun clear(mode: MlSummaryMode) {
-        this.mode = mode
+        mutableMode.value = mode
         while (resultChannel.tryReceive().isSuccess) {
             // discard pending results
         }
@@ -138,28 +140,24 @@ class MlSummaryAccumulator {
     }
 
     private fun publishSummary() {
-        when (mode) {
-            MlSummaryMode.Live -> {
-                val sorted = entries.values.sortedByDescending { it.lastSeenAtEpochSec }
-                val keep = sorted.take(MAX_SUMMARY_ENTRIES)
-                for (dropped in sorted.drop(MAX_SUMMARY_ENTRIES)) {
-                    Timber.i(
-                        "MlSummary: dropped \"%s\" (%.0f%%) from live list",
-                        dropped.label,
-                        dropped.confidence * 100f,
-                    )
-                    entries.remove(dropped.label)
-                }
-                mutableSummary.value = keep.map {
-                    MlSummaryEntry(it.label, it.confidence, it.lastSeenAtEpochSec)
-                }
-            }
-            MlSummaryMode.Viewer -> {
-                mutableSummary.value = entries.values
-                    .sortedByDescending { it.confidence }
-                    .take(MAX_SUMMARY_ENTRIES)
-                    .map { MlSummaryEntry(it.label, it.confidence, it.lastSeenAtEpochSec) }
-            }
+        val sorted = when (mutableMode.value) {
+            MlSummaryMode.Live ->
+                entries.values.sortedByDescending { it.lastSeenAtEpochSec }
+            MlSummaryMode.Viewer ->
+                entries.values.sortedByDescending { it.confidence }
+        }
+        val keep = sorted.take(MAX_SUMMARY_ENTRIES)
+        for (dropped in sorted.drop(MAX_SUMMARY_ENTRIES)) {
+            Timber.i(
+                "MlSummary: dropped \"%s\" (%.0f%%) from %s list",
+                dropped.label,
+                dropped.confidence * 100f,
+                mutableMode.value,
+            )
+            entries.remove(dropped.label)
+        }
+        mutableSummary.value = keep.map {
+            MlSummaryEntry(it.label, it.confidence, it.lastSeenAtEpochSec)
         }
     }
 
