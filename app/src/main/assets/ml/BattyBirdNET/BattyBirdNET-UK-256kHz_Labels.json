@@ -1,86 +1,107 @@
 {
   "description": [
     "Latin",
-    "English"
+    "English",
+    "Latin genus"
   ],
   "labels": [
     [
       "Barbastella barbastellus",
-      "Western barbastelle"
+      "Western barbastelle",
+      "Barbastella"
     ],
     [
       "Myotis bechsteinii",
-      "Bechsteins bat"
+      "Bechsteins bat",
+      "Myotis"
     ],
     [
       "Myotis daubentonii",
-      "Daubentons bat"
+      "Daubentons bat",
+      "Myotis"
     ],
     [
       "Myotis myotis",
-      "Greater mouse-eared bat"
+      "Greater mouse-eared bat",
+      "Myotis"
     ],
     [
       "Myotis mystacinus",
-      "Whiskered bat"
+      "Whiskered bat",
+      "Myotis"
     ],
     [
       "Myotis nattereri",
-      "Natterers bat"
+      "Natterers bat",
+      "Myotis"
     ],
     [
       "Nyctalus leisleri",
-      "Leislers bat"
+      "Leislers bat",
+      "Nyctalus"
     ],
     [
       "Nyctalus noctula",
-      "Common noctule"
+      "Common noctule",
+      "Nyctalus"
     ],
     [
       "Pipistrellus nathusii",
-      "Nathusius pipistrelle"
+      "Nathusius pipistrelle",
+      "Pipistrellus"
     ],
     [
       "Pipistrellus pipistrellus",
-      "Common pipistrelle"
+      "Common pipistrelle",
+      "Pipistrellus"
     ],
     [
       "Pipistrellus pygmaeus",
-      "Soprano pipistrelle"
+      "Soprano pipistrelle",
+      "Pipistrellus"
     ],
     [
       "Plecotus auritus",
-      "Brown long eared bat"
+      "Brown long eared bat",
+      "Plecotus"
     ],
     [
       "Rhinolophus ferrumequinum",
-      "Greater horseshoe bat"
+      "Greater horseshoe bat",
+      "Rhinolophus"
     ],
     [
       "Rhinolophus hipposideros",
-      "Lesser horseshoe bat"
+      "Lesser horseshoe bat",
+      "Rhinolophus"
     ],
     [
       "Tettigoniidea",
-      "Cricket"
+      "Cricket",
+      "Tettigoniidea"
     ],
     [
+      "audiomoth",
       "audiomoth",
       "audiomoth"
     ],
     [
       "background",
+      "background",
       "background"
     ],
     [
+      "noise",
       "noise",
       "noise"
     ],
     [
       "other",
+      "other",
       "other"
     ],
     [
+      "silence",
       "silence",
       "silence"
     ]
