@@ -76,6 +76,11 @@ abstract class MlClientBase(
         var startEpochSec: Double = 0.0,
     )
 
+    companion object {
+        /** Below this rate, [submit] discards audio (model expects ~256 kHz). */
+        const val MIN_SAMPLE_RATE_HZ = 196_000
+    }
+
     /** Sample rate set by the last [reset]; 0 until [reset] has been called. */
     protected var sampleRateHz: Int = 0
         private set
@@ -137,6 +142,11 @@ abstract class MlClientBase(
         require(count >= 0) { "count must be >= 0" }
         require(offset + count <= buffer.size) {
             "offset + count exceeds buffer size"
+        }
+
+        if (sampleRateHz < MIN_SAMPLE_RATE_HZ) {
+            // Too slow for BattyBirdNET; drop this batch and any partial chunks.
+            return
         }
 
         val size = chunkSize
