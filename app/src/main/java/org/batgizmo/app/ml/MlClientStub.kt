@@ -51,6 +51,7 @@ class MlClientStub(
         buffer: ShortArray,
         offset: Int,
         count: Int,
+        observedAtEpochSec: Double,
     ) {
         // Intentionally do not store [buffer]; ownership ends here so it can
         // be garbage-collected once this method returns.
@@ -75,7 +76,8 @@ class MlClientStub(
                             label = "Daubenton",
                             confidence = 0.87f,
                         )
-                    )
+                    ),
+                    observedAtEpochSec = observedAtEpochSec,
                 )
             )
         }

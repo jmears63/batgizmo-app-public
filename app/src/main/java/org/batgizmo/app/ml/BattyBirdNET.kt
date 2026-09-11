@@ -32,7 +32,7 @@ import kotlin.math.exp
 /**
  * BirdNET embedding extractor plus BattyBirdNET regional species classifier.
  *
- * Mirrors the Python `BattyBirdNet` class in BBNPoC/main.py: audio windows are
+ * Mirrors the BattyBirdNET wrapper in BBNPoC/main.py: audio windows are
  * passed through BirdNET to obtain embeddings, then through a UK bat TFLite
  * head that scores bat (and noise) classes.
  *
@@ -42,7 +42,7 @@ import kotlin.math.exp
  *
  * Not thread-safe: use from a single worker thread (e.g. [MlProcessor]).
  */
-class BattyBirdNet(
+class BattyBirdNET(
     assetManager: AssetManager,
     numThreads: Int = DEFAULT_NUM_THREADS,
 ) : AutoCloseable {
@@ -138,9 +138,9 @@ class BattyBirdNet(
         const val DEFAULT_NUM_THREADS = 4
 
         private const val EMBEDDING_ASSET =
-            "ml/BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite"
-        private const val CLASSIFIER_ASSET = "ml/BattyBirdNET-UK-256kHz.tflite"
-        private const val LABELS_ASSET = "ml/BattyBirdNET-UK-256kHz_Labels.txt"
+            "ml/BattyBirdNET/BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite"
+        private const val CLASSIFIER_ASSET = "ml/BattyBirdNET/BattyBirdNET-UK-256kHz.tflite"
+        private const val LABELS_ASSET = "ml/BattyBirdNET/BattyBirdNET-UK-256kHz_Labels.txt"
 
         /**
          * Map classifier logits to `[0, 1]` with a clipped sigmoid.

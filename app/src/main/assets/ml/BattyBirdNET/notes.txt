@@ -1,6 +1,8 @@
 BirdNET embeddings model (Android)
 ==================================
 
+Location: app/src/main/assets/ml/BattyBirdNET/
+
 Asset: BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite
 
 Why this file exists

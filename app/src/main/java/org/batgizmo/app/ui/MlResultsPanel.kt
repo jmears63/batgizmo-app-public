@@ -30,30 +30,53 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import org.batgizmo.app.ml.MlDetection
+import kotlinx.coroutines.delay
+import org.batgizmo.app.ml.MlSummaryAccumulator
+import org.batgizmo.app.ml.MlSummaryEntry
+import kotlin.time.Duration.Companion.seconds
 
-private const val ML_RESULTS_MAX_LINES = 5
+private const val ML_RESULTS_MAX_LINES = MlSummaryAccumulator.MAX_SUMMARY_ENTRIES
+private const val FRESH_AGE_SEC = 10.0
+private const val RECENT_AGE_SEC = 20.0
 
 /**
  * Spectrogram overlay panel for the running ML summary: unique labels with the
- * maximum confidence seen so far. Reserves space for [ML_RESULTS_MAX_LINES] lines.
+ * maximum confidence seen so far. Live lists are most-recent-first (capped);
+ * viewer lists are confidence-descending (ordering/capping by the accumulator).
+ * Age colours: under 10s white, under 20s overlay grey, otherwise darker grey.
+ * Shows at most [ML_RESULTS_MAX_LINES] lines.
  */
 @Composable
 fun MlResultsPanel(
     modifier: Modifier = Modifier,
-    summary: List<MlDetection> = emptyList(),
+    summary: List<MlSummaryEntry> = emptyList(),
 ) {
     val panelHeight = with(LocalDensity.current) {
         (SpectrogramOverlayStyle.textSize * ML_RESULTS_MAX_LINES).toDp()
     }
-    val textStyle = SpectrogramOverlayStyle.textStyle
     val lines = summary.take(ML_RESULTS_MAX_LINES)
+
+    var nowEpochSec by remember {
+        mutableDoubleStateOf(System.currentTimeMillis() / 1000.0)
+    }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1.seconds)
+            nowEpochSec = System.currentTimeMillis() / 1000.0
+        }
+    }
 
     Box(
         modifier
@@ -65,13 +88,19 @@ fun MlResultsPanel(
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.Start,
         ) {
-            for (detection in lines) {
+            for (entry in lines) {
+                val ageSec = nowEpochSec - entry.lastSeenAtEpochSec
+                val color = when {
+                    ageSec < FRESH_AGE_SEC -> Color.White
+                    ageSec < RECENT_AGE_SEC -> SpectrogramOverlayStyle.textColor
+                    else -> Color(0xFF555555)
+                }
                 Text(
-                    text = "${detection.label}  ${"%.0f".format(detection.confidence * 100)}%",
+                    text = "${entry.label}  ${"%.0f".format(entry.confidence * 100)}%",
                     modifier = Modifier.fillMaxWidth(),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    style = textStyle,
+                    style = SpectrogramOverlayStyle.textStyle.copy(color = color),
                     textAlign = TextAlign.Start,
                 )
             }

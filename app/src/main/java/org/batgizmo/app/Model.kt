@@ -50,7 +50,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -58,10 +57,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.batgizmo.app.ml.MlClient
 import org.batgizmo.app.ml.MlClientBase
-import org.batgizmo.app.ml.MlDetection
 import org.batgizmo.app.ml.MlOverflowPolicy
-import org.batgizmo.app.ml.MlResult
-import org.batgizmo.app.ml.mergeMlSummary
+import org.batgizmo.app.ml.MlSummaryAccumulator
+import org.batgizmo.app.ml.MlSummaryMode
 import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.ColourMapStep
 import org.batgizmo.app.pipeline.FileViewerPipeline
@@ -251,6 +249,7 @@ class UIModel(application: Application,
      */
     override fun onCleared() {
         Timber.d("onCleared() called")
+        mlSummaryAccumulator.close()
         super.onCleared()
 
         /*
@@ -400,7 +399,7 @@ class UIModel(application: Application,
             fileWriter?.run()
 
             if (settings.autoId) {
-                mutableMlSummaryFlow.value = emptyList()
+                mlSummaryAccumulator.clear(MlSummaryMode.Live)
                 ensureMlClient(result.sampleRate, forceReset = true)
                 liveMlAccepting = true
             }
@@ -550,17 +549,11 @@ class UIModel(application: Application,
     val detailsTextFlow: StateFlow<String?> = mutableDetailsTextFlow.asStateFlow()
 
     /**
-     * Queue of ML analysis outcomes. Unlimited so [send] never drops results.
-     * Drained only by the ViewModel merge loop into [mlSummaryFlow].
-     */
-    private val mlResultChannel = Channel<MlResult>(Channel.UNLIMITED)
-
-    /**
-     * Running ML summary: unique labels with the maximum confidence seen so far.
+     * Running ML summary: unique labels with max confidence and last-seen time.
      * Survives recomposition and configuration changes with the ViewModel.
      */
-    private val mutableMlSummaryFlow = MutableStateFlow<List<MlDetection>>(emptyList())
-    val mlSummaryFlow: StateFlow<List<MlDetection>> = mutableMlSummaryFlow.asStateFlow()
+    private val mlSummaryAccumulator = MlSummaryAccumulator()
+    val mlSummaryFlow = mlSummaryAccumulator.summary
 
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClientBase? = null
@@ -862,14 +855,7 @@ class UIModel(application: Application,
         colourMapHelper.initialize(settings.colourMap)
         startupPrompts.start()
 
-        // Drain ML result queue into the persistent summary.
-        viewModelScope.launch(CoroutineName("mlSummaryMerge")) {
-            for (result in mlResultChannel) {
-                mutableMlSummaryFlow.update { current ->
-                    mergeMlSummary(current, result)
-                }
-            }
-        }
+        mlSummaryAccumulator.start(viewModelScope)
 
         /**
          * Get the preference values from storage asynchronously. When the values arrive, they
@@ -921,7 +907,7 @@ class UIModel(application: Application,
                         when (p) {
                             is FileViewerPipeline -> submitFilePageToMl(p)
                             is LiveUSBPipeline -> {
-                                mutableMlSummaryFlow.value = emptyList()
+                                mlSummaryAccumulator.clear(MlSummaryMode.Live)
                                 ensureMlClient(p.sampleRateHz(), forceReset = true)
                                 liveMlAccepting = true
                             }
@@ -934,7 +920,7 @@ class UIModel(application: Application,
                     synchronized(mlLock) {
                         clearMlClientLocked()
                     }
-                    mutableMlSummaryFlow.value = emptyList()
+                    mlSummaryAccumulator.clear(MlSummaryMode.Live)
                 }
             }
         }
@@ -982,7 +968,7 @@ class UIModel(application: Application,
                     Timber.d("openFile called for $filename")
 
                     // Drop any prior Auto Id work before tearing down the old pipeline.
-                    discardQueuedMlWork()
+                    discardQueuedMlWork(MlSummaryMode.Viewer)
 
                     // Take a snapshot of the parameters used to build this pipeline.
                     val pps = settings.pipelineParameters.copy()
@@ -1617,7 +1603,7 @@ class UIModel(application: Application,
                     }
 
                     if (settings.autoId) {
-                        mutableMlSummaryFlow.value = emptyList()
+                        mlSummaryAccumulator.clear(MlSummaryMode.Live)
                         ensureMlClient(p.sampleRateHz(), forceReset = true)
                         liveMlAccepting = true
                     }
@@ -1656,7 +1642,7 @@ class UIModel(application: Application,
         // Stop Auto Id and abandon any waiting work (do not flush — close should not
         // keep analysing after the user leaves the viewer/live session).
         liveMlAccepting = false
-        discardQueuedMlWork()
+        discardQueuedMlWork(MlSummaryMode.Live)
 
         // Finish with the file writer:
         fileWriter?.shutdown()
@@ -1679,10 +1665,7 @@ class UIModel(application: Application,
             clearMlClientLocked()
             // Drop results already delivered but not yet merged, then clear summary again
             // so an in-flight chunk cannot repopulate the panel after close.
-            while (mlResultChannel.tryReceive().isSuccess) {
-                // discard
-            }
-            mutableMlSummaryFlow.value = emptyList()
+            mlSummaryAccumulator.clear(MlSummaryMode.Live)
         }
         mutableMicrophoneVolumeParametersFlow.value = null
         mutableMicrophoneGainFlow.value = null
@@ -1704,23 +1687,24 @@ class UIModel(application: Application,
      * @param forceReset if true, always [MlClientBase.reset] even when the rate is unchanged
      *   (e.g. starting analysis of a new file page).
      * @param overflowPolicy live [MlOverflowPolicy.DropIfFull] vs viewer [MlOverflowPolicy.QueueAll]
+     * @param summaryMode Auto Id summary TTL policy applied when the client is reset
      */
     fun ensureMlClient(
         sampleRateHz: Int,
         forceReset: Boolean = false,
         overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull,
+        summaryMode: MlSummaryMode = MlSummaryMode.Live,
     ) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         synchronized(mlLock) {
             val client = (mlClient as? MlClient) ?: MlClient(getApplication()) { result ->
-                // Unlimited channel: trySend does not drop; avoids blocking the deliverer.
-                mlResultChannel.trySend(result)
+                mlSummaryAccumulator.submitResult(result)
             }.also { mlClient = it }
             client.setOverflowPolicy(overflowPolicy)
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz
-                mutableMlSummaryFlow.value = emptyList()
+                mlSummaryAccumulator.clear(summaryMode)
             }
         }
     }
@@ -1738,9 +1722,16 @@ class UIModel(application: Application,
      */
     fun maybeSubmitLiveAudioToMl(buffer: ShortArray, offset: Int, count: Int) {
         if (!shouldSubmitLiveAudioToMl() || count <= 0) return
+        val observedAtEpochSec = System.currentTimeMillis() / 1000.0
         synchronized(mlLock) {
             if (!shouldSubmitLiveAudioToMl()) return
-            mlClient?.submit(buffer, offset, count, isLast = false)
+            mlClient?.submit(
+                buffer,
+                offset,
+                count,
+                observedAtEpochSec = observedAtEpochSec,
+                isLast = false,
+            )
         }
     }
 
@@ -1748,8 +1739,8 @@ class UIModel(application: Application,
      * Drop any waiting ML work and clear the on-screen summary.
      * An in-flight chunk may still finish; new page submit uses [forceReset].
      */
-    private fun discardQueuedMlWork() {
-        mutableMlSummaryFlow.value = emptyList()
+    private fun discardQueuedMlWork(summaryMode: MlSummaryMode) {
+        mlSummaryAccumulator.clear(summaryMode)
         synchronized(mlLock) {
             (mlClient as? MlClient)?.clearQueue()
         }
@@ -1769,14 +1760,22 @@ class UIModel(application: Application,
         if (sampleRateHz <= 0) return
         val (buffer, range) = pipeline.getAssignedRawDataBuffer() ?: return
 
-        discardQueuedMlWork()
+        discardQueuedMlWork(MlSummaryMode.Viewer)
         ensureMlClient(
             sampleRateHz,
             forceReset = true,
             overflowPolicy = MlOverflowPolicy.QueueAll,
+            summaryMode = MlSummaryMode.Viewer,
         )
+        val observedAtEpochSec = System.currentTimeMillis() / 1000.0
         synchronized(mlLock) {
-            mlClient?.submit(buffer, range.start, range.length, isLast = true)
+            mlClient?.submit(
+                buffer,
+                range.start,
+                range.length,
+                observedAtEpochSec = observedAtEpochSec,
+                isLast = true,
+            )
         }
         Timber.d(
             "Submitted file page to MlClient: ${range.length} samples at $sampleRateHz Hz " +
@@ -1789,7 +1788,13 @@ class UIModel(application: Application,
         synchronized(mlLock) {
             val client = mlClient ?: return
             if (mlClientSampleRateHz == null) return
-            client.submit(ShortArray(0), 0, 0, isLast = true)
+            client.submit(
+                ShortArray(0),
+                0,
+                0,
+                observedAtEpochSec = System.currentTimeMillis() / 1000.0,
+                isLast = true,
+            )
         }
     }
 
@@ -2018,7 +2023,7 @@ class UIModel(application: Application,
             viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
                 mutex.withLock {
                     // Stop analysing the previous page immediately (reload can take a while).
-                    discardQueuedMlWork()
+                    discardQueuedMlWork(MlSummaryMode.Viewer)
                     reload(
                         settings,
                         rawPageRange,

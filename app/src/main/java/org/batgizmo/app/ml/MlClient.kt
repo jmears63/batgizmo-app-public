@@ -102,9 +102,10 @@ class MlClient(
         buffer: ShortArray,
         offset: Int,
         count: Int,
+        observedAtEpochSec: Double,
     ) {
         // Non-blocking hand-off; ownership transfers on success.
-        processor.tryEnqueue(buffer, offset, count, sampleRateHz)
+        processor.tryEnqueue(buffer, offset, count, sampleRateHz, observedAtEpochSec)
     }
 
     override fun shutdown() {

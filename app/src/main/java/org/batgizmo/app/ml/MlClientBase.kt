@@ -24,15 +24,28 @@ package org.batgizmo.app.ml
 
 /**
  * Outcome of ML analysis for one submitted audio buffer.
- * Shape will be extended as the model integration lands.
+ *
+ * [observedAtEpochSec] is the Unix-epoch time (seconds) of the start of the
+ * analysed window.
  */
 data class MlResult(
     val detections: List<MlDetection> = emptyList(),
+    val observedAtEpochSec: Double = 0.0,
 )
 
 data class MlDetection(
     val label: String,
     val confidence: Float,
+)
+
+/**
+ * One row in the Auto Id summary overlay, including when it was last reinforced
+ * (Unix epoch seconds) for age-based styling.
+ */
+data class MlSummaryEntry(
+    val label: String,
+    val confidence: Float,
+    val lastSeenAtEpochSec: Double,
 )
 
 /**
@@ -59,6 +72,8 @@ abstract class MlClientBase(
     private class Chunk(
         val buffer: ShortArray,
         var filled: Int = 0,
+        /** Unix-epoch seconds at the first sample written into this chunk. */
+        var startEpochSec: Double = 0.0,
     )
 
     /** Sample rate set by the last [reset]; 0 until [reset] has been called. */
@@ -97,6 +112,9 @@ abstract class MlClientBase(
      * call returns; the caller may reuse it. [offset] and [count] select the
      * slice within [buffer].
      *
+     * [observedAtEpochSec] is the Unix-epoch time (seconds) of [buffer]\[[offset]\];
+     * later samples are stamped by advancing at [sampleRateHz].
+     *
      * Samples are written into all in-flight overlapping chunks. After the
      * first [hopSize] samples (first half-chunk), two chunks are filled in
      * parallel. When any chunk reaches [chunkSize], [processChunk] is invoked for it.
@@ -109,6 +127,7 @@ abstract class MlClientBase(
         buffer: ShortArray,
         offset: Int,
         count: Int,
+        observedAtEpochSec: Double,
         isLast: Boolean = false,
     ) {
         check(sampleRateHz > 0 && chunkSize > 0 && hopSize > 0) {
@@ -122,6 +141,7 @@ abstract class MlClientBase(
 
         val size = chunkSize
         val hop = hopSize
+        val secPerSample = 1.0 / sampleRateHz
         var srcOffset = offset
         var remaining = count
 
@@ -141,7 +161,12 @@ abstract class MlClientBase(
             }
             check(toCopy > 0) { "internal error: no progress filling overlapping chunks" }
 
+            val writeStartEpoch =
+                observedAtEpochSec + (srcOffset - offset) * secPerSample
             for (chunk in activeChunks) {
+                if (chunk.filled == 0) {
+                    chunk.startEpochSec = writeStartEpoch
+                }
                 System.arraycopy(buffer, srcOffset, chunk.buffer, chunk.filled, toCopy)
                 chunk.filled += toCopy
             }
@@ -154,7 +179,12 @@ abstract class MlClientBase(
                 when {
                     activeChunks.first().filled == size -> {
                         val completed = activeChunks.removeFirst()
-                        processChunk(completed.buffer, 0, size)
+                        processChunk(
+                            completed.buffer,
+                            0,
+                            size,
+                            completed.startEpochSec,
+                        )
                     }
                     activeChunks.last().filled == hop -> {
                         activeChunks.addLast(Chunk(ShortArray(size)))
@@ -190,7 +220,7 @@ abstract class MlClientBase(
         if (fullest.filled < size) {
             fullest.buffer.fill(0, fullest.filled, size)
         }
-        processChunk(fullest.buffer, 0, size)
+        processChunk(fullest.buffer, 0, size, fullest.startEpochSec)
     }
 
     /**
@@ -200,11 +230,14 @@ abstract class MlClientBase(
      * does not retain a reference afterward. Implementations may keep the
      * buffer for async work, or drop it so the garbage collector can reclaim it.
      * Deliver outcomes with [deliverResult].
+     *
+     * [observedAtEpochSec] is the Unix-epoch time of the first sample in this chunk.
      */
     protected abstract fun processChunk(
         buffer: ShortArray,
         offset: Int,
         count: Int,
+        observedAtEpochSec: Double,
     )
 
     /** Invoke the caller-supplied result callback. */

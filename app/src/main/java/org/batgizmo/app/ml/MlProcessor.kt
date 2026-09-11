@@ -56,7 +56,7 @@ enum class MlOverflowPolicy {
  * ML processing backend.
  *
  * Raw chunks go through a pool of resample workers (r8brain, multi-core), then a
- * single infer worker owns [BattyBirdNet] (LiteRT is not thread-safe).
+ * single infer worker owns [BattyBirdNET] (LiteRT is not thread-safe).
  *
  * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingCount]
  * already reaches [MAX_LIVE_QUEUED_CHUNKS].
@@ -73,20 +73,23 @@ class MlProcessor(
         val offset: Int,
         val count: Int,
         val sampleRateHz: Int,
+        /** Unix-epoch seconds at the first sample of this chunk. */
+        val observedAtEpochSec: Double,
     )
 
     private data class ResampledJob(
         val window: FloatArray,
         val chunkId: Int,
         val epoch: Long,
+        val observedAtEpochSec: Double,
     )
 
     companion object {
         /** Sample rate expected by the model. */
-        const val REQUIRED_SAMPLE_RATE_HZ = BattyBirdNet.SAMPLE_RATE_HZ
+        const val REQUIRED_SAMPLE_RATE_HZ = BattyBirdNET.SAMPLE_RATE_HZ
 
         /** Samples per chunk at [REQUIRED_SAMPLE_RATE_HZ]. */
-        const val CHUNK_SIZE_AT_REQUIRED_RATE = BattyBirdNet.SIG_SAMPLES
+        const val CHUNK_SIZE_AT_REQUIRED_RATE = BattyBirdNET.SIG_SAMPLES
 
         /**
          * Soft cap on queued chunks in live mode ([MlOverflowPolicy.DropIfFull]).
@@ -174,7 +177,7 @@ class MlProcessor(
     @Volatile
     private var overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull
 
-    private var model: BattyBirdNet? = null
+    private var model: BattyBirdNET? = null
 
     /** Switch live drop-vs-viewer queue-all behaviour. Safe to call from any thread. */
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
@@ -215,6 +218,7 @@ class MlProcessor(
         offset: Int,
         count: Int,
         sampleRateHz: Int,
+        observedAtEpochSec: Double,
     ): Boolean {
         require(offset >= 0) { "offset must be >= 0" }
         require(count >= 0) { "count must be >= 0" }
@@ -231,6 +235,7 @@ class MlProcessor(
             offset = 0,
             count = owned.size,
             sampleRateHz = sampleRateHz,
+            observedAtEpochSec = observedAtEpochSec,
         )
 
         if (overflowPolicy == MlOverflowPolicy.DropIfFull) {
@@ -317,7 +322,9 @@ class MlProcessor(
                 val window = resampleToWindow(submission, chunkId) ?: continue
                 if (jobEpoch != epoch.get()) continue
                 try {
-                    inferQueue.send(ResampledJob(window, chunkId, jobEpoch))
+                    inferQueue.send(
+                        ResampledJob(window, chunkId, jobEpoch, submission.observedAtEpochSec)
+                    )
                 } catch (_: ClosedSendChannelException) {
                     break
                 }
@@ -338,22 +345,17 @@ class MlProcessor(
         }
     }
 
-    private fun ensureModel(): BattyBirdNet? {
+    private fun ensureModel(): BattyBirdNET? {
         model?.let { return it }
         return try {
-            BattyBirdNet(appContext.assets).also { model = it }
+            BattyBirdNET(appContext.assets).also { model = it }
         } catch (e: Exception) {
-            Timber.e(e, "MlProcessor: failed to load BattyBirdNet")
+            Timber.e(e, "MlProcessor: failed to load BattyBirdNET")
             null
         }
     }
 
     private fun resampleToWindow(submission: ChunkSubmission, chunkId: Int): FloatArray? {
-        Timber.i(
-            "MlProcessor.resample: chunk #$chunkId: ${submission.count} samples " +
-                "at ${submission.sampleRateHz} Hz"
-        )
-
         val resampled = nativeResampleToRequiredRate(
             submission.buffer,
             submission.offset,
@@ -375,7 +377,7 @@ class MlProcessor(
     }
 
     private fun inferWindow(job: ResampledJob): MlResult {
-        val bbn = ensureModel() ?: return MlResult()
+        val bbn = ensureModel() ?: return MlResult(observedAtEpochSec = job.observedAtEpochSec)
 
         return try {
             val scores = bbn.predict(job.window)
@@ -395,10 +397,13 @@ class MlProcessor(
                 }
                 Timber.i("MlProcessor: chunk #${job.chunkId} detections: $listed")
             }
-            MlResult(detections = detections)
+            MlResult(
+                detections = detections,
+                observedAtEpochSec = job.observedAtEpochSec,
+            )
         } catch (e: Exception) {
             Timber.e(e, "MlProcessor: inference failed on chunk #${job.chunkId}")
-            MlResult()
+            MlResult(observedAtEpochSec = job.observedAtEpochSec)
         }
     }
 }
