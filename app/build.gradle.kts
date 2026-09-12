@@ -19,8 +19,8 @@ android {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 29
         targetSdk = 37
-        versionCode = 32
-        versionName = "2.1.1"
+        versionCode = 33
+        versionName = "2.1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
