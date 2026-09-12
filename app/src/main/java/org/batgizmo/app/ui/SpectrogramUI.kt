@@ -997,10 +997,7 @@ class SpectrogramUI(
         val showDetails =
             overlayTextMode == Settings.OverlayTextModeOptions.FULL.value
         val timeFormatter = remember {
-            DateTimeFormatter.ofPattern("HH:mm:ss")
-        }
-        val sunsetFormatter = remember {
-            DateTimeFormatter.ofPattern("hh:mm a")
+            DateTimeFormatter.ofPattern("HH:mm")
         }
         var currentTimeText by remember {
             mutableStateOf(LocalTime.now().format(timeFormatter))
@@ -1025,9 +1022,7 @@ class SpectrogramUI(
                     val times = SunriseSunset.forLocation(
                         loc.latitude, loc.longitude
                     )
-                    sunsetText = times.sunset
-                        ?.format(sunsetFormatter)
-                        ?.lowercase(Locale.getDefault())
+                    sunsetText = times.sunset?.format(timeFormatter)
                     delay(60_000.milliseconds)
                 }
             }
