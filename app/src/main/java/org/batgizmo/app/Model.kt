@@ -1665,19 +1665,7 @@ class UIModel(application: Application,
         // Heavy calculations to CPU worker thread:
         viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
             mutex.withLock {
-                when (pipeline) {
-                    is LiveUSBPipeline -> {
-                        // Live buffers can be much longer than the visible window
-                        // (e.g. 60s page, 10s view). Auto-FFT from a zoomed-in axis
-                        // would rebuild the whole page at extreme density and hang.
-                        // Crop/pan only recolour the existing transform.
-                        internalDoColourMappingAndRender(
-                            shouldAutoBnC,
-                            settings.autoBaselineEnabled
-                        )
-                    }
-                    else -> reload(settings, rawPageRange, shouldAutoBnC)
-                }
+                reload(settings, rawPageRange, shouldAutoBnC)
             }
         }
     }
@@ -1986,8 +1974,10 @@ class UIModel(application: Application,
                     )
                 }
             } else {
+                val pageSamples =
+                    (pipelineParameters.dataPageTimeSpanS * sampleRate).toInt()
                 newFftParameters = AbstractPipeline.calculateFftParameters(
-                    pipelineParameters, screenFactors, sampleRate
+                    pipelineParameters, screenFactors, sampleRate, pageSamples
                 )
 
             }
