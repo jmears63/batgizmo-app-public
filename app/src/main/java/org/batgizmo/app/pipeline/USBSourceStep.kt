@@ -202,13 +202,11 @@ class USBSourceStep(
      * Make sure underlying handles and resources are closed:
      */
     override suspend fun shutdown() {
-
-        // If we don't do this, it will continue for ever, zombie like.
-        // Signal to the job to finish and wait for it to avoid
-        // async native layer access to data that is about to be garbage
-        // collected:
-        channelJob?.cancelAndJoin()
-
+        // Cancel only — do not join while AbstractPipeline.mutex may be held by
+        // the caller (fullExecute → internalShutdown). The channel job can be
+        // blocked inside pipeline.sliceRender waiting on that same mutex, which
+        // would deadlock on cancelAndJoin.
+        channelJob?.cancel()
         channelJob = null
     }
 
@@ -216,8 +214,8 @@ class USBSourceStep(
 
         rangedRawDataBuffer.assignedRange = HORange.EMPTY
 
-        // The job that handles new data contains data that we need to reset:
-        channelJob?.cancelAndJoin()
+        // Same lock-order constraint as [shutdown]: cancel without joining.
+        channelJob?.cancel()
         channelJob = createChannelJob()
     }
 
