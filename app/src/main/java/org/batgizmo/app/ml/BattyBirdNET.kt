@@ -31,6 +31,24 @@ import java.nio.channels.FileChannel
 import kotlin.math.exp
 
 /**
+ * One classifier class from the BattyBirdNET labels JSON (all language columns + flags).
+ */
+data class LabelCatalogEntry(
+    val texts: List<String>,
+    val discard: Boolean,
+    val disableByDefault: Boolean,
+) {
+    /** Stable key: first text column (Latin). */
+    val key: String get() = texts.first()
+
+    fun displayName(languageIndex: Int): String {
+        if (texts.isEmpty()) return ""
+        val i = if (languageIndex in texts.indices) languageIndex else 0
+        return texts[i]
+    }
+}
+
+/**
  * BirdNET embedding extractor plus BattyBirdNET regional species classifier.
  *
  * Mirrors the BattyBirdNET wrapper in BBNPoC/main.py: audio windows are
@@ -60,6 +78,18 @@ class BattyBirdNET(
      */
     val labelKeys: List<String>
 
+    /**
+     * Per-class `discard` flags from the labels JSON, aligned with [labelKeys].
+     * When true, the class should not be shown in Auto Id results.
+     */
+    val labelDiscard: List<Boolean>
+
+    /**
+     * Per-class `disable_by_default` flags from the labels JSON, aligned with
+     * [labelKeys]. When true, the class starts disabled in Auto Id settings.
+     */
+    val labelDisabledByDefault: List<Boolean>
+
     private val labelRows: List<List<String>>
     private val embedder: Interpreter
     private val classifier: Interpreter
@@ -72,6 +102,8 @@ class BattyBirdNET(
         languages = table.description
         labelRows = table.rows
         labelKeys = labelRows.map { row -> row.first() }
+        labelDiscard = table.discard
+        labelDisabledByDefault = table.disabledByDefault
 
         val options = Interpreter.Options().apply {
             setNumThreads(numThreads)
@@ -181,6 +213,8 @@ class BattyBirdNET(
         private data class LabelsTable(
             val description: List<String>,
             val rows: List<List<String>>,
+            val discard: List<Boolean>,
+            val disabledByDefault: List<Boolean>,
         )
 
         /**
@@ -189,6 +223,20 @@ class BattyBirdNET(
          */
         fun loadLabelLanguages(assetManager: AssetManager): List<String> =
             loadLabelsJson(assetManager, LABELS_JSON_ASSET).description
+
+        /**
+         * Full label catalog from the labels JSON, in classifier column order.
+         */
+        fun loadLabelCatalog(assetManager: AssetManager): List<LabelCatalogEntry> {
+            val table = loadLabelsJson(assetManager, LABELS_JSON_ASSET)
+            return table.rows.indices.map { i ->
+                LabelCatalogEntry(
+                    texts = table.rows[i],
+                    discard = table.discard[i],
+                    disableByDefault = table.disabledByDefault[i],
+                )
+            }
+        }
 
         /**
          * Map classifier logits to `[0, 1]` with a clipped sigmoid.
@@ -214,14 +262,20 @@ class BattyBirdNET(
                 require(description.isNotEmpty()) { "labels JSON description must be non-empty" }
 
                 val labelsJson = root.getJSONArray("labels")
-                val rows = List(labelsJson.length()) { i ->
-                    val rowJson = labelsJson.getJSONArray(i)
+                val rows = ArrayList<List<String>>(labelsJson.length())
+                val discard = ArrayList<Boolean>(labelsJson.length())
+                val disabledByDefault = ArrayList<Boolean>(labelsJson.length())
+                for (i in 0 until labelsJson.length()) {
+                    val entry = labelsJson.getJSONObject(i)
+                    val rowJson = entry.getJSONArray("text")
                     require(rowJson.length() == description.size) {
-                        "labels[$i] has ${rowJson.length()} names; expected ${description.size}"
+                        "labels[$i].text has ${rowJson.length()} names; expected ${description.size}"
                     }
-                    List(rowJson.length()) { j -> rowJson.getString(j) }
+                    rows.add(List(rowJson.length()) { j -> rowJson.getString(j) })
+                    discard.add(entry.optBoolean("discard", false))
+                    disabledByDefault.add(entry.optBoolean("disable_by_default", false))
                 }
-                return LabelsTable(description, rows)
+                return LabelsTable(description, rows, discard, disabledByDefault)
             }
         }
 

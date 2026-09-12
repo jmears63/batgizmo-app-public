@@ -93,6 +93,11 @@ class MlClient(
         processor.setLabelLanguage(languageIndex)
     }
 
+    /** User suppressions (Latin key → ignore); forwarded to [MlProcessor]. */
+    fun setBbnSuppressions(suppressions: Map<String, Boolean>) {
+        processor.setBbnSuppressions(suppressions)
+    }
+
     /** Discard queued chunks (not the in-flight one). */
     fun clearQueue() {
         processor.clearQueue()

@@ -106,19 +106,6 @@ class MlProcessor(
         /** Omit weak scores from the UI summary (show only confidence > 70%). */
         private const val MIN_CONFIDENCE = 0.7f
 
-        /**
-         * Non-bat / non-species classes, matched against stable Latin [BattyBirdNET.labelKeys]
-         * (first labels JSON column).
-         */
-        private val NON_BAT_LABEL_KEYS = setOf(
-            "noise",
-            "background",
-            "silence",
-            "other",
-            "audiomoth",
-            "Tettigoniidea",
-        )
-
         init {
             System.loadLibrary("batgizmo-native")
         }
@@ -178,6 +165,13 @@ class MlProcessor(
     @Volatile
     private var labelLanguageIndex: Int = BattyBirdNET.DEFAULT_LANGUAGE_INDEX
 
+    /**
+     * Latin label keys the user chose to ignore ([Settings.bbnSuppresions] where
+     * value is true). Matched against [BattyBirdNET.labelKeys].
+     */
+    @Volatile
+    private var suppressedLabelKeys: Set<String> = emptySet()
+
     private var model: BattyBirdNET? = null
 
     /** Switch live drop-vs-viewer queue-all behaviour. Safe to call from any thread. */
@@ -188,6 +182,14 @@ class MlProcessor(
     /** Update display-name language index for subsequent detections. Safe from any thread. */
     fun setLabelLanguage(languageIndex: Int) {
         labelLanguageIndex = languageIndex
+    }
+
+    /**
+     * Update user suppressions for subsequent detections. Keys with value `true`
+     * are ignored (in addition to labels JSON `discard`). Safe from any thread.
+     */
+    fun setBbnSuppressions(suppressions: Map<String, Boolean>) {
+        suppressedLabelKeys = suppressions.filterValues { it }.keys
     }
 
     /**
@@ -391,8 +393,18 @@ class MlProcessor(
             val detections = ArrayList<MlDetection>()
             for (i in scores.indices) {
                 val score = scores[i]
-                if (bbn.labelKeys[i] in NON_BAT_LABEL_KEYS || score <= MIN_CONFIDENCE) continue
-                detections.add(MlDetection(displayLabels[i], score))
+                if (bbn.labelDiscard[i] ||
+                    bbn.labelKeys[i] in suppressedLabelKeys ||
+                    score <= MIN_CONFIDENCE
+                ) {
+                    continue
+                }
+                detections.add(
+                    MlDetection(
+                        label = displayLabels[i],
+                        confidence = score,
+                    )
+                )
             }
             detections.sortByDescending { it.confidence }
             if (detections.isEmpty()) {

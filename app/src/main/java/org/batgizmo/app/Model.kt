@@ -55,6 +55,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.batgizmo.app.ml.BattyBirdNET
 import org.batgizmo.app.ml.MlClient
 import org.batgizmo.app.ml.MlClientBase
 import org.batgizmo.app.ml.MlOverflowPolicy
@@ -868,11 +869,23 @@ class UIModel(application: Application,
         // Kick off reading the settings in a coroutine, which will therefore happen in a bit:
         viewModelScope.launch(Dispatchers.IO) {
             flow.collect { prefs ->
+                var persistMergedSuppressions = false
                 mutex.withLock {
                     settings.copyFromPreferences(prefs)
+                    val suppressionDefaults =
+                        BattyBirdNET.loadLabelCatalog(getApplication<Application>().assets)
+                            .filter { !it.discard }
+                            .associate { it.key to it.disableByDefault }
+                    persistMergedSuppressions =
+                        settings.mergeBbnSuppressionDefaults(suppressionDefaults)
                     if (colourMapHelper.apply(settings.colourMap)) {
                         pipeline?.fullRenderFromSource()
                         triggerBitblt()
+                    }
+                }
+                if (persistMergedSuppressions) {
+                    settingsDataStore.edit { editPrefs ->
+                        settings.copyToPreferences(editPrefs)
                     }
                 }
                 // Signal to the UI that the settings values are ready:
@@ -895,6 +908,8 @@ class UIModel(application: Application,
                 val autoIdDisabled = !updatedSettings.autoId && settings.autoId
                 val autoIdLanguageChanged =
                     updatedSettings.autoIdLanguage != settings.autoIdLanguage
+                val bbnSuppressionsChanged =
+                    updatedSettings.bbnSuppresions != settings.bbnSuppresions
                 settings = updatedSettings
                 if (liveInputSourceChanged) {
                     liveInputSourceOverrideSession = false
@@ -924,9 +939,14 @@ class UIModel(application: Application,
                         clearMlClientLocked()
                     }
                     mlSummaryAccumulator.clear(MlSummaryMode.Live)
-                } else if (updatedSettings.autoId && autoIdLanguageChanged) {
+                } else if (updatedSettings.autoId &&
+                    (autoIdLanguageChanged || bbnSuppressionsChanged)
+                ) {
                     synchronized(mlLock) {
-                        (mlClient as? MlClient)?.setLabelLanguage(updatedSettings.autoIdLanguage)
+                        (mlClient as? MlClient)?.let { client ->
+                            client.setLabelLanguage(updatedSettings.autoIdLanguage)
+                            client.setBbnSuppressions(updatedSettings.bbnSuppresions)
+                        }
                     }
                     when (val p = pipeline) {
                         is FileViewerPipeline -> submitFilePageToMl(p)
@@ -1713,6 +1733,7 @@ class UIModel(application: Application,
             }.also { mlClient = it }
             client.setOverflowPolicy(overflowPolicy)
             client.setLabelLanguage(settings.autoIdLanguage)
+            client.setBbnSuppressions(settings.bbnSuppresions)
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz

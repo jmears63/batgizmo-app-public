@@ -28,6 +28,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import org.json.JSONObject
 
 /**
  * There are two kinds of settings:
@@ -91,6 +92,12 @@ data class Settings(
      * `description` array. Out-of-range values are treated as 0.
      */
     var autoIdLanguage: Int = DEFAULT_AUTO_ID_LANGUAGE,
+    /**
+     * BattyBirdNET classes to ignore in Auto Id: Latin name (first labels JSON
+     * text column) → ignored when true. Defaults come from each label's
+     * `disable_by_default`; persisted as a JSON object.
+     */
+    var bbnSuppresions: Map<String, Boolean> = emptyMap(),
     var pipelineParameters: PipelineParameters = PipelineParameters()
 ) {
     // Provide some abstraction to allow different enums to be handled the same way:
@@ -464,6 +471,50 @@ data class Settings(
 
         fun isAutoHeterodyneSampleRateApplicable(sampleRateHz: Int): Boolean =
             sampleRateHz >= AUTO_HET_MIN_SAMPLE_RATE_HZ
+
+        /** Serialise [bbnSuppresions] for DataStore. */
+        fun bbnSuppresionsToJson(map: Map<String, Boolean>): String {
+            val root = JSONObject()
+            for ((key, value) in map) {
+                root.put(key, value)
+            }
+            return root.toString()
+        }
+
+        /** Parse a [bbnSuppresions] JSON object; invalid input yields an empty map. */
+        fun bbnSuppresionsFromJson(json: String): Map<String, Boolean> {
+            return try {
+                val root = JSONObject(json)
+                buildMap {
+                    val keys = root.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        put(key, root.getBoolean(key))
+                    }
+                }
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
+    }
+
+    /**
+     * Ensure every key in [defaults] exists in [bbnSuppresions], filling missing
+     * entries from [defaults] (typically `disable_by_default` from the labels JSON).
+     * Existing keys are left unchanged. Returns true if the map was modified.
+     */
+    fun mergeBbnSuppressionDefaults(defaults: Map<String, Boolean>): Boolean {
+        if (defaults.isEmpty()) return false
+        val merged = bbnSuppresions.toMutableMap()
+        var changed = false
+        for ((key, value) in defaults) {
+            if (key !in merged) {
+                merged[key] = value
+                changed = true
+            }
+        }
+        if (changed) bbnSuppresions = merged
+        return changed
     }
 
     private val keyUseDarkTheme = booleanPreferencesKey("useDarkTheme")
@@ -510,6 +561,7 @@ data class Settings(
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
     private val keyAutoId = booleanPreferencesKey("autoId")
     private val keyAutoIdLanguage = intPreferencesKey("autoIdLanguageIndex")
+    private val keyBbnSuppresions = stringPreferencesKey("bbnSuppresions")
 
 
     fun copyToPreferences(prefs: MutablePreferences) {
@@ -566,6 +618,7 @@ data class Settings(
         prefs[keyAutoHeterodyneLoMaxKhz] = loMaxKhz
         prefs[keyAutoId] = autoId
         prefs[keyAutoIdLanguage] = autoIdLanguage
+        prefs[keyBbnSuppresions] = bbnSuppresionsToJson(bbnSuppresions)
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -674,6 +727,8 @@ data class Settings(
             autoId = requireNotNull(prefs[keyAutoId])
         if (prefs[keyAutoIdLanguage] != null)
             autoIdLanguage = requireNotNull(prefs[keyAutoIdLanguage])
+        if (prefs[keyBbnSuppresions] != null)
+            bbnSuppresions = bbnSuppresionsFromJson(requireNotNull(prefs[keyBbnSuppresions]))
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
         autoHeterodyneLoMaxKhz = loMaxKhz

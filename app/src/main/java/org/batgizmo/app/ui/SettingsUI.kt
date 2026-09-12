@@ -31,12 +31,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,11 +48,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -70,6 +76,7 @@ import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.ml.BattyBirdNET
+import org.batgizmo.app.ml.LabelCatalogEntry
 
 class SettingsUI(private val model: UIModel) {
 
@@ -625,14 +632,54 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
 
-            settingsSection(SettingsSection.EXPERIMENTAL, expandedSections) {
+            settingsSection(SettingsSection.AUTO_ID, expandedSections) {
                 item {
-                    MyCheckbox(
-                        "Auto Id", model.settings.autoId
-                    ) { value: Boolean ->
-                        scope.launch {
-                            model.updateStoredSettings(model.settings.copy(autoId = value))
+                    var autoIdEnabled by rememberSaveable {
+                        mutableStateOf(model.settings.autoId)
+                    }
+                    var showSuppressions by rememberSaveable { mutableStateOf(false) }
+                    val labelCatalog = remember {
+                        BattyBirdNET.loadLabelCatalog(context.assets)
+                    }
+                    val languageIndex = model.settings.autoIdLanguage
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        MyCheckbox(
+                            "BattyBirdNET", autoIdEnabled
+                        ) { value: Boolean ->
+                            autoIdEnabled = value
+                            scope.launch {
+                                model.updateStoredSettings(model.settings.copy(autoId = value))
+                            }
                         }
+                        Button(
+                            onClick = { showSuppressions = true },
+                            enabled = autoIdEnabled
+                        ) {
+                            Text("Suppressions")
+                        }
+                    }
+                    if (showSuppressions) {
+                        val suppressible = remember(labelCatalog) {
+                            labelCatalog.filter { !it.discard }
+                        }
+                        AutoIdSuppressionsDialog(
+                            entries = suppressible,
+                            languageIndex = languageIndex,
+                            suppressions = model.settings.bbnSuppresions,
+                            onDismiss = { showSuppressions = false },
+                            onConfirm = { updated ->
+                                scope.launch {
+                                    model.updateStoredSettings(
+                                        model.settings.copy(bbnSuppresions = updated)
+                                    )
+                                    showSuppressions = false
+                                }
+                            },
+                        )
                     }
                 }
 
@@ -714,6 +761,73 @@ class SettingsUI(private val model: UIModel) {
     }
 }
 
+/**
+ * Modal listing Auto Id classes that are not discarded. Checkboxes bind to
+ * [suppressions] (settings [Settings.bbnSuppresions]); missing keys fall back
+ * to each entry's `disable_by_default`.
+ */
+@Composable
+private fun AutoIdSuppressionsDialog(
+    entries: List<LabelCatalogEntry>,
+    languageIndex: Int,
+    suppressions: Map<String, Boolean>,
+    onDismiss: () -> Unit,
+    onConfirm: (Map<String, Boolean>) -> Unit,
+) {
+    val disabled = remember(entries, suppressions) {
+        mutableStateMapOf<String, Boolean>().apply {
+            entries.forEach { entry ->
+                put(
+                    entry.key,
+                    suppressions[entry.key] ?: entry.disableByDefault,
+                )
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ids to Ignore") },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+            ) {
+                items(entries, key = { it.key }) { entry ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            entry.displayName(languageIndex),
+                            modifier = Modifier.weight(1f),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Checkbox(
+                            checked = disabled[entry.key] == true,
+                            onCheckedChange = { disabled[entry.key] = it }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(disabled.toMap()) }) {
+                Text("Done")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 /** The collapsible sections shown in the settings screen, in display order. */
 private enum class SettingsSection(val title: String) {
     APPEARANCE("Appearance"),
@@ -723,7 +837,7 @@ private enum class SettingsSection(val title: String) {
     RENDERING("Rendering"),
     RECORDING("Recording"),
     WARNINGS("Warnings"),
-    EXPERIMENTAL("Experimental"),
+    AUTO_ID("Auto Id"),
     DIAGNOSTICS("Diagnostics"),
 }
 
