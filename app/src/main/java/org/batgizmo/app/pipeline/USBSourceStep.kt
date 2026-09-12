@@ -25,7 +25,6 @@ package org.batgizmo.app.pipeline
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.HORange
@@ -60,18 +59,55 @@ class USBSourceStep(
                 val calcs = safeParams.calcs
                 val rawDataCapacity = rangedRawDataBuffer.buffer.size - AbstractPipeline.CANARY_ENTRIES
 
+                /*
+                 * After a pipeline rebuild that preserves the raw buffer (e.g. rotation),
+                 * continue writing where we left off instead of restarting at the left.
+                 * When the visible region is already full the live path has wrapped, so
+                 * offsets correctly restart at 0 — same as steady-state wrap.
+                 */
+                val filled = rangedRawDataBuffer.assignedRange.exclusiveEnd
+                    .coerceIn(0, rawDataCapacity)
+                val visibleRawMax = (rawDataCapacity * model.timeVisibleRangeFlow.value.endInclusive)
+                    .toInt()
+                    .coerceIn(
+                        calcs.rawSliceEntries.coerceAtMost(rawDataCapacity),
+                        rawDataCapacity
+                    )
+                val resumePartial = filled > 0 && filled < visibleRawMax
+
+                val stride = (calcs.rawSliceEntries - calcs.rawSliceOverlap).coerceAtLeast(1)
+                val completedSlices = if (!resumePartial || filled < calcs.rawSliceEntries) {
+                    0
+                } else {
+                    1 + (filled - calcs.rawSliceEntries) / stride
+                }
+
                 // We need to populate raw data up to this index to be ready to submit the
                 // next slice:
-                var nextSliceEndIndexHO = calcs.rawSliceEntries
+                var nextSliceEndIndexHO = if (completedSlices == 0) {
+                    calcs.rawSliceEntries
+                } else {
+                    calcs.rawSliceEntries + completedSlices * stride
+                }
 
                 // The index to the next entry in the raw data buffer to populate:
-                var rawDataBufferOffset = 0
+                var rawDataBufferOffset = if (resumePartial) filled else 0
 
                 // The index to the next transformed data buffer entry to be written, which is also
                 // the count of values we have from the start of the buffer:
-                var transformedDataBufferOffset = 0
+                var transformedDataBufferOffset =
+                    (completedSlices * calcs.sliceTransformedTimeBucketCount)
+                        .coerceIn(0, calcs.transformedTimeBucketCount)
 
-                var totalCopiedCount = 0
+                var totalCopiedCount = if (resumePartial || filled >= visibleRawMax) filled else 0
+
+                if (resumePartial) {
+                    Timber.i(
+                        "USBSourceStep: resuming live write at raw=$rawDataBufferOffset " +
+                            "transformed=$transformedDataBufferOffset " +
+                            "(filled=$filled, visibleMax=$visibleRawMax)"
+                    )
+                }
 
                 // The for statement will check if a cancel is pending, and if so pass control
                 // to the finally block for cleanup and to prevent this job becoming a zombie:
