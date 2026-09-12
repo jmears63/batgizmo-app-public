@@ -19,7 +19,7 @@ android {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 29
         targetSdk = 37
-        versionCode = 31
+        versionCode = 33
         versionName = "feature/bbn"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -68,10 +68,6 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
-    }
-    // Keep .tflite mmappable from the APK (required by Interpreter MappedByteBuffer load).
-    androidResources {
-        noCompress += "tflite"
     }
     externalNativeBuild {
         cmake {

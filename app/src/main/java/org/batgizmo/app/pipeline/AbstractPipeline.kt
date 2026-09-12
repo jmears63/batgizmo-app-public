@@ -117,13 +117,24 @@ abstract class AbstractPipeline(
         )
 
         /**
+         * Upper bound on transformed spectrogram cells (time buckets × frequency buckets).
+         * Keeps the FloatArray for the page within ~32 MB so Auto FFT from a zoomed-in
+         * view cannot explode allocation for a long live page (e.g. 60 s).
+         */
+        const val MAX_TRANSFORM_CELLS = 16_000_000
+
+        /**
          * Calculate the FFT window size and overlap we are going to use, based on user settings
-         * and screen factors.
+         * and screen factors, then clamp density so the full-page transform fits in
+         * [MAX_TRANSFORM_CELLS].
+         *
+         * @param rawPageSampleCount samples spanned by the data page (not the visible zoom window)
          */
         fun calculateFftParameters(
             pipelineParameters: PipelineParameters,
             screenFactors: ScreenFactors,
-            sampleRate: Int
+            sampleRate: Int,
+            rawPageSampleCount: Int
         ) : FftParameters {
 
             var fftWindowSamples: Int = pipelineParameters.nFft
@@ -174,10 +185,91 @@ abstract class AbstractPipeline(
             var windowOverlap: Int = (overlapPercentage * fftWindowSamples / 100f + 0.5).toInt()
             windowOverlap = windowOverlap.coerceIn(1, fftWindowSamples)
 
-            return FftParameters(
-                windowSamples = fftWindowSamples,
-                windowOverlap = windowOverlap
+            return capFftParametersForPageLength(
+                fftWindowSamples, windowOverlap, rawPageSampleCount
             )
+        }
+
+        /**
+         * Limit overlap (then window size) so
+         * timeBuckets × freqBuckets ≤ [MAX_TRANSFORM_CELLS] for this page length.
+         */
+        fun capFftParametersForPageLength(
+            windowSamples: Int,
+            windowOverlap: Int,
+            rawPageSampleCount: Int
+        ): FftParameters {
+            if (rawPageSampleCount <= 0) {
+                return FftParameters(
+                    windowSamples = windowSamples,
+                    windowOverlap = windowOverlap.coerceIn(1, windowSamples)
+                )
+            }
+
+            var w = windowSamples
+            var overlap = windowOverlap.coerceIn(0, windowSamples)
+
+            fun freqBuckets(win: Int): Int = win / 2 + 1
+
+            fun timeBuckets(win: Int, ov: Int): Int {
+                val stride = (win - ov).coerceAtLeast(1)
+                if (rawPageSampleCount <= win)
+                    return 1
+                return (rawPageSampleCount - win) / stride + 1
+            }
+
+            fun cellCount(win: Int, ov: Int): Long =
+                timeBuckets(win, ov).toLong() * freqBuckets(win).toLong()
+
+            fun maxOverlapForWindow(win: Int): Int {
+                val maxTime = maxOf(1, MAX_TRANSFORM_CELLS / freqBuckets(win))
+                if (rawPageSampleCount <= win)
+                    return maxOf(0, win - 1)
+                val minStride = maxOf(
+                    1,
+                    ceil(
+                        (rawPageSampleCount - win).toDouble() /
+                            maxOf(1, maxTime - 1)
+                    ).toInt()
+                )
+                return maxOf(0, win - minStride)
+            }
+
+            val beforeCells = cellCount(w, overlap)
+            if (beforeCells > MAX_TRANSFORM_CELLS) {
+                val cappedOverlap = maxOverlapForWindow(w)
+                if (overlap > cappedOverlap) {
+                    Timber.i(
+                        "Auto FFT density capped for page length: overlap $overlap -> $cappedOverlap " +
+                            "(window=$w, pageSamples=$rawPageSampleCount, cells $beforeCells -> " +
+                            "${cellCount(w, cappedOverlap)}, maxCells=$MAX_TRANSFORM_CELLS)"
+                    )
+                    overlap = cappedOverlap
+                }
+            }
+
+            // If zero/low overlap is still too dense, grow the FFT window (fewer time buckets).
+            while (cellCount(w, overlap) > MAX_TRANSFORM_CELLS) {
+                val next = PipelineParameters.coerceNFft(w * 2)
+                if (next <= w)
+                    break
+                val prevW = w
+                w = next
+                overlap = minOf(overlap, maxOverlapForWindow(w))
+                Timber.i(
+                    "Auto FFT density capped for page length: window $prevW -> $w, overlap=$overlap " +
+                        "(pageSamples=$rawPageSampleCount, cells=${cellCount(w, overlap)}, " +
+                        "maxCells=$MAX_TRANSFORM_CELLS)"
+                )
+            }
+
+            // Preserve prior invariant: overlap at least 1 when the window allows it.
+            overlap = if (w > 1)
+                overlap.coerceIn(1, w)
+            else
+                overlap.coerceIn(0, w)
+
+            return FftParameters(windowSamples = w, windowOverlap = overlap)
         }
 
         /**
@@ -1088,7 +1180,9 @@ abstract class AbstractPipeline(
                 yAxisSpan
             )
 
-            val fftParameters = calculateFftParameters(pipelineParametersSnapshot, screenFactors, sampleRate)
+            val fftParameters = calculateFftParameters(
+                pipelineParametersSnapshot, screenFactors, sampleRate, maxRawDataCount
+            )
 
             return fftParameters
         }
@@ -1223,10 +1317,18 @@ abstract class AbstractPipeline(
         mutex.withLock {
             val mySampleRate: Int? = pipelineData?.calcs?.rawSampleRate
 
-            return if (mySampleRate != null)
-                calculateFftParameters(pipelineParametersSnapshot,  screenFactors, mySampleRate)
-            else
+            return if (mySampleRate != null) {
+                val pageSamples = pipelineData?.calcs?.rawPagedDataLength
+                    ?: (pipelineParametersSnapshot.dataPageTimeSpanS * mySampleRate)
+                calculateFftParameters(
+                    pipelineParametersSnapshot,
+                    screenFactors,
+                    mySampleRate,
+                    pageSamples
+                )
+            } else {
                 null
+            }
         }
     }
 

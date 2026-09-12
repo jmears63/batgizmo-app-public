@@ -2229,8 +2229,10 @@ class UIModel(application: Application,
                     )
                 }
             } else {
+                val pageSamples =
+                    (pipelineParameters.dataPageTimeSpanS * sampleRate).toInt()
                 newFftParameters = AbstractPipeline.calculateFftParameters(
-                    pipelineParameters, screenFactors, sampleRate
+                    pipelineParameters, screenFactors, sampleRate, pageSamples
                 )
 
             }
