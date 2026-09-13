@@ -22,6 +22,11 @@
 
 package org.batgizmo.app.ui
 
+import android.content.Context
+import android.os.Build
+import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
+import android.provider.MediaStore
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -77,6 +82,7 @@ import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.ml.BattyBirdNET
 import org.batgizmo.app.ml.LabelCatalogEntry
+import java.util.Locale
 
 class SettingsUI(private val model: UIModel) {
 
@@ -130,6 +136,7 @@ class SettingsUI(private val model: UIModel) {
         var liveInputSource by rememberSaveable { mutableStateOf(model.settings.liveInputSource) }
         var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
         var unlimitedFileLength by rememberSaveable { mutableStateOf(model.settings.unlimitedFileLength) }
+        var wavStorageVolume by rememberSaveable { mutableStateOf(model.settings.wavStorageVolume) }
 
         // Expand/collapse state for each collapsible section, indexed by SettingsSection.ordinal.
         // Held here (rather than inside the list items) so the LazyColumn can gate which sections'
@@ -534,6 +541,26 @@ class SettingsUI(private val model: UIModel) {
                 }
 
                 item {
+                    val wavVolumeOptions = remember(wavStorageVolume) {
+                        wavStorageVolumeOptions(context, wavStorageVolume)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyDynamicSelector(
+                            options = wavVolumeOptions,
+                            description = "WAV file storage location",
+                            selectedValue = wavStorageVolume
+                        ) { value: String ->
+                            wavStorageVolume = value
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(wavStorageVolume = value)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
                     HorizontalDivider(thickness = 2.dp)
 
                     // Remember a coroutine scope tied to Compose lifecycle
@@ -826,6 +853,100 @@ private fun AutoIdSuppressionsDialog(
             }
         }
     )
+}
+
+/**
+ * Dropdown options for WAV storage: Default, currently attached MediaStore volumes with
+ * friendly labels, and an "Unavailable" entry if [selectedVolume] is set but missing.
+ */
+private fun wavStorageVolumeOptions(
+    context: Context,
+    selectedVolume: String
+): List<Pair<String, String>> {
+    val storageManager = context.getSystemService(StorageManager::class.java)
+    val attachedVolumes = MediaStore.getExternalVolumeNames(context)
+
+    val fromStorageVolumes = storageManager.storageVolumes.mapNotNull { volume ->
+        val name = mediaStoreVolumeName(volume) ?: return@mapNotNull null
+        if (name !in attachedVolumes) return@mapNotNull null
+        name to friendlyVolumeLabel(context, volume, name)
+    }
+
+    val labelledNames = fromStorageVolumes.map { it.first }.toSet()
+    // Attached MediaStore volumes with no matching StorageVolume entry:
+    val unmatchedAttached = attachedVolumes
+        .filter { it !in labelledNames }
+        .sorted()
+        .map { it to fallbackVolumeLabel(it) }
+
+    val labelled = (fromStorageVolumes + unmatchedAttached)
+        .sortedBy { it.first }
+        .let { disambiguateDuplicateLabels(it) }
+
+    return buildList {
+        add("" to "Default")
+        addAll(labelled)
+        if (selectedVolume.isNotEmpty() && selectedVolume !in attachedVolumes) {
+            add(selectedVolume to "Unavailable ($selectedVolume)")
+        }
+    }
+}
+
+/** Prefer [StorageVolume.getDescription], but replace UUID/hex-like OEM labels. */
+private fun friendlyVolumeLabel(
+    context: Context,
+    volume: StorageVolume,
+    volumeName: String
+): String {
+    val description = volume.getDescription(context).trim()
+    if (description.isNotEmpty() && !looksLikeVolumeId(description, volumeName, volume.uuid)) {
+        return description
+    }
+    return when {
+        volume.isPrimary -> "Internal shared storage"
+        volume.isRemovable -> "SD card"
+        else -> "External storage"
+    }
+}
+
+private fun fallbackVolumeLabel(volumeName: String): String {
+    return if (volumeName == MediaStore.VOLUME_EXTERNAL_PRIMARY) {
+        "Internal shared storage"
+    } else {
+        "External storage"
+    }
+}
+
+/** True when [text] is effectively a volume UUID / MediaStore id, not a human label. */
+private fun looksLikeVolumeId(text: String, volumeName: String, uuid: String?): Boolean {
+    if (text.equals(volumeName, ignoreCase = true)) return true
+    if (uuid != null && text.equals(uuid, ignoreCase = true)) return true
+    // FAT-style volume id (e.g. 12F7-270F) or other hex/UUID forms.
+    if (text.matches(Regex("^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}$"))) return true
+    if (text.matches(Regex("^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$"))) return true
+    if (text.matches(Regex("^[0-9A-Fa-f]{8,}$"))) return true
+    return false
+}
+
+/** If several volumes share a label, append a short id so they stay distinguishable. */
+private fun disambiguateDuplicateLabels(
+    entries: List<Pair<String, String>>
+): List<Pair<String, String>> {
+    val counts = entries.groupingBy { it.second }.eachCount()
+    return entries.map { (name, label) ->
+        if ((counts[label] ?: 0) > 1) name to "$label ($name)" else name to label
+    }
+}
+
+/** MediaStore volume id for [volume], or null if it is not indexed by MediaStore. */
+private fun mediaStoreVolumeName(volume: StorageVolume): String? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        volume.mediaStoreVolumeName
+    } else if (volume.isPrimary) {
+        MediaStore.VOLUME_EXTERNAL_PRIMARY
+    } else {
+        volume.uuid?.uppercase(Locale.US)
+    }
 }
 
 /** The collapsible sections shown in the settings screen, in display order. */

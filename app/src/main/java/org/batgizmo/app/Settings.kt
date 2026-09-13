@@ -82,6 +82,11 @@ data class Settings(
     var postTriggerTimeMs: Int = PostTriggerTimeOptions.POSTTRIGGER_TIME_1000MS.value,
     var maxFileTimeMs: Int = MaxFileTimeOptions.MAX_FILE_TIME_5000MS.value,
     var unlimitedFileLength: Boolean = false,
+    /**
+     * MediaStore volume for recorded WAV files. Empty means default (primary external
+     * volume). Otherwise a volume name from MediaStore.getExternalVolumeNames.
+     */
+    var wavStorageVolume: String = "",
     var autoTriggerThresholdDb: Float = 40f,
     var autoTriggerRangeMinkHz: Float = 16f,
     var autoTriggerRangeMaxkHz: Float = 120f,
@@ -548,6 +553,7 @@ data class Settings(
     private val keyPostTriggerTimeMs = intPreferencesKey("postTriggerTimeMs")
     private val keyMaxFileTimeMs = intPreferencesKey("maxFileTimeMs")
     private val keyUnlimitedFileLength = booleanPreferencesKey("unlimitedFileLength")
+    private val keyWavStorageVolume = stringPreferencesKey("wavStorageVolume")
     private val keyAutoTriggerThresholdDb = floatPreferencesKey("autoTriggerThresholdDb")
     private val keyAutoTriggerRangeStartkHz = floatPreferencesKey("autoTriggerRangeStartkHz")
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
@@ -602,6 +608,7 @@ data class Settings(
         prefs[keyPostTriggerTimeMs] = postTriggerTimeMs
         prefs[keyMaxFileTimeMs] = maxFileTimeMs
         prefs[keyUnlimitedFileLength] = unlimitedFileLength
+        prefs[keyWavStorageVolume] = wavStorageVolume
         prefs[keyAutoTriggerThresholdDb] = autoTriggerThresholdDb
         prefs[keyAutoTriggerRangeStartkHz] = autoTriggerRangeMinkHz
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
@@ -700,6 +707,8 @@ data class Settings(
             maxFileTimeMs = requireNotNull(prefs[keyMaxFileTimeMs])
         if (prefs[keyUnlimitedFileLength] != null)
             unlimitedFileLength = requireNotNull(prefs[keyUnlimitedFileLength])
+        if (prefs[keyWavStorageVolume] != null)
+            wavStorageVolume = requireNotNull(prefs[keyWavStorageVolume])
         if (prefs[keyAutoTriggerThresholdDb] != null)
             autoTriggerThresholdDb = requireNotNull(prefs[keyAutoTriggerThresholdDb])
         if (prefs[keyAutoTriggerRangeStartkHz] != null)

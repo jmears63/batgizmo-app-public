@@ -28,6 +28,8 @@ import android.content.Context
 import android.location.Location
 import android.os.Build
 import android.os.Environment
+import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
 import android.provider.MediaStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +52,7 @@ import java.io.FileOutputStream
 import java.io.OutputStream
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.round
@@ -1040,7 +1043,7 @@ class FileWriter(
             put(MediaStore.Files.FileColumns.IS_PENDING, 1)
         }
 
-        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val collection = MediaStore.Files.getContentUri(wavMediaStoreVolume())
         val uri = resolver.insert(collection, contentValues) ?: return false
 
         return try {
@@ -1085,7 +1088,7 @@ class FileWriter(
         relativePath: String,
         resolver: ContentResolver
     ): Boolean {
-        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val collection = MediaStore.Files.getContentUri(wavMediaStoreVolume())
         val projection = arrayOf(MediaStore.Files.FileColumns._ID)
         val selection =
             "${MediaStore.Files.FileColumns.DISPLAY_NAME} = ? AND ${MediaStore.Files.FileColumns.RELATIVE_PATH} = ?"
@@ -1099,6 +1102,71 @@ class FileWriter(
         return exists
     }
 
+
+    /**
+     * MediaStore volume for final WAV files: setting value when present and writable,
+     * otherwise [MediaStore.VOLUME_EXTERNAL_PRIMARY].
+     */
+    private fun wavMediaStoreVolume(): String {
+        val configured = model.settings.wavStorageVolume
+        if (configured.isEmpty()) {
+            return MediaStore.VOLUME_EXTERNAL_PRIMARY
+        }
+        val resolved = resolveWritableMediaStoreVolume(configured)
+        if (resolved != null) {
+            return resolved
+        }
+        Timber.w("WAV storage volume '$configured' unavailable or not writable; using primary")
+        return MediaStore.VOLUME_EXTERNAL_PRIMARY
+    }
+
+    /**
+     * If [volumeName] is currently attached and not known read-only, return the canonical
+     * MediaStore volume name to use for inserts; otherwise null.
+     */
+    private fun resolveWritableMediaStoreVolume(volumeName: String): String? {
+        // Prefer the spelling MediaStore itself returns (case can differ from StorageVolume).
+        val attachedName = MediaStore.getExternalVolumeNames(context)
+            .firstOrNull { it.equals(volumeName, ignoreCase = true) }
+            ?: return null
+
+        val storageManager = context.getSystemService(StorageManager::class.java)
+        val volume = storageManager.storageVolumes.firstOrNull {
+            mediaStoreVolumeName(it)?.equals(attachedName, ignoreCase = true) == true
+        }
+        if (volume != null) {
+            // getDirectory() is API 30+; on API 29 use getState() only.
+            val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                volume.directory?.let { Environment.getExternalStorageState(it) } ?: volume.state
+            } else {
+                volume.state
+            }
+            if (state != Environment.MEDIA_MOUNTED) {
+                Timber.w(
+                    "WAV storage volume '$attachedName' state is '$state' (not writable)"
+                )
+                return null
+            }
+        } else {
+            // MediaStore lists it as attached; allow the write even if StorageVolume
+            // mapping failed (e.g. OEM naming quirks).
+            Timber.w(
+                "No StorageVolume match for '$attachedName'; attempting MediaStore write anyway"
+            )
+        }
+        return attachedName
+    }
+
+    /** MediaStore volume id for [volume], or null if it is not indexed by MediaStore. */
+    private fun mediaStoreVolumeName(volume: StorageVolume): String? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            volume.mediaStoreVolumeName
+        } else if (volume.isPrimary) {
+            MediaStore.VOLUME_EXTERNAL_PRIMARY
+        } else {
+            volume.uuid?.uppercase(Locale.US)
+        }
+    }
 
     /**
      * Create a file name in the standard format used by bat detectors:
