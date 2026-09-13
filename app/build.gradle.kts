@@ -19,7 +19,7 @@ android {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 29
         targetSdk = 37
-        versionCode = 33
+        versionCode = 34
         versionName = "feature/bbn"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -97,7 +97,6 @@ dependencies {
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.timber)
     implementation(libs.androidx.compose.material.icons.extended)
-    implementation(libs.litert)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

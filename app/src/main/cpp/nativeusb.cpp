@@ -474,18 +474,29 @@ Java_org_batgizmo_app_pipeline_NativeUSB_copyURBBufferData(JNIEnv *env, jobject 
 
     jint rc = -1;
 
+    if (target_buffer_size <= 0 || source_samples <= 0) {
+        return 0;
+    }
+
     auto pSource = reinterpret_cast<const data_t *>(source_native_offset);
 
-    // Cap this at the target buffer size so there is overwriting or overflow:
+    // Cap this at the target buffer size so there is no overwriting or overflow:
     int samples_to_copy = std::min(source_samples, target_buffer_size);
+    const int copied_total = samples_to_copy;
 
     jshort *pBuffer = env->GetShortArrayElements(target_buffer, nullptr);
     if (pBuffer) {
-        data_t *pTarget = pBuffer + target_buffer_offset;
+        // USBSourceStep may pass a logical write cursor past target_buffer_size until
+        // the next slice boundary resets it; wrap into the ring before copying.
+        int dst_index = target_buffer_offset % target_buffer_size;
+        if (dst_index < 0) {
+            dst_index += target_buffer_size;
+        }
+        data_t *pTarget = pBuffer + dst_index;
 
         // We need to copy to the destination target_buffer with wrap, so there may be two parts to the copy.
 
-        const int part1Space = target_buffer_size - target_buffer_offset;
+        const int part1Space = target_buffer_size - dst_index;
         const int part1Count = samples_to_copy > part1Space ? part1Space : samples_to_copy;
         for (int i = 0; i < part1Count; i++) {
             *pTarget++ = *pSource++;
@@ -494,16 +505,12 @@ Java_org_batgizmo_app_pipeline_NativeUSB_copyURBBufferData(JNIEnv *env, jobject 
 
         if (samples_to_copy > 0) {
             pTarget = pBuffer;  // Wrap to start of target_buffer.
-            const int part2Required = samples_to_copy;
-            const int part2Count = part2Required > target_buffer_size ? target_buffer_size : part2Required;
-            for (int i = 0; i < part2Count; i++) {
+            for (int i = 0; i < samples_to_copy; i++) {
                 *pTarget++ = *pSource++;
             }
-            samples_to_copy -= part2Count;
         }
 
-        // samples_to_copy should be 0 now.
-        rc = source_samples - samples_to_copy;
+        rc = copied_total;
 
         env->ReleaseShortArrayElements(target_buffer, pBuffer, 0);
     }

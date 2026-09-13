@@ -103,11 +103,27 @@ object LiveDataCopy {
         destOffset: Int,
         destCapacity: Int
     ): Int {
-        var samplesToCopy = minOf(sourceSamples, destCapacity)
-        var srcIndex = sourceOffset
-        var dstIndex = destOffset
+        if (destCapacity <= 0 || sourceSamples <= 0 || sourceOffset < 0)
+            return 0
+        require(destCapacity <= dest.size) {
+            "destCapacity $destCapacity exceeds dest.size ${dest.size}"
+        }
 
-        val part1Space = destCapacity - destOffset
+        // USBSourceStep may pass a logical write cursor past destCapacity until the
+        // next slice boundary resets it; wrap into the ring before copying.
+        var dstIndex = destOffset % destCapacity
+        if (dstIndex < 0)
+            dstIndex += destCapacity
+
+        val maxFromSource = (source.size - sourceOffset).coerceAtLeast(0)
+        var samplesToCopy = minOf(sourceSamples, destCapacity, maxFromSource)
+        if (samplesToCopy <= 0)
+            return 0
+
+        val copiedTotal = samplesToCopy
+        var srcIndex = sourceOffset
+
+        val part1Space = destCapacity - dstIndex
         val part1Count = minOf(samplesToCopy, part1Space)
         for (i in 0 until part1Count) {
             dest[dstIndex++] = source[srcIndex++]
@@ -116,13 +132,11 @@ object LiveDataCopy {
 
         if (samplesToCopy > 0) {
             dstIndex = 0
-            val part2Count = minOf(samplesToCopy, destCapacity)
-            for (i in 0 until part2Count) {
+            for (i in 0 until samplesToCopy) {
                 dest[dstIndex++] = source[srcIndex++]
             }
-            samplesToCopy -= part2Count
         }
 
-        return sourceSamples - samplesToCopy
+        return copiedTotal
     }
 }
