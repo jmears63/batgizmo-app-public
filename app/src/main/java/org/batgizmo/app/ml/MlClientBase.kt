@@ -58,9 +58,10 @@ data class MlSummaryEntry(
  * for testing, and [MlClient] for production.
  *
  * Call [reset] with the sample rate before any [submit]. Chunk length is scaled
- * via [MlProcessor.chunkSizeForSampleRate]. Chunks overlap by 50%: after the
- * first half-chunk (written to one buffer only), each sample is written into
- * two in-flight chunks; whenever a chunk is full, [processChunk] is called for it.
+ * via [MlProcessor.chunkSizeForSampleRate]. Chunks overlap by 25% (BattyBirdNET
+ * default): after the first hop (written to one buffer only), each sample is
+ * written into two in-flight chunks; whenever a chunk is full, [processChunk]
+ * is called for it.
  * Pass [submit]'s [isLast] when the stream ends so a partial final chunk is
  * zero-padded (after discarding the newest overlap) and processed.
  *
@@ -92,7 +93,7 @@ abstract class MlClientBase(
     var chunkSize: Int = 0
         private set
 
-    /** Hop between chunk starts (50% of [chunkSize]); 0 until [reset]. */
+    /** Hop between chunk starts (75% of [chunkSize] → 25% overlap); 0 until [reset]. */
     private var hopSize: Int = 0
 
     private val activeChunks = ArrayDeque<Chunk>()
@@ -105,7 +106,8 @@ abstract class MlClientBase(
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         this.sampleRateHz = sampleRateHz
         chunkSize = MlProcessor.chunkSizeForSampleRate(sampleRateHz)
-        hopSize = (chunkSize / 2).coerceAtLeast(1)
+        // 25% overlap matches BattyBirdNET SIG_OVERLAP = SIG_LENGTH / 4.
+        hopSize = ((chunkSize * 3) / 4).coerceAtLeast(1)
         activeChunks.clear()
         activeChunks.addLast(Chunk(ShortArray(chunkSize)))
     }
@@ -121,8 +123,8 @@ abstract class MlClientBase(
      * later samples are stamped by advancing at [sampleRateHz].
      *
      * Samples are written into all in-flight overlapping chunks. After the
-     * first [hopSize] samples (first half-chunk), two chunks are filled in
-     * parallel. When any chunk reaches [chunkSize], [processChunk] is invoked for it.
+     * first [hopSize] samples, two chunks are filled in parallel. When any
+     * chunk reaches [chunkSize], [processChunk] is invoked for it.
      *
      * When [isLast] is true, after absorbing [count] samples the newest overlapping
      * chunk is discarded and the currently fullest remaining chunk is zero-padded
@@ -184,7 +186,7 @@ abstract class MlClientBase(
             remaining -= toCopy
 
             // Drain completed chunks, then open the next overlap when the newest
-            // reaches 50% full (may happen immediately after a completion).
+            // reaches hopSize filled (may happen immediately after a completion).
             while (activeChunks.isNotEmpty()) {
                 when {
                     activeChunks.first().filled == size -> {
