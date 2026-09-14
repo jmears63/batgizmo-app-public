@@ -1,0 +1,10 @@
+{
+  "id": "birdnet",
+  "displayName": "BirdNET",
+  "kind": "single_tflite",
+  "sampleRateHz": 48000,
+  "windowSamples": 144000,
+  "overlapFraction": 0.25,
+  "minSampleRateHz": 36000,
+  "minConfidence": 0.7
+}

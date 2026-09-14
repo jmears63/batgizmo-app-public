@@ -55,9 +55,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.batgizmo.app.ml.BattyBirdNET
+import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.MlClient
-import org.batgizmo.app.ml.MlClientBase
 import org.batgizmo.app.ml.MlOverflowPolicy
 import org.batgizmo.app.ml.MlSummaryAccumulator
 import org.batgizmo.app.ml.MlSummaryMode
@@ -399,7 +398,7 @@ class UIModel(application: Application,
             )
             fileWriter?.run()
 
-            if (settings.autoId) {
+            if (settings.isAutoIdEnabled()) {
                 mlSummaryAccumulator.clear(MlSummaryMode.Live)
                 ensureMlClient(result.sampleRate, forceReset = true)
                 liveMlAccepting = true
@@ -558,7 +557,7 @@ class UIModel(application: Application,
     val mlSummaryModeFlow = mlSummaryAccumulator.mode
 
     /** Live ML client for the current sample rate, or null when inactive. */
-    private var mlClient: MlClientBase? = null
+    private var mlClient: MlClient? = null
     private var mlClientSampleRateHz: Int? = null
 
     /**
@@ -872,12 +871,32 @@ class UIModel(application: Application,
                 var persistMergedSuppressions = false
                 mutex.withLock {
                     settings.copyFromPreferences(prefs)
-                    val suppressionDefaults =
-                        BattyBirdNET.loadLabelCatalog(getApplication<Application>().assets)
-                            .filter { !it.discard }
-                            .associate { it.key to it.disableByDefault }
-                    persistMergedSuppressions =
-                        settings.mergeBbnSuppressionDefaults(suppressionDefaults)
+                    if (settings.isAutoIdEnabled()) {
+                        val modelId = settings.autoIdModelId
+                        val descriptor = try {
+                            MlCatalog.resolveDescriptor(
+                                getApplication<Application>().assets,
+                                modelId,
+                            )
+                        } catch (e: Exception) {
+                            Timber.e(e, "Failed to resolve Auto Id model $modelId")
+                            null
+                        }
+                        if (descriptor != null && settings.autoIdModelId != descriptor.id) {
+                            settings.autoIdModelId = descriptor.id
+                            persistMergedSuppressions = true
+                        }
+                        val suppressionDefaults = descriptor
+                            ?.labelCatalog
+                            ?.filter { !it.discard }
+                            ?.associate { it.key to it.disableByDefault }
+                            .orEmpty()
+                        persistMergedSuppressions = persistMergedSuppressions ||
+                            settings.mergeAutoIdSuppressionDefaults(
+                                settings.autoIdModelId,
+                                suppressionDefaults,
+                            )
+                    }
                     if (colourMapHelper.apply(settings.colourMap)) {
                         pipeline?.fullRenderFromSource()
                         triggerBitblt()
@@ -904,12 +923,16 @@ class UIModel(application: Application,
                 val liveInputSourceChanged =
                     updatedSettings.liveInputSource != settings.liveInputSource
                 val colourMapChanged = updatedSettings.colourMap != settings.colourMap
-                val autoIdEnabled = updatedSettings.autoId && !settings.autoId
-                val autoIdDisabled = !updatedSettings.autoId && settings.autoId
+                val wasAutoIdEnabled = settings.isAutoIdEnabled()
+                val nowAutoIdEnabled = updatedSettings.isAutoIdEnabled()
+                val autoIdEnabled = nowAutoIdEnabled && !wasAutoIdEnabled
+                val autoIdDisabled = !nowAutoIdEnabled && wasAutoIdEnabled
+                val autoIdModelChanged =
+                    updatedSettings.autoIdModelId != settings.autoIdModelId
                 val autoIdLanguageChanged =
                     updatedSettings.autoIdLanguage != settings.autoIdLanguage
-                val bbnSuppressionsChanged =
-                    updatedSettings.bbnSuppresions != settings.bbnSuppresions
+                val autoIdSuppressionsChanged =
+                    updatedSettings.autoIdSuppressions != settings.autoIdSuppressions
                 settings = updatedSettings
                 if (liveInputSourceChanged) {
                     liveInputSourceOverrideSession = false
@@ -920,7 +943,13 @@ class UIModel(application: Application,
                     pipeline?.fullRenderFromSource()
                     triggerBitblt()
                 }
-                if (autoIdEnabled) {
+                if (autoIdEnabled || (nowAutoIdEnabled && autoIdModelChanged)) {
+                    if (autoIdModelChanged) {
+                        synchronized(mlLock) {
+                            clearMlClientLocked()
+                        }
+                        mlSummaryAccumulator.clear(MlSummaryMode.Live)
+                    }
                     pipeline?.let { p ->
                         when (p) {
                             is FileViewerPipeline -> submitFilePageToMl(p)
@@ -939,13 +968,15 @@ class UIModel(application: Application,
                         clearMlClientLocked()
                     }
                     mlSummaryAccumulator.clear(MlSummaryMode.Live)
-                } else if (updatedSettings.autoId &&
-                    (autoIdLanguageChanged || bbnSuppressionsChanged)
+                } else if (nowAutoIdEnabled &&
+                    (autoIdLanguageChanged || autoIdSuppressionsChanged)
                 ) {
                     synchronized(mlLock) {
-                        (mlClient as? MlClient)?.let { client ->
+                        mlClient?.let { client ->
                             client.setLabelLanguage(updatedSettings.autoIdLanguage)
-                            client.setBbnSuppressions(updatedSettings.bbnSuppresions)
+                            client.setSuppressions(
+                                updatedSettings.suppressionsFor(updatedSettings.autoIdModelId)
+                            )
                         }
                     }
                     when (val p = pipeline) {
@@ -1633,7 +1664,7 @@ class UIModel(application: Application,
                         activeLiveInputSource?.resume()
                     }
 
-                    if (settings.autoId) {
+                    if (settings.isAutoIdEnabled()) {
                         mlSummaryAccumulator.clear(MlSummaryMode.Live)
                         ensureMlClient(p.sampleRateHz(), forceReset = true)
                         liveMlAccepting = true
@@ -1712,10 +1743,10 @@ class UIModel(application: Application,
     }
 
     /**
-     * Ensure an [MlClientBase] exists and has been [MlClientBase.reset] for [sampleRateHz].
-     * Results are queued and merged into [mlSummaryFlow]. Uses production [MlClient].
+     * Ensure an [MlClient] exists and has been [MlClient.reset] for [sampleRateHz].
+     * Results are queued and merged into [mlSummaryFlow].
      *
-     * @param forceReset if true, always [MlClientBase.reset] even when the rate is unchanged
+     * @param forceReset if true, always [MlClient.reset] even when the rate is unchanged
      *   (e.g. starting analysis of a new file page).
      * @param overflowPolicy live [MlOverflowPolicy.DropIfFull] vs viewer [MlOverflowPolicy.QueueAll]
      * @param summaryMode Auto Id summary TTL policy applied when the client is reset
@@ -1727,13 +1758,30 @@ class UIModel(application: Application,
         summaryMode: MlSummaryMode = MlSummaryMode.Live,
     ) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
+        require(settings.isAutoIdEnabled()) { "Auto Id model must be selected" }
         synchronized(mlLock) {
-            val client = (mlClient as? MlClient) ?: MlClient(getApplication()) { result ->
+            val modelId = settings.autoIdModelId
+            val existing = mlClient
+            if (existing != null && existing.modelId != modelId) {
+                clearMlClientLocked()
+            }
+            val descriptor = MlCatalog.resolveDescriptor(
+                getApplication<Application>().assets,
+                modelId,
+            )
+            if (settings.autoIdModelId != descriptor.id) {
+                settings.autoIdModelId = descriptor.id
+            }
+            val client = mlClient ?: MlClient(
+                getApplication(),
+                descriptor.id,
+                descriptor,
+            ) { result ->
                 mlSummaryAccumulator.submitResult(result)
             }.also { mlClient = it }
             client.setOverflowPolicy(overflowPolicy)
             client.setLabelLanguage(settings.autoIdLanguage)
-            client.setBbnSuppressions(settings.bbnSuppresions)
+            client.setSuppressions(settings.suppressionsFor(descriptor.id))
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz
@@ -1743,14 +1791,14 @@ class UIModel(application: Application,
     }
 
     /** Current ML client, if [ensureMlClient] has been called. */
-    fun mlClientOrNull(): MlClientBase? = synchronized(mlLock) { mlClient }
+    fun mlClientOrNull(): MlClient? = synchronized(mlLock) { mlClient }
 
     /** True when live Auto Id should accept the next raw buffer. */
     fun shouldSubmitLiveAudioToMl(): Boolean =
-        settings.autoId && liveMlAccepting
+        settings.isAutoIdEnabled() && liveMlAccepting
 
     /**
-     * Cheap path from [USBSourceStep]: copy samples into [MlClientBase] chunk buffers when
+     * Cheap path from [USBSourceStep]: copy samples into [MlClient] chunk buffers when
      * Auto Id is accepting. Does not take [mutex].
      */
     fun maybeSubmitLiveAudioToMl(buffer: ShortArray, offset: Int, count: Int) {
@@ -1775,7 +1823,7 @@ class UIModel(application: Application,
     private fun discardQueuedMlWork(summaryMode: MlSummaryMode) {
         mlSummaryAccumulator.clear(summaryMode)
         synchronized(mlLock) {
-            (mlClient as? MlClient)?.clearQueue()
+            mlClient?.clearQueue()
         }
     }
 
@@ -1787,7 +1835,7 @@ class UIModel(application: Application,
      * zoom or other view-only reloads.
      */
     private fun submitFilePageToMl(pipeline: AbstractPipeline) {
-        if (!settings.autoId) return
+        if (!settings.isAutoIdEnabled()) return
         if (pipeline !is FileViewerPipeline) return
         val sampleRateHz = pipeline.sampleRateHz()
         if (sampleRateHz <= 0) return
@@ -1816,7 +1864,7 @@ class UIModel(application: Application,
         )
     }
 
-    /** Pad/process any partial ML chunk ([MlClientBase.submit] with [isLast] true). */
+    /** Pad/process any partial ML chunk ([MlClient.submit] with [isLast] true). */
     private fun flushMlClientFinal() {
         synchronized(mlLock) {
             val client = mlClient ?: return

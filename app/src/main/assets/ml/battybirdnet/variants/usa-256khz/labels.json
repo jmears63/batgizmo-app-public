@@ -1,0 +1,312 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    {
+      "text": [
+        "Antrozous pallidus",
+        "Pallid bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Corynorhinus townsendii",
+        "Townsends big-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus fuscus",
+        "Big brown bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Euderma maculatum",
+        "Spotted bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eumops perotis",
+        "Greater mastiff bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Idionycteris phyllotis",
+        "Allens big-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasionycteris noctivagans",
+        "Silver-haired bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus blossevillii",
+        "Western red bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus borealis",
+        "Eastern red bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus cinereus",
+        "Hoary bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus intermedius",
+        "Northern yellow bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus seminolus",
+        "Seminole bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus xanthinus",
+        "Western yellow bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis austroriparius",
+        "Southeastern myotis"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis californicus",
+        "California bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis ciliolabrum",
+        "Western small-footed myotis"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis evotis",
+        "Western long-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis grisescens",
+        "Gray bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis leibii",
+        "Eastern small-footed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis lucifugus",
+        "Little brown bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis septentrionalis",
+        "Northern long-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis sodalis",
+        "Indiana bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis thysanodes",
+        "Fringed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis velifer",
+        "Cave bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis volans",
+        "Long-legged bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis yumanensis",
+        "Yuma bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nycticeius humeralis",
+        "Evening bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctinomops femorosaccus",
+        "Pocketed free-tailed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctinomops macrotis",
+        "Big free-tailed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Parastrellus hesperus",
+        "Canyon bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Perimyotis subflavus",
+        "Tricolored bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Tadarida brasiliensis",
+        "Brazilian free-tailed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Tettigoniidea",
+        "Cricket"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "background",
+        "background"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "noise",
+        "noise"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "noise-us",
+        "noise-us"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "other",
+        "other"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "silence",
+        "silence"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    }
+  ]
+}

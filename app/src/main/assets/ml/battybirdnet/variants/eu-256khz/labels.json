@@ -1,0 +1,248 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    {
+      "text": [
+        "Barbastella barbastellus",
+        "Western barbastelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus nilssonii",
+        "Northern bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus serotinus",
+        "Serotine bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Hypsugo savii",
+        "Savis pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Miniopterus schreibersii",
+        "Common bent-wing bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis alcathoe",
+        "Alcathoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis bechsteinii",
+        "Bechsteins bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis brandtii",
+        "Brandt bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis capaccinii",
+        "Long-fingered bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis dasycneme",
+        "Pond bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis daubentonii",
+        "Daubentons bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis emarginatus",
+        "Geoffroys bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis myotis",
+        "Greater mouse-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis mystacinus",
+        "Whiskered bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis nattereri",
+        "Natterers bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "NOISE",
+        "NOISE"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus lasiopterus",
+        "Greater noctule bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus leisleri",
+        "Lesser noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus noctula",
+        "Common noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus kuhlii",
+        "Kuhls pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus maderensis",
+        "Madeira pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus nathusii",
+        "Nathusius pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pipistrellus",
+        "Common pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pygmaeus",
+        "Soprano pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Plecotus spec.",
+        "Long eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus blasii",
+        "Blasius horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus ferrumequinum",
+        "Greater horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus hipposideros",
+        "Lesser horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Tadarida teniotis",
+        "European free-tailed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Vespertilio murinus",
+        "Parti-coloured bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    }
+  ]
+}

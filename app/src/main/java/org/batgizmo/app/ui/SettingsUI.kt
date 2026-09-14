@@ -80,8 +80,9 @@ import kotlinx.coroutines.launch
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
-import org.batgizmo.app.ml.BattyBirdNET
+import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.LabelCatalogEntry
+import org.batgizmo.app.ml.MlModelDescriptor
 import java.util.Locale
 
 class SettingsUI(private val model: UIModel) {
@@ -137,6 +138,9 @@ class SettingsUI(private val model: UIModel) {
         var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
         var unlimitedFileLength by rememberSaveable { mutableStateOf(model.settings.unlimitedFileLength) }
         var wavStorageVolume by rememberSaveable { mutableStateOf(model.settings.wavStorageVolume) }
+        // Local so Language / Suppressions react when the Auto ID dropdown changes
+        // (model.settings is a plain var and does not trigger recomposition on its own):
+        var autoIdModelId by rememberSaveable { mutableStateOf(model.settings.autoIdModelId) }
 
         // Expand/collapse state for each collapsible section, indexed by SettingsSection.ordinal.
         // Held here (rather than inside the list items) so the LazyColumn can gate which sections'
@@ -621,6 +625,183 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
 
+            settingsSection(SettingsSection.AUTO_ID, expandedSections) {
+                item {
+                    data class AutoIdFamily(
+                        val id: String,
+                        val displayName: String,
+                        val variants: List<MlModelDescriptor>,
+                    )
+                    val descriptors = remember {
+                        MlCatalog.listDescriptors(context.assets)
+                    }
+                    // Families that currently have at least one installable variant.
+                    val families = remember(descriptors) {
+                        descriptors
+                            .groupBy { it.familyId }
+                            .map { (familyId, variants) ->
+                                AutoIdFamily(
+                                    id = familyId,
+                                    displayName = variants.first().familyDisplayName,
+                                    variants = variants.sortedBy { it.displayName },
+                                )
+                            }
+                            .sortedBy { it.displayName }
+                    }
+                    val selectedDescriptor = remember(autoIdModelId, descriptors) {
+                        descriptors.firstOrNull { it.id == autoIdModelId }
+                    }
+                    val selectedFamilyId =
+                        selectedDescriptor?.familyId ?: Settings.AUTO_ID_MODEL_NONE
+                    val familyVariants = remember(selectedFamilyId, families) {
+                        families.firstOrNull { it.id == selectedFamilyId }?.variants.orEmpty()
+                    }
+
+                    fun persistModelId(modelId: String) {
+                        autoIdModelId = modelId
+                        scope.launch {
+                            if (modelId.isBlank()) {
+                                model.updateStoredSettings(
+                                    model.settings.copy(
+                                        autoIdModelId = Settings.AUTO_ID_MODEL_NONE
+                                    )
+                                )
+                                return@launch
+                            }
+                            val desc = MlCatalog.resolveDescriptor(context.assets, modelId)
+                            val defaults = desc.labelCatalog
+                                .filter { !it.discard }
+                                .associate { it.key to it.disableByDefault }
+                            val updated = model.settings.copy(autoIdModelId = desc.id)
+                            updated.mergeAutoIdSuppressionDefaults(desc.id, defaults)
+                            model.updateStoredSettings(updated)
+                        }
+                    }
+
+                    val familyOptions = remember(families) {
+                        listOf(Settings.AUTO_ID_MODEL_NONE to "None") +
+                            families.map { it.id to it.displayName }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyDynamicSelector(
+                            options = familyOptions,
+                            description = "Auto ID",
+                            selectedValue = selectedFamilyId
+                        ) { familyId: String ->
+                            if (familyId.isBlank()) {
+                                persistModelId(Settings.AUTO_ID_MODEL_NONE)
+                                return@MyDynamicSelector
+                            }
+                            val variants = families.firstOrNull { it.id == familyId }
+                                ?.variants
+                                .orEmpty()
+                            if (variants.isEmpty()) {
+                                persistModelId(Settings.AUTO_ID_MODEL_NONE)
+                                return@MyDynamicSelector
+                            }
+                            // Keep current variant when staying in-family; else pick the first.
+                            val nextId =
+                                if (selectedDescriptor?.familyId == familyId) {
+                                    selectedDescriptor.id
+                                } else {
+                                    variants.first().id
+                                }
+                            persistModelId(nextId)
+                        }
+                    }
+
+                    if (familyVariants.isNotEmpty()) {
+                        val variantOptions = remember(familyVariants) {
+                            familyVariants.map { it.id to it.displayName }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MyDynamicSelector(
+                                options = variantOptions,
+                                description = "Variant",
+                                selectedValue = autoIdModelId,
+                                enabled = familyVariants.size > 1
+                            ) { variantId: String ->
+                                persistModelId(variantId)
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    var showSuppressions by rememberSaveable { mutableStateOf(false) }
+                    val descriptors = remember {
+                        MlCatalog.listDescriptors(context.assets)
+                    }
+                    val selectedDescriptor = remember(autoIdModelId, descriptors) {
+                        descriptors.firstOrNull { it.id == autoIdModelId }
+                    }
+                    val autoIdOn = autoIdModelId.isNotBlank()
+                    val languages = selectedDescriptor?.languages.orEmpty()
+                    val languageOptions = remember(languages) {
+                        languages.mapIndexed { index, name -> index.toString() to name }
+                    }
+                    var autoIdLanguage by rememberSaveable {
+                        mutableStateOf(model.settings.autoIdLanguage)
+                    }
+                    if (languages.isNotEmpty()) {
+                        val selectedIndex =
+                            if (autoIdLanguage in languages.indices) autoIdLanguage else 0
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MyDynamicSelector(
+                                options = languageOptions,
+                                description = "Language",
+                                selectedValue = selectedIndex.toString(),
+                                enabled = autoIdOn && languages.size > 1
+                            ) { value: String ->
+                                val index =
+                                    value.toIntOrNull()?.takeIf { it in languages.indices } ?: 0
+                                autoIdLanguage = index
+                                scope.launch {
+                                    model.updateStoredSettings(
+                                        model.settings.copy(autoIdLanguage = index)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        Button(
+                            onClick = { showSuppressions = true },
+                            enabled = autoIdOn && selectedDescriptor != null
+                        ) {
+                            Text("Suppressions")
+                        }
+                    }
+                    if (showSuppressions && selectedDescriptor != null) {
+                        val labelCatalog = selectedDescriptor.labelCatalog
+                        val suppressible = remember(labelCatalog) {
+                            labelCatalog.filter { !it.discard }
+                        }
+                        MlSuppressionsDialog(
+                            entries = suppressible,
+                            languageIndex = autoIdLanguage,
+                            suppressions = model.settings.suppressionsFor(selectedDescriptor.id),
+                            onDismiss = { showSuppressions = false },
+                            onConfirm = { updated ->
+                                scope.launch {
+                                    val nested = model.settings.autoIdSuppressions +
+                                        (selectedDescriptor.id to updated)
+                                    model.updateStoredSettings(
+                                        model.settings.copy(autoIdSuppressions = nested)
+                                    )
+                                    showSuppressions = false
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
             settingsSection(SettingsSection.WARNINGS, expandedSections) {
                 item {
                     MyCheckbox(
@@ -654,88 +835,6 @@ class SettingsUI(private val model: UIModel) {
                             model.updateStoredSettings(
                                 model.settings.copy(suppressHighRateMicOffer = value)
                             )
-                        }
-                    }
-                }
-            }
-
-            settingsSection(SettingsSection.AUTO_ID, expandedSections) {
-                item {
-                    var autoIdEnabled by rememberSaveable {
-                        mutableStateOf(model.settings.autoId)
-                    }
-                    var showSuppressions by rememberSaveable { mutableStateOf(false) }
-                    val labelCatalog = remember {
-                        BattyBirdNET.loadLabelCatalog(context.assets)
-                    }
-                    val languageIndex = model.settings.autoIdLanguage
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        MyCheckbox(
-                            "BattyBirdNET", autoIdEnabled
-                        ) { value: Boolean ->
-                            autoIdEnabled = value
-                            scope.launch {
-                                model.updateStoredSettings(model.settings.copy(autoId = value))
-                            }
-                        }
-                        Button(
-                            onClick = { showSuppressions = true },
-                            enabled = autoIdEnabled
-                        ) {
-                            Text("Suppressions")
-                        }
-                    }
-                    if (showSuppressions) {
-                        val suppressible = remember(labelCatalog) {
-                            labelCatalog.filter { !it.discard }
-                        }
-                        AutoIdSuppressionsDialog(
-                            entries = suppressible,
-                            languageIndex = languageIndex,
-                            suppressions = model.settings.bbnSuppresions,
-                            onDismiss = { showSuppressions = false },
-                            onConfirm = { updated ->
-                                scope.launch {
-                                    model.updateStoredSettings(
-                                        model.settings.copy(bbnSuppresions = updated)
-                                    )
-                                    showSuppressions = false
-                                }
-                            },
-                        )
-                    }
-                }
-
-                item {
-                    val languages = remember {
-                        BattyBirdNET.loadLabelLanguages(context.assets)
-                    }
-                    val languageOptions = remember(languages) {
-                        languages.mapIndexed { index, name -> index.toString() to name }
-                    }
-                    var autoIdLanguage by rememberSaveable {
-                        mutableStateOf(model.settings.autoIdLanguage)
-                    }
-                    // Clamp a stored index that is no longer valid for this JSON.
-                    val selectedIndex =
-                        if (autoIdLanguage in languages.indices) autoIdLanguage else 0
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MyDynamicSelector(
-                            options = languageOptions,
-                            description = "Auto Id language",
-                            selectedValue = selectedIndex.toString()
-                        ) { value: String ->
-                            val index = value.toIntOrNull()?.takeIf { it in languages.indices } ?: 0
-                            autoIdLanguage = index
-                            scope.launch {
-                                model.updateStoredSettings(
-                                    model.settings.copy(autoIdLanguage = index)
-                                )
-                            }
                         }
                     }
                 }
@@ -790,11 +889,11 @@ class SettingsUI(private val model: UIModel) {
 
 /**
  * Modal listing Auto Id classes that are not discarded. Checkboxes bind to
- * [suppressions] (settings [Settings.bbnSuppresions]); missing keys fall back
+ * [suppressions] (settings per-model Auto Id suppressions); missing keys fall back
  * to each entry's `disable_by_default`.
  */
 @Composable
-private fun AutoIdSuppressionsDialog(
+private fun MlSuppressionsDialog(
     entries: List<LabelCatalogEntry>,
     languageIndex: Int,
     suppressions: Map<String, Boolean>,
@@ -957,8 +1056,8 @@ private enum class SettingsSection(val title: String) {
     AUTO_BNC("Auto Brightness/Contrast"),
     RENDERING("Rendering"),
     RECORDING("Recording"),
+    AUTO_ID("Auto ID"),
     WARNINGS("Warnings"),
-    AUTO_ID("Auto Id"),
     DIAGNOSTICS("Diagnostics"),
 }
 

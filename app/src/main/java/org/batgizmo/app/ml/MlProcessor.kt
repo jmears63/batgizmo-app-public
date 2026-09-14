@@ -31,9 +31,6 @@ import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
-import org.batgizmo.app.ml.MlProcessor.Companion.CHUNK_SIZE_AT_REQUIRED_RATE
-import org.batgizmo.app.ml.MlProcessor.Companion.MAX_LIVE_QUEUED_CHUNKS
-import org.batgizmo.app.ml.MlProcessor.Companion.REQUIRED_SAMPLE_RATE_HZ
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -56,13 +53,14 @@ enum class MlOverflowPolicy {
  * ML processing backend.
  *
  * Raw chunks go through a pool of resample workers (r8brain, multi-core), then a
- * single infer worker owns [BattyBirdNET] (LiteRT is not thread-safe).
+ * single infer worker owns the active [MlModelBase] (LiteRT is not thread-safe).
  *
  * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingCount]
  * already reaches [MAX_LIVE_QUEUED_CHUNKS].
  */
 class MlProcessor(
     context: Context,
+    private val modelId: String,
 ) {
     /**
      * One owned PCM chunk awaiting analysis.
@@ -85,12 +83,6 @@ class MlProcessor(
     )
 
     companion object {
-        /** Sample rate expected by the model. */
-        const val REQUIRED_SAMPLE_RATE_HZ = BattyBirdNET.SAMPLE_RATE_HZ
-
-        /** Samples per chunk at [REQUIRED_SAMPLE_RATE_HZ]. */
-        const val CHUNK_SIZE_AT_REQUIRED_RATE = BattyBirdNET.SIG_SAMPLES
-
         /**
          * Soft cap on queued chunks in live mode ([MlOverflowPolicy.DropIfFull]).
          * Viewer mode ([MlOverflowPolicy.QueueAll]) ignores this.
@@ -103,49 +95,23 @@ class MlProcessor(
         fun defaultResampleParallelism(): Int =
             Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
 
-        /** Omit weak scores from the UI summary (show only confidence > 70%). */
-        private const val MIN_CONFIDENCE = 0.7f
-
         init {
             System.loadLibrary("batgizmo-native")
         }
 
         /**
-         * Chunk length in samples for [sampleRateHz], scaled so duration matches
-         * [CHUNK_SIZE_AT_REQUIRED_RATE] samples at [REQUIRED_SAMPLE_RATE_HZ].
-         */
-        fun chunkSizeForSampleRate(sampleRateHz: Int): Int {
-            require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
-            // Ceiling division so a fractional sample count rounds up.
-            val scaled =
-                (CHUNK_SIZE_AT_REQUIRED_RATE.toLong() * sampleRateHz +
-                    REQUIRED_SAMPLE_RATE_HZ - 1) /
-                    REQUIRED_SAMPLE_RATE_HZ
-            return scaled.toInt().coerceAtLeast(1)
-        }
-
-        /**
-         * Resample mono 16-bit PCM to [REQUIRED_SAMPLE_RATE_HZ] via r8brain (native).
+         * Resample mono 16-bit PCM to [outputSampleRateHz] via r8brain (native).
          * Returns a newly allocated buffer, or null on failure.
          * Safe to call from multiple threads (oneshot resampler per call).
          */
         @JvmStatic
-        private external fun nativeResampleToRequiredRate(
+        private external fun nativeResample(
             input: ShortArray,
             offset: Int,
             count: Int,
             inputSampleRateHz: Int,
+            outputSampleRateHz: Int,
         ): ShortArray?
-
-        /** Convert int16 PCM to float in roughly [-1, 1], pad/truncate to [SIG_SAMPLES]. */
-        private fun pcmToModelWindow(pcm: ShortArray): FloatArray {
-            val window = FloatArray(CHUNK_SIZE_AT_REQUIRED_RATE)
-            val n = min(pcm.size, CHUNK_SIZE_AT_REQUIRED_RATE)
-            for (i in 0 until n) {
-                window[i] = pcm[i] / 32768f
-            }
-            return window
-        }
     }
 
     private val appContext = context.applicationContext
@@ -163,16 +129,19 @@ class MlProcessor(
 
     /** Species-name language index from settings; out-of-range falls back to 0. */
     @Volatile
-    private var labelLanguageIndex: Int = BattyBirdNET.DEFAULT_LANGUAGE_INDEX
+    private var labelLanguageIndex: Int = 0
 
     /**
-     * Latin label keys the user chose to ignore ([Settings.bbnSuppresions] where
-     * value is true). Matched against [BattyBirdNET.labelKeys].
+     * Label keys the user chose to ignore (settings suppressions where value is
+     * true). Matched against [MlModelBase.labelKeys].
      */
     @Volatile
     private var suppressedLabelKeys: Set<String> = emptySet()
 
-    private var model: BattyBirdNET? = null
+    @Volatile
+    private var windowing: MlWindowing? = null
+
+    private var model: MlModelBase? = null
 
     /** Switch live drop-vs-viewer queue-all behaviour. Safe to call from any thread. */
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
@@ -188,8 +157,13 @@ class MlProcessor(
      * Update user suppressions for subsequent detections. Keys with value `true`
      * are ignored (in addition to labels JSON `discard`). Safe from any thread.
      */
-    fun setBbnSuppressions(suppressions: Map<String, Boolean>) {
+    fun setSuppressions(suppressions: Map<String, Boolean>) {
         suppressedLabelKeys = suppressions.filterValues { it }.keys
+    }
+
+    /** Apply windowing from the selected model descriptor (before [run]). */
+    fun setWindowing(windowing: MlWindowing) {
+        this.windowing = windowing
     }
 
     /**
@@ -295,13 +269,11 @@ class MlProcessor(
         try {
             coroutineScope {
                 val resampleJobs = List(resampleParallelism) { index ->
-                    // Multiple concurrent resample jobs:
                     launch(resampleDispatcher + CoroutineName("MlResample-$index")) {
                         resampleLoop()
                     }
                 }
                 val inferJob = launch(inferDispatcher + CoroutineName("MlInfer")) {
-                    // A single inference job to enforce single thread:
                     inferLoop(onResult)
                 }
                 resampleJobs.joinAll()
@@ -353,49 +325,81 @@ class MlProcessor(
         }
     }
 
-    private fun ensureModel(): BattyBirdNET? {
+    private fun ensureModel(): MlModelBase? {
         model?.let { return it }
         return try {
-            BattyBirdNET(appContext.assets).also { model = it }
+            MlCatalog.openModel(appContext.assets, modelId).also { opened ->
+                model = opened
+                windowing = MlWindowing.from(opened.descriptor)
+                Timber.i("MlProcessor: loaded Auto Id model ${opened.id}")
+            }
         } catch (e: Exception) {
-            Timber.e(e, "MlProcessor: failed to load BattyBirdNET")
+            Timber.e(e, "MlProcessor: failed to load Auto Id model $modelId")
             null
         }
     }
 
+    private fun activeWindowing(): MlWindowing? =
+        windowing ?: model?.descriptor?.let { MlWindowing.from(it) }
+
     private fun resampleToWindow(submission: ChunkSubmission, chunkId: Int): FloatArray? {
-        val resampled = nativeResampleToRequiredRate(
+        val win = activeWindowing()
+        if (win == null) {
+            // Force model load on infer thread only; resample still needs rates.
+            // Use catalog metadata without opening TFLite.
+            val descriptor = try {
+                MlCatalog.resolveDescriptor(appContext.assets, modelId)
+            } catch (e: Exception) {
+                Timber.e(e, "MlProcessor: no descriptor for $modelId")
+                return null
+            }
+            windowing = MlWindowing.from(descriptor)
+        }
+        val w = activeWindowing() ?: return null
+
+        val resampled = nativeResample(
             submission.buffer,
             submission.offset,
             submission.count,
             submission.sampleRateHz,
+            w.modelSampleRateHz,
         )
         if (resampled == null) {
-            Timber.e("MlProcessor: resample to $REQUIRED_SAMPLE_RATE_HZ Hz failed")
+            Timber.e("MlProcessor: resample to ${w.modelSampleRateHz} Hz failed")
             return null
         }
 
-        if (resampled.size != CHUNK_SIZE_AT_REQUIRED_RATE) {
+        if (resampled.size != w.windowSamples) {
             Timber.w(
                 "MlProcessor: chunk #$chunkId resampled length ${resampled.size} " +
-                    "(expected $CHUNK_SIZE_AT_REQUIRED_RATE); pad/truncate"
+                    "(expected ${w.windowSamples}); pad/truncate"
             )
         }
-        return pcmToModelWindow(resampled)
+        return pcmToModelWindow(resampled, w.windowSamples)
+    }
+
+    private fun pcmToModelWindow(pcm: ShortArray, windowSamples: Int): FloatArray {
+        val window = FloatArray(windowSamples)
+        val n = min(pcm.size, windowSamples)
+        for (i in 0 until n) {
+            window[i] = pcm[i] / 32768f
+        }
+        return window
     }
 
     private fun inferWindow(job: ResampledJob): MlResult {
-        val bbn = ensureModel() ?: return MlResult(observedAtEpochSec = job.observedAtEpochSec)
+        val autoId = ensureModel() ?: return MlResult(observedAtEpochSec = job.observedAtEpochSec)
+        val minConfidence = autoId.minConfidence
 
         return try {
-            val scores = bbn.predict(job.window)
-            val displayLabels = bbn.labelsFor(labelLanguageIndex)
+            val scores = autoId.predict(job.window)
+            val displayLabels = autoId.labelsFor(labelLanguageIndex)
             val detections = ArrayList<MlDetection>()
             for (i in scores.indices) {
                 val score = scores[i]
-                if (bbn.labelDiscard[i] ||
-                    bbn.labelKeys[i] in suppressedLabelKeys ||
-                    score <= MIN_CONFIDENCE
+                if (autoId.labelDiscard[i] ||
+                    autoId.labelKeys[i] in suppressedLabelKeys ||
+                    score <= minConfidence
                 ) {
                     continue
                 }

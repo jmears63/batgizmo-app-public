@@ -8,13 +8,13 @@ machine-learning model assets, native libraries, and spectrogram colour maps.
 
 ## Auto Id model assets (CC BY-NC-SA 4.0)
 
-The following assets under `app/src/main/assets/ml/BattyBirdNET/` are **not** MIT-licensed:
+The following assets under `app/src/main/assets/ml/battybirdnet/` are **not** MIT-licensed:
 
 | Asset | Origin |
 | --- | --- |
 | `BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite` | Derived from BirdNET v2.4 (see below) |
-| `BattyBirdNET-UK-256kHz.tflite` | BattyBirdNET regional classifier |
-| `BattyBirdNET-UK-256kHz_Labels.json` (and legacy `.txt`) | BattyBirdNET class labels |
+| `variants/*/BattyBirdNET-*.tflite` | BattyBirdNET regional classifiers |
+| `variants/*/labels.json` (and legacy `labels.txt`) | BattyBirdNET class labels |
 
 These model/label materials are used under the
 [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/).
@@ -77,7 +77,7 @@ Please cite:
 v2.4 FP32 TFLite model so that Android LiteRT exposes the penultimate embedding
 tensor (`GLOBAL_AVG_POOL`) as the model output. No weights were retrained; only
 TFLite output metadata was changed. See
-`app/src/main/assets/ml/BattyBirdNET/notes.txt`.
+`app/src/main/assets/ml/battybirdnet/notes.txt`.
 
 That adaptation remains under CC BY-NC-SA 4.0 (ShareAlike).
 

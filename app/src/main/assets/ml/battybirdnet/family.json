@@ -1,0 +1,10 @@
+{
+  "id": "battybirdnet",
+  "displayName": "BattyBirdNET",
+  "kind": "embed_then_classify",
+  "sampleRateHz": 256000,
+  "windowSamples": 144000,
+  "overlapFraction": 0.25,
+  "minSampleRateHz": 196000,
+  "minConfidence": 0.7
+}

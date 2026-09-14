@@ -1,0 +1,264 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    {
+      "text": [
+        "Barbastella barbastellus",
+        "Western barbastelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus nilssonii",
+        "Northern bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus serotinus",
+        "Serotine bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Hypsugo savii",
+        "Savis pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis bechsteinii",
+        "Bechsteins bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis dasycneme",
+        "Pond bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis daubentonii",
+        "Daubentons or Whiskered bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis emarginatus",
+        "Geoffroys bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis myotis",
+        "Greater mouse-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis mystacinus",
+        "Whiskered or Daubentons bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis nattereri",
+        "Natterers bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus leisleri",
+        "Lesser noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus noctula",
+        "Common noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus kuhlii",
+        "Kuhls or Nathusius pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus nathusii",
+        "Nathusius or Kuhls pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pipistrellus",
+        "Common pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pygmaeus",
+        "Soprano pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Plecotus auritus",
+        "Brown or Grey long eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus ferrumequinum",
+        "Greater horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus hipposideros",
+        "Lesser horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus hipposideros",
+        "Lesser horseshoe bat social"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Vespertilio murinus",
+        "Parti-coloured bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "audiomoth",
+        "audiomoth"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "background",
+        "background"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "bird",
+        "bird"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "collected",
+        "collected"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "electrical",
+        "electrical"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "insect",
+        "insect"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "mechanical",
+        "mechanical"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "other",
+        "other"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "pro",
+        "pro"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "rain",
+        "rain"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    }
+  ]
+}

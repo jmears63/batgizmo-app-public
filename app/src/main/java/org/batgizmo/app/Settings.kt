@@ -90,19 +90,22 @@ data class Settings(
     var autoTriggerThresholdDb: Float = 40f,
     var autoTriggerRangeMinkHz: Float = 16f,
     var autoTriggerRangeMaxkHz: Float = 120f,
-    /** Experimental: enable automatic species ID via ML. */
-    var autoId: Boolean = false,
+    /**
+     * Selected Auto Id model id (e.g. `battybirdnet/uk-256khz`), or empty when
+     * Auto Id is off. See [org.batgizmo.app.ml.MlCatalog].
+     */
+    var autoIdModelId: String = DEFAULT_AUTO_ID_MODEL_ID,
     /**
      * Language for Auto Id species names: index into the labels JSON
      * `description` array. Out-of-range values are treated as 0.
      */
     var autoIdLanguage: Int = DEFAULT_AUTO_ID_LANGUAGE,
     /**
-     * BattyBirdNET classes to ignore in Auto Id: Latin name (first labels JSON
-     * text column) → ignored when true. Defaults come from each label's
-     * `disable_by_default`; persisted as a JSON object.
+     * Per-model Auto Id classes to ignore: model id → (label key → ignored when
+     * true). Label keys are the first labels JSON text column. Defaults come
+     * from each label's `disable_by_default`.
      */
-    var bbnSuppresions: Map<String, Boolean> = emptyMap(),
+    var autoIdSuppressions: Map<String, Map<String, Boolean>> = emptyMap(),
     var pipelineParameters: PipelineParameters = PipelineParameters()
 ) {
     // Provide some abstraction to allow different enums to be handled the same way:
@@ -467,8 +470,14 @@ data class Settings(
         const val DEFAULT_AUTO_HET_LO_MIN_KHZ = 16
         const val DEFAULT_AUTO_HET_LO_MAX_KHZ = 120
 
-        /** Default Auto Id species-name language index (labels JSON `description`). */
-        const val DEFAULT_AUTO_ID_LANGUAGE = 0
+        /** Default Auto Id species-name language index (labels JSON `description`: Latin=0, English=1). */
+        const val DEFAULT_AUTO_ID_LANGUAGE = 1
+
+        /** Default bundled Auto Id model id (when a model is selected). */
+        const val DEFAULT_AUTO_ID_MODEL_ID = "battybirdnet/uk-256khz"
+
+        /** Dropdown value / stored id meaning Auto Id is off. */
+        const val AUTO_ID_MODEL_NONE = ""
 
         /** Valid auto heterodyne activity-span frequency limits (kHz). */
         const val AUTO_HET_LO_LIMIT_MIN_KHZ = 10
@@ -477,8 +486,8 @@ data class Settings(
         fun isAutoHeterodyneSampleRateApplicable(sampleRateHz: Int): Boolean =
             sampleRateHz >= AUTO_HET_MIN_SAMPLE_RATE_HZ
 
-        /** Serialise [bbnSuppresions] for DataStore. */
-        fun bbnSuppresionsToJson(map: Map<String, Boolean>): String {
+        /** Serialise a flat label-key → suppressed map. */
+        fun labelSuppressionsToJson(map: Map<String, Boolean>): String {
             val root = JSONObject()
             for ((key, value) in map) {
                 root.put(key, value)
@@ -486,8 +495,8 @@ data class Settings(
             return root.toString()
         }
 
-        /** Parse a [bbnSuppresions] JSON object; invalid input yields an empty map. */
-        fun bbnSuppresionsFromJson(json: String): Map<String, Boolean> {
+        /** Parse a flat label-key → suppressed JSON object; invalid input yields empty. */
+        fun labelSuppressionsFromJson(json: String): Map<String, Boolean> {
             return try {
                 val root = JSONObject(json)
                 buildMap {
@@ -501,24 +510,76 @@ data class Settings(
                 emptyMap()
             }
         }
+
+        /** Serialise [autoIdSuppressions] as `{ modelId: { labelKey: bool } }`. */
+        fun autoIdSuppressionsToJson(map: Map<String, Map<String, Boolean>>): String {
+            val root = JSONObject()
+            for ((modelId, labels) in map) {
+                val nested = JSONObject()
+                for ((key, value) in labels) {
+                    nested.put(key, value)
+                }
+                root.put(modelId, nested)
+            }
+            return root.toString()
+        }
+
+        /**
+         * Parse nested or legacy flat suppressions JSON.
+         * Legacy flat maps (label → bool) are nested under [DEFAULT_AUTO_ID_MODEL_ID].
+         */
+        fun autoIdSuppressionsFromJson(json: String): Map<String, Map<String, Boolean>> {
+            return try {
+                val root = JSONObject(json)
+                if (root.length() == 0) return emptyMap()
+                val keys = root.keys()
+                val firstKey = keys.next()
+                val firstVal = root.get(firstKey)
+                // Legacy flat map: values are booleans.
+                if (firstVal is Boolean) {
+                    return mapOf(DEFAULT_AUTO_ID_MODEL_ID to labelSuppressionsFromJson(json))
+                }
+                buildMap {
+                    put(firstKey, labelSuppressionsFromJson(firstVal.toString()))
+                    while (keys.hasNext()) {
+                        val modelId = keys.next()
+                        put(modelId, labelSuppressionsFromJson(root.get(modelId).toString()))
+                    }
+                }
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
     }
 
+    /** True when Auto Id is on (a model id is selected). */
+    fun isAutoIdEnabled(): Boolean = autoIdModelId.isNotBlank()
+
+    /** Suppressions for [modelId], or empty if none stored. */
+    fun suppressionsFor(modelId: String): Map<String, Boolean> =
+        autoIdSuppressions[modelId] ?: emptyMap()
+
     /**
-     * Ensure every key in [defaults] exists in [bbnSuppresions], filling missing
+     * Ensure every key in [defaults] exists for [modelId], filling missing
      * entries from [defaults] (typically `disable_by_default` from the labels JSON).
      * Existing keys are left unchanged. Returns true if the map was modified.
      */
-    fun mergeBbnSuppressionDefaults(defaults: Map<String, Boolean>): Boolean {
+    fun mergeAutoIdSuppressionDefaults(
+        modelId: String,
+        defaults: Map<String, Boolean>,
+    ): Boolean {
         if (defaults.isEmpty()) return false
-        val merged = bbnSuppresions.toMutableMap()
+        val current = suppressionsFor(modelId).toMutableMap()
         var changed = false
         for ((key, value) in defaults) {
-            if (key !in merged) {
-                merged[key] = value
+            if (key !in current) {
+                current[key] = value
                 changed = true
             }
         }
-        if (changed) bbnSuppresions = merged
+        if (changed) {
+            autoIdSuppressions = autoIdSuppressions + (modelId to current)
+        }
         return changed
     }
 
@@ -565,8 +626,11 @@ data class Settings(
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
     private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
-    private val keyAutoId = booleanPreferencesKey("autoId")
+    private val keyAutoId = booleanPreferencesKey("autoId") // legacy; removed on write
+    private val keyMlModelId = stringPreferencesKey("autoIdModelId")
     private val keyAutoIdLanguage = intPreferencesKey("autoIdLanguageIndex")
+    private val keyAutoIdSuppressions = stringPreferencesKey("autoIdSuppressions")
+    /** Legacy flat suppressions key; read for migration only. */
     private val keyBbnSuppresions = stringPreferencesKey("bbnSuppresions")
 
 
@@ -623,9 +687,10 @@ data class Settings(
         autoHeterodyneLoMaxKhz = loMaxKhz
         prefs[keyAutoHeterodyneLoMinKhz] = loMinKhz
         prefs[keyAutoHeterodyneLoMaxKhz] = loMaxKhz
-        prefs[keyAutoId] = autoId
+        prefs.remove(keyAutoId)
+        prefs[keyMlModelId] = autoIdModelId
         prefs[keyAutoIdLanguage] = autoIdLanguage
-        prefs[keyBbnSuppresions] = bbnSuppresionsToJson(bbnSuppresions)
+        prefs[keyAutoIdSuppressions] = autoIdSuppressionsToJson(autoIdSuppressions)
     }
 
     fun copyFromPreferences(prefs: Preferences) {
@@ -732,12 +797,30 @@ data class Settings(
             autoHeterodyneLoMinKhz = requireNotNull(prefs[keyAutoHeterodyneLoMinKhz])
         if (prefs[keyAutoHeterodyneLoMaxKhz] != null)
             autoHeterodyneLoMaxKhz = requireNotNull(prefs[keyAutoHeterodyneLoMaxKhz])
-        if (prefs[keyAutoId] != null)
-            autoId = requireNotNull(prefs[keyAutoId])
+        if (prefs[keyMlModelId] != null)
+            autoIdModelId = requireNotNull(prefs[keyMlModelId])
+        // Legacy boolean enable flag: off → none; on with blank id → default model.
+        if (prefs[keyAutoId] != null) {
+            val legacyEnabled = requireNotNull(prefs[keyAutoId])
+            if (!legacyEnabled) {
+                autoIdModelId = AUTO_ID_MODEL_NONE
+            } else if (autoIdModelId.isBlank()) {
+                autoIdModelId = DEFAULT_AUTO_ID_MODEL_ID
+            }
+        }
         if (prefs[keyAutoIdLanguage] != null)
             autoIdLanguage = requireNotNull(prefs[keyAutoIdLanguage])
-        if (prefs[keyBbnSuppresions] != null)
-            bbnSuppresions = bbnSuppresionsFromJson(requireNotNull(prefs[keyBbnSuppresions]))
+        when {
+            prefs[keyAutoIdSuppressions] != null ->
+                autoIdSuppressions =
+                    autoIdSuppressionsFromJson(requireNotNull(prefs[keyAutoIdSuppressions]))
+            prefs[keyBbnSuppresions] != null ->
+                // Migrate legacy flat BattyBirdNET suppressions.
+                autoIdSuppressions = mapOf(
+                    DEFAULT_AUTO_ID_MODEL_ID to
+                        labelSuppressionsFromJson(requireNotNull(prefs[keyBbnSuppresions]))
+                )
+        }
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
         autoHeterodyneLoMaxKhz = loMaxKhz

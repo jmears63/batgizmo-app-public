@@ -1,0 +1,192 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    {
+      "text": [
+        "Corynorhinus townsendii",
+        "Townsends big-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus fuscus",
+        "Big brown bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasionycteris noctivagans",
+        "Silver-haired bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus borealis",
+        "Eastern red bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus cinereus",
+        "Hoary bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus intermedius",
+        "Northern yellow bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Lasiurus seminolus",
+        "Seminole bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis austroriparius",
+        "Southeastern myotis"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis grisescens",
+        "Gray bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis leibii",
+        "Eastern small-footed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis lucifugus",
+        "Little brown bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis septentrionalis",
+        "Northern long-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis sodalis",
+        "Indiana bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nycticeius humeralis",
+        "Evening bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Perimyotis subflavus",
+        "Tricolored bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Tadarida brasiliensis",
+        "Brazilian free-tailed bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Tettigoniidea",
+        "Cricket"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "background",
+        "background"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "collected",
+        "collected"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "noise",
+        "noise"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "noise-us",
+        "noise-us"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "other",
+        "other"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "silence",
+        "silence"
+      ],
+      "discard": true,
+      "disable_by_default": false
+    }
+  ]
+}

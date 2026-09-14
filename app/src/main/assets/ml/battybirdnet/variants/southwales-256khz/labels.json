@@ -1,0 +1,240 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    {
+      "text": [
+        "Barbastella barbastellus",
+        "Barbastelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Conocephalus dorsalis",
+        "Short-winged conehead"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Conocephalus fuscus",
+        "Long-winged bush-cricket"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Eptesicus serotinus",
+        "Serotine"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Leptophyes punctatissima",
+        "Speckled bush-cricket"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Metrioptera brachyptera",
+        "Bog bush-cricket"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Muscardinus avellanarius",
+        "Hazel dormouse"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Myotis bechsteinii",
+        "Bechstein's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis brandtii",
+        "Brandt's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis daubentonii",
+        "Daubenton's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis myotis",
+        "Greater mouse-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Myotis mystacinus",
+        "Whiskered bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis nattereri",
+        "Natterer's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus leisleri",
+        "Leisler's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus noctula",
+        "Noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pholidoptera griseoaptera",
+        "Dark bush-cricket"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Pipistrellus nathusii",
+        "Nathusius' pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pipistrellus",
+        "Common pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pygmaeus",
+        "Soprano pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Plecotus auritus",
+        "Brown long-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Plecotus austriacus",
+        "Grey long-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rattus norvegicus",
+        "Brown rat"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Rhinolophus ferrumequinum",
+        "Greater horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus hipposideros",
+        "Lesser horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Sorex araneus",
+        "Common shrew"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Sorex minutus",
+        "Eurasian pygmy shrew"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Tettigonia viridissima",
+        "Great green bush-cricket"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Vespertilio murinus",
+        "Parti-coloured bat"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "noise",
+        "noise"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    }
+  ]
+}

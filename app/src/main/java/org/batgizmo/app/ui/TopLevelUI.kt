@@ -118,7 +118,7 @@ class TopLevelUI(private val model: UIModel) {
         val overlayTextMode =
             rememberSaveable { mutableIntStateOf(model.settings.overlayTextMode) }
         val leftHandedMode = rememberSaveable { mutableStateOf(model.settings.leftHandButtons) }
-        val autoId = rememberSaveable { mutableStateOf(model.settings.autoId) }
+        val autoId = rememberSaveable { mutableStateOf(model.settings.isAutoIdEnabled()) }
 
         // Have we received the settings values yet?
         val settingsAvailable = rememberSaveable { mutableStateOf(false) }
@@ -146,7 +146,7 @@ class TopLevelUI(private val model: UIModel) {
             showHeterodyneReferenceLine.value = model.settings.showHeterodyneReferenceLine
             overlayTextMode.intValue = model.settings.overlayTextMode
             leftHandedMode.value = model.settings.leftHandButtons
-            autoId.value = model.settings.autoId
+            autoId.value = model.settings.isAutoIdEnabled()
 
             // It's OK to draw the full UI now:
             settingsAvailable.value = true

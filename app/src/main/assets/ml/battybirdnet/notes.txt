@@ -1,14 +1,16 @@
 BirdNET embeddings model (Android)
 ==================================
 
-Location: app/src/main/assets/ml/BattyBirdNET/
+Location: app/src/main/assets/ml/battybirdnet/
 
 Asset: BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite
+
+Shared by all BattyBirdNET regional variants under variants/.
 
 Why this file exists
 --------------------
 BattyBirdNET needs BirdNET feature embeddings (the penultimate layer), then
-passes them to the regional UK classifier (BattyBirdNET-UK-256kHz.tflite).
+passes them to a regional UK (or other) classifier TFLite head.
 
 In the BBNPoC Python demo, the full BirdNET TFLite model is loaded with
 experimental_preserve_all_tensors=True so the code can read tensor index 545
@@ -37,6 +39,6 @@ the original model run with experimental_preserve_all_tensors=True.
 
 Related assets
 --------------
-- BattyBirdNET-UK-256kHz.tflite — regional linear head on 1024-d embeddings
-- BattyBirdNET-UK-256kHz_Labels.json — per-class Latin/English names (UI + filtering)
-- BattyBirdNET-UK-256kHz_Labels.txt — legacy one-label-per-line file (retained, unused)
+- variants/uk-256khz/BattyBirdNET-UK-256kHz.tflite — regional linear head
+- variants/uk-256khz/labels.json — per-class Latin/English names (UI + filtering)
+- variants/uk-256khz/labels.txt — legacy one-label-per-line file (retained, unused)

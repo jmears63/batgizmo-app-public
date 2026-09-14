@@ -1,15 +1,29 @@
 {
   "description": [
     "Latin",
-    "English",
-    "Latin genus"
+    "English"
   ],
   "labels": [
     {
       "text": [
         "Barbastella barbastellus",
-        "Western barbastelle",
-        "Barbastella"
+        "Western barbastelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus nilssonii",
+        "Northern bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Eptesicus serotinus",
+        "Serotine bat"
       ],
       "discard": false,
       "disable_by_default": false
@@ -17,8 +31,15 @@
     {
       "text": [
         "Myotis bechsteinii",
-        "Bechsteins bat",
-        "Myotis"
+        "Bechsteins bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis dasycneme",
+        "Pond bat"
       ],
       "discard": false,
       "disable_by_default": false
@@ -26,8 +47,7 @@
     {
       "text": [
         "Myotis daubentonii",
-        "Daubenton's bat",
-        "Myotis"
+        "Daubentons or Whiskered bat"
       ],
       "discard": false,
       "disable_by_default": false
@@ -35,17 +55,15 @@
     {
       "text": [
         "Myotis myotis",
-        "Greater mouse-eared bat",
-        "Myotis"
+        "Greater mouse-eared bat"
       ],
       "discard": false,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
         "Myotis mystacinus",
-        "Whiskered bat",
-        "Myotis"
+        "Whiskered or Daubentons bat"
       ],
       "discard": false,
       "disable_by_default": false
@@ -53,8 +71,7 @@
     {
       "text": [
         "Myotis nattereri",
-        "Natterer's bat",
-        "Myotis"
+        "Natterers bat"
       ],
       "discard": false,
       "disable_by_default": false
@@ -62,8 +79,7 @@
     {
       "text": [
         "Nyctalus leisleri",
-        "Leisler's bat",
-        "Nyctalus"
+        "Lesser noctule"
       ],
       "discard": false,
       "disable_by_default": false
@@ -71,8 +87,15 @@
     {
       "text": [
         "Nyctalus noctula",
-        "Common noctule",
-        "Nyctalus"
+        "Common noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus kuhlii",
+        "Kuhls or Nathusius pipistrelle"
       ],
       "discard": false,
       "disable_by_default": false
@@ -80,17 +103,15 @@
     {
       "text": [
         "Pipistrellus nathusii",
-        "Nathusius's pipistrelle",
-        "Pipistrellus"
+        "Nathusius or Kuhls pipistrelle"
       ],
       "discard": false,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
         "Pipistrellus pipistrellus",
-        "Common pipistrelle",
-        "Pipistrellus"
+        "Common pipistrelle"
       ],
       "discard": false,
       "disable_by_default": false
@@ -98,8 +119,7 @@
     {
       "text": [
         "Pipistrellus pygmaeus",
-        "Soprano pipistrelle",
-        "Pipistrellus"
+        "Soprano pipistrelle"
       ],
       "discard": false,
       "disable_by_default": false
@@ -107,26 +127,7 @@
     {
       "text": [
         "Plecotus auritus",
-        "Brown long eared bat",
-        "Plecotus"
-      ],
-      "discard": false,
-      "disable_by_default": false
-    },
-    {
-      "text": [
-        "Rhinolophus ferrumequinum",
-        "Greater horseshoe bat",
-        "Rhinolophus"
-      ],
-      "discard": false,
-      "disable_by_default": true
-    },
-    {
-      "text": [
-        "Rhinolophus hipposideros",
-        "Lesser horseshoe bat",
-        "Rhinolophus"
+        "Brown or Grey long eared bat"
       ],
       "discard": false,
       "disable_by_default": false
@@ -134,56 +135,58 @@
     {
       "text": [
         "Tettigoniidea",
-        "Cricket",
-        "Tettigoniidea"
+        "Cricket"
       ],
       "discard": true,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
-        "audiomoth",
+        "Vespertilio murinus",
+        "Parti-coloured bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
         "audiomoth",
         "audiomoth"
       ],
       "discard": true,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
-        "background",
         "background",
         "background"
       ],
       "discard": true,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
-        "noise",
         "noise",
         "noise"
       ],
       "discard": true,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
-        "other",
         "other",
         "other"
       ],
       "discard": true,
-      "disable_by_default": true
+      "disable_by_default": false
     },
     {
       "text": [
         "silence",
-        "silence",
         "silence"
       ],
       "discard": true,
-      "disable_by_default": true
+      "disable_by_default": false
     }
   ]
 }

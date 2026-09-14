@@ -35,8 +35,6 @@
 
 namespace {
 
-constexpr int kRequiredSampleRateHz = 256000;
-
 inline int16_t clampToInt16(double sample) {
     const long v = std::lround(sample);
     if (v > 32767) return 32767;
@@ -48,21 +46,23 @@ inline int16_t clampToInt16(double sample) {
 
 extern "C"
 JNIEXPORT jshortArray JNICALL
-Java_org_batgizmo_app_ml_MlProcessor_nativeResampleToRequiredRate(
+Java_org_batgizmo_app_ml_MlProcessor_nativeResample(
         JNIEnv *env,
         jclass /* clazz */,
         jshortArray input,
         jint offset,
         jint count,
-        jint inputSampleRateHz) {
-    if (input == nullptr || offset < 0 || count < 0 || inputSampleRateHz <= 0) {
-        LOGE("nativeResampleToRequiredRate: invalid arguments");
+        jint inputSampleRateHz,
+        jint outputSampleRateHz) {
+    if (input == nullptr || offset < 0 || count < 0 ||
+        inputSampleRateHz <= 0 || outputSampleRateHz <= 0) {
+        LOGE("nativeResample: invalid arguments");
         return nullptr;
     }
 
     const jsize inputLen = env->GetArrayLength(input);
     if (offset + count > inputLen) {
-        LOGE("nativeResampleToRequiredRate: offset+count exceeds input length");
+        LOGE("nativeResample: offset+count exceeds input length");
         return nullptr;
     }
 
@@ -72,12 +72,12 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeResampleToRequiredRate(
 
     jshort *inPtr = env->GetShortArrayElements(input, nullptr);
     if (inPtr == nullptr) {
-        LOGE("nativeResampleToRequiredRate: GetShortArrayElements failed");
+        LOGE("nativeResample: GetShortArrayElements failed");
         return nullptr;
     }
 
     // Identity path when already at the model rate.
-    if (inputSampleRateHz == kRequiredSampleRateHz) {
+    if (inputSampleRateHz == outputSampleRateHz) {
         jshortArray out = env->NewShortArray(count);
         if (out != nullptr) {
             env->SetShortArrayRegion(out, 0, count, inPtr + offset);
@@ -87,10 +87,10 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeResampleToRequiredRate(
     }
 
     const int64_t outCount64 =
-            (static_cast<int64_t>(count) * kRequiredSampleRateHz + inputSampleRateHz / 2) /
+            (static_cast<int64_t>(count) * outputSampleRateHz + inputSampleRateHz / 2) /
             inputSampleRateHz;
     if (outCount64 < 1 || outCount64 > INT32_MAX) {
-        LOGE("nativeResampleToRequiredRate: bad output length %lld",
+        LOGE("nativeResample: bad output length %lld",
              static_cast<long long>(outCount64));
         env->ReleaseShortArrayElements(input, inPtr, JNI_ABORT);
         return nullptr;
@@ -108,7 +108,7 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeResampleToRequiredRate(
         // MaxInLen must cover the largest process() input; oneshot feeds in MaxInLen chunks.
         r8b::CDSPResampler16 resampler(
                 static_cast<double>(inputSampleRateHz),
-                static_cast<double>(kRequiredSampleRateHz),
+                static_cast<double>(outputSampleRateHz),
                 count);
         resampler.oneshot(
                 inDoubles.data(),
@@ -116,13 +116,13 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeResampleToRequiredRate(
                 outDoubles.data(),
                 outCount);
     } catch (...) {
-        LOGE("nativeResampleToRequiredRate: resampler threw");
+        LOGE("nativeResample: resampler threw");
         return nullptr;
     }
 
     jshortArray out = env->NewShortArray(outCount);
     if (out == nullptr) {
-        LOGE("nativeResampleToRequiredRate: NewShortArray failed");
+        LOGE("nativeResample: NewShortArray failed");
         return nullptr;
     }
 
@@ -133,6 +133,6 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeResampleToRequiredRate(
     env->SetShortArrayRegion(out, 0, outCount, outShorts.data());
 
     LOGI("resampled %d @ %d Hz -> %d @ %d Hz",
-         count, inputSampleRateHz, outCount, kRequiredSampleRateHz);
+         count, inputSampleRateHz, outCount, outputSampleRateHz);
     return out;
 }

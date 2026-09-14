@@ -1,0 +1,168 @@
+{
+  "description": [
+    "Latin",
+    "English"
+  ],
+  "labels": [
+    {
+      "text": [
+        "Barbastella barbastellus",
+        "Western barbastelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis bechsteinii",
+        "Bechsteins bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis daubentonii",
+        "Daubenton's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis myotis",
+        "Greater mouse-eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Myotis mystacinus",
+        "Whiskered bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Myotis nattereri",
+        "Natterer's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus leisleri",
+        "Leisler's bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Nyctalus noctula",
+        "Common noctule"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus nathusii",
+        "Nathusius's pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Pipistrellus pipistrellus",
+        "Common pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Pipistrellus pygmaeus",
+        "Soprano pipistrelle"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Plecotus auritus",
+        "Brown long eared bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Rhinolophus ferrumequinum",
+        "Greater horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "Rhinolophus hipposideros",
+        "Lesser horseshoe bat"
+      ],
+      "discard": false,
+      "disable_by_default": false
+    },
+    {
+      "text": [
+        "Tettigoniidea",
+        "Cricket"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "audiomoth",
+        "audiomoth"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "background",
+        "background"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "noise",
+        "noise"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "other",
+        "other"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    },
+    {
+      "text": [
+        "silence",
+        "silence"
+      ],
+      "discard": true,
+      "disable_by_default": true
+    }
+  ]
+}

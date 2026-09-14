@@ -1,0 +1,7 @@
+{
+  "id": "battybirdnet/usa-east-256khz-high",
+  "displayName": "BattyBirdNET USA East (high)",
+  "embeddings": "../../BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite",
+  "classifier": "BattyBirdNET-USA-EAST-256kHz-high.tflite",
+  "labels": "labels.json"
+}

@@ -1,0 +1,7 @@
+{
+  "id": "battybirdnet/bavaria-256khz-high",
+  "displayName": "BattyBirdNET Bavaria (high)",
+  "embeddings": "../../BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite",
+  "classifier": "BattyBirdNET-Bavaria-256kHz-high.tflite",
+  "labels": "labels.json"
+}
