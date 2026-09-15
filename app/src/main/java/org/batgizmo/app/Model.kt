@@ -557,6 +557,16 @@ class UIModel(application: Application,
     val mlSummaryFlow = mlSummaryAccumulator.summary
     val mlSummaryModeFlow = mlSummaryAccumulator.mode
 
+    /** True while Auto Id is ingesting samples into incomplete chunks. */
+    private val mutableMlBufferingFlow = MutableStateFlow(false)
+    val mlBufferingFlow: StateFlow<Boolean> = mutableMlBufferingFlow.asStateFlow()
+    private var mlBufferingCollectJob: Job? = null
+
+    /** True while Auto Id has queued or in-flight processor work. */
+    private val mutableMlBusyFlow = MutableStateFlow(false)
+    val mlBusyFlow: StateFlow<Boolean> = mutableMlBusyFlow.asStateFlow()
+    private var mlBusyCollectJob: Job? = null
+
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClient? = null
     private var mlClientSampleRateHz: Int? = null
@@ -1739,9 +1749,31 @@ class UIModel(application: Application,
 
     /** Caller must hold [mlLock]. */
     private fun clearMlClientLocked() {
+        mlBufferingCollectJob?.cancel()
+        mlBufferingCollectJob = null
+        mutableMlBufferingFlow.value = false
+        mlBusyCollectJob?.cancel()
+        mlBusyCollectJob = null
+        mutableMlBusyFlow.value = false
         mlClient?.shutdown()
         mlClient = null
         mlClientSampleRateHz = null
+    }
+
+    /** Caller must hold [mlLock]. Collect ingest/busy signals into UI flows. */
+    private fun attachMlActivityCollectorsLocked(client: MlClient) {
+        mlBufferingCollectJob?.cancel()
+        mlBufferingCollectJob = viewModelScope.launch {
+            client.isBuffering.collect { buffering ->
+                mutableMlBufferingFlow.value = buffering
+            }
+        }
+        mlBusyCollectJob?.cancel()
+        mlBusyCollectJob = viewModelScope.launch {
+            client.isBusy.collect { busy ->
+                mutableMlBusyFlow.value = busy
+            }
+        }
     }
 
     /**
@@ -1763,7 +1795,7 @@ class UIModel(application: Application,
         preferFileGuanoLocation: Boolean = false,
     ) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
-        require(settings.isAutoIdEnabled()) { "Auto Id model must be selected" }
+        require(settings.isAutoIdEnabled()) { "Auto Id must be enabled" }
         synchronized(mlLock) {
             val modelId = settings.autoIdModelId
             val existing = mlClient
@@ -1783,7 +1815,10 @@ class UIModel(application: Application,
                 descriptor,
             ) { result ->
                 mlSummaryAccumulator.submitResult(result)
-            }.also { mlClient = it }
+            }.also {
+                mlClient = it
+                attachMlActivityCollectorsLocked(it)
+            }
             client.setOverflowPolicy(overflowPolicy)
             client.setLabelLanguage(settings.autoIdLanguage)
             client.setSuppressions(settings.suppressionsFor(descriptor.id))

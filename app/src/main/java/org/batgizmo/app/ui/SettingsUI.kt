@@ -138,8 +138,9 @@ class SettingsUI(private val model: UIModel) {
         var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
         var unlimitedFileLength by rememberSaveable { mutableStateOf(model.settings.unlimitedFileLength) }
         var wavStorageVolume by rememberSaveable { mutableStateOf(model.settings.wavStorageVolume) }
-        // Local so Language / Suppressions react when the Auto ID dropdown changes
+        // Local so Language / Suppressions / enable react when Auto ID settings change
         // (model.settings is a plain var and does not trigger recomposition on its own):
+        var autoIdEnabled by rememberSaveable { mutableStateOf(model.settings.autoIdEnabled) }
         var autoIdModelId by rememberSaveable { mutableStateOf(model.settings.autoIdModelId) }
 
         // Expand/collapse state for each collapsible section, indexed by SettingsSection.ordinal.
@@ -627,6 +628,19 @@ class SettingsUI(private val model: UIModel) {
 
             settingsSection(SettingsSection.AUTO_ID, expandedSections) {
                 item {
+                    MyCheckbox(
+                        "Enable auto ID", autoIdEnabled
+                    ) { value: Boolean ->
+                        autoIdEnabled = value
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(autoIdEnabled = value)
+                            )
+                        }
+                    }
+                }
+
+                item {
                     data class AutoIdFamily(
                         val id: String,
                         val displayName: String,
@@ -652,22 +666,17 @@ class SettingsUI(private val model: UIModel) {
                         descriptors.firstOrNull { it.id == autoIdModelId }
                     }
                     val selectedFamilyId =
-                        selectedDescriptor?.familyId ?: Settings.AUTO_ID_MODEL_NONE
+                        selectedDescriptor?.familyId
+                            ?: families.firstOrNull()?.id
+                            ?: ""
                     val familyVariants = remember(selectedFamilyId, families) {
                         families.firstOrNull { it.id == selectedFamilyId }?.variants.orEmpty()
                     }
 
                     fun persistModelId(modelId: String) {
+                        if (modelId.isBlank()) return
                         autoIdModelId = modelId
                         scope.launch {
-                            if (modelId.isBlank()) {
-                                model.updateStoredSettings(
-                                    model.settings.copy(
-                                        autoIdModelId = Settings.AUTO_ID_MODEL_NONE
-                                    )
-                                )
-                                return@launch
-                            }
                             val desc = MlCatalog.resolveDescriptor(context.assets, modelId)
                             val defaults = desc.labelCatalog
                                 .filter { !it.discard }
@@ -679,34 +688,29 @@ class SettingsUI(private val model: UIModel) {
                     }
 
                     val familyOptions = remember(families) {
-                        listOf(Settings.AUTO_ID_MODEL_NONE to "None") +
-                            families.map { it.id to it.displayName }
+                        families.map { it.id to it.displayName }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MyDynamicSelector(
-                            options = familyOptions,
-                            description = "Auto ID",
-                            selectedValue = selectedFamilyId
-                        ) { familyId: String ->
-                            if (familyId.isBlank()) {
-                                persistModelId(Settings.AUTO_ID_MODEL_NONE)
-                                return@MyDynamicSelector
+                    if (familyOptions.isNotEmpty()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MyDynamicSelector(
+                                options = familyOptions,
+                                description = "Model",
+                                selectedValue = selectedFamilyId,
+                                enabled = autoIdEnabled
+                            ) { familyId: String ->
+                                val variants = families.firstOrNull { it.id == familyId }
+                                    ?.variants
+                                    .orEmpty()
+                                if (variants.isEmpty()) return@MyDynamicSelector
+                                // Keep current variant when staying in-family; else pick the first.
+                                val nextId =
+                                    if (selectedDescriptor?.familyId == familyId) {
+                                        selectedDescriptor.id
+                                    } else {
+                                        variants.first().id
+                                    }
+                                persistModelId(nextId)
                             }
-                            val variants = families.firstOrNull { it.id == familyId }
-                                ?.variants
-                                .orEmpty()
-                            if (variants.isEmpty()) {
-                                persistModelId(Settings.AUTO_ID_MODEL_NONE)
-                                return@MyDynamicSelector
-                            }
-                            // Keep current variant when staying in-family; else pick the first.
-                            val nextId =
-                                if (selectedDescriptor?.familyId == familyId) {
-                                    selectedDescriptor.id
-                                } else {
-                                    variants.first().id
-                                }
-                            persistModelId(nextId)
                         }
                     }
 
@@ -719,7 +723,7 @@ class SettingsUI(private val model: UIModel) {
                                 options = variantOptions,
                                 description = "Variant",
                                 selectedValue = autoIdModelId,
-                                enabled = familyVariants.size > 1
+                                enabled = autoIdEnabled && familyVariants.size > 1
                             ) { variantId: String ->
                                 persistModelId(variantId)
                             }
@@ -735,7 +739,6 @@ class SettingsUI(private val model: UIModel) {
                     val selectedDescriptor = remember(autoIdModelId, descriptors) {
                         descriptors.firstOrNull { it.id == autoIdModelId }
                     }
-                    val autoIdOn = autoIdModelId.isNotBlank()
                     val languages = selectedDescriptor?.languages.orEmpty()
                     val languageOptions = remember(languages) {
                         languages.mapIndexed { index, name -> index.toString() to name }
@@ -751,7 +754,7 @@ class SettingsUI(private val model: UIModel) {
                                 options = languageOptions,
                                 description = "Language",
                                 selectedValue = selectedIndex.toString(),
-                                enabled = autoIdOn && languages.size > 1
+                                enabled = autoIdEnabled && languages.size > 1
                             ) { value: String ->
                                 val index =
                                     value.toIntOrNull()?.takeIf { it in languages.indices } ?: 0
@@ -772,7 +775,7 @@ class SettingsUI(private val model: UIModel) {
                     ) {
                         Button(
                             onClick = { showSuppressions = true },
-                            enabled = autoIdOn &&
+                            enabled = autoIdEnabled &&
                                 selectedDescriptor != null &&
                                 selectedDescriptor.enableSuppressionsButton
                         ) {

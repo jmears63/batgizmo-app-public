@@ -91,8 +91,13 @@ data class Settings(
     var autoTriggerRangeMinkHz: Float = 16f,
     var autoTriggerRangeMaxkHz: Float = 120f,
     /**
-     * Selected Auto Id model id (e.g. `battybirdnet/uk-256khz`), or empty when
-     * Auto Id is off. See [org.batgizmo.app.ml.MlCatalog].
+     * Master switch for Auto Id. When false, Auto Id is off but [autoIdModelId]
+     * is retained so re-enabling restores the last model.
+     */
+    var autoIdEnabled: Boolean = true,
+    /**
+     * Selected Auto Id model id (e.g. `battybirdnet/uk-256khz`).
+     * Kept even when Auto Id is off. See [org.batgizmo.app.ml.MlCatalog].
      */
     var autoIdModelId: String = DEFAULT_AUTO_ID_MODEL_ID,
     /**
@@ -473,11 +478,8 @@ data class Settings(
         /** Default Auto Id species-name language index (labels JSON `description`: Latin=0, English=1). */
         const val DEFAULT_AUTO_ID_LANGUAGE = 1
 
-        /** Default bundled Auto Id model id (when a model is selected). */
+        /** Default bundled Auto Id model id. */
         const val DEFAULT_AUTO_ID_MODEL_ID = "battybirdnet/uk-256khz"
-
-        /** Dropdown value / stored id meaning Auto Id is off. */
-        const val AUTO_ID_MODEL_NONE = ""
 
         /** Valid auto heterodyne activity-span frequency limits (kHz). */
         const val AUTO_HET_LO_LIMIT_MIN_KHZ = 10
@@ -552,8 +554,8 @@ data class Settings(
         }
     }
 
-    /** True when Auto Id is on (a model id is selected). */
-    fun isAutoIdEnabled(): Boolean = autoIdModelId.isNotBlank()
+    /** True when Auto Id is on. */
+    fun isAutoIdEnabled(): Boolean = autoIdEnabled
 
     /** Suppressions for [modelId], or empty if none stored. */
     fun suppressionsFor(modelId: String): Map<String, Boolean> =
@@ -626,7 +628,7 @@ data class Settings(
     private val keyAutoHeterodyneMode = intPreferencesKey("autoHeterodyneMode")
     private val keyAutoHeterodyneLoMinKhz = intPreferencesKey("autoHeterodyneLoMinKhz")
     private val keyAutoHeterodyneLoMaxKhz = intPreferencesKey("autoHeterodyneLoMaxKhz")
-    private val keyAutoId = booleanPreferencesKey("autoId") // legacy; removed on write
+    private val keyAutoId = booleanPreferencesKey("autoId")
     private val keyMlModelId = stringPreferencesKey("autoIdModelId")
     private val keyAutoIdLanguage = intPreferencesKey("autoIdLanguageIndex")
     private val keyAutoIdSuppressions = stringPreferencesKey("autoIdSuppressions")
@@ -687,7 +689,7 @@ data class Settings(
         autoHeterodyneLoMaxKhz = loMaxKhz
         prefs[keyAutoHeterodyneLoMinKhz] = loMinKhz
         prefs[keyAutoHeterodyneLoMaxKhz] = loMaxKhz
-        prefs.remove(keyAutoId)
+        prefs[keyAutoId] = autoIdEnabled
         prefs[keyMlModelId] = autoIdModelId
         prefs[keyAutoIdLanguage] = autoIdLanguage
         prefs[keyAutoIdSuppressions] = autoIdSuppressionsToJson(autoIdSuppressions)
@@ -799,14 +801,15 @@ data class Settings(
             autoHeterodyneLoMaxKhz = requireNotNull(prefs[keyAutoHeterodyneLoMaxKhz])
         if (prefs[keyMlModelId] != null)
             autoIdModelId = requireNotNull(prefs[keyMlModelId])
-        // Legacy boolean enable flag: off → none; on with blank id → default model.
         if (prefs[keyAutoId] != null) {
-            val legacyEnabled = requireNotNull(prefs[keyAutoId])
-            if (!legacyEnabled) {
-                autoIdModelId = AUTO_ID_MODEL_NONE
-            } else if (autoIdModelId.isBlank()) {
-                autoIdModelId = DEFAULT_AUTO_ID_MODEL_ID
-            }
+            autoIdEnabled = requireNotNull(prefs[keyAutoId])
+        } else {
+            // Migrate from model-id-as-enable: blank meant off.
+            autoIdEnabled = autoIdModelId.isNotBlank()
+        }
+        // Always keep a concrete model id so re-enabling restores a selection.
+        if (autoIdModelId.isBlank()) {
+            autoIdModelId = DEFAULT_AUTO_ID_MODEL_ID
         }
         if (prefs[keyAutoIdLanguage] != null)
             autoIdLanguage = requireNotNull(prefs[keyAutoIdLanguage])

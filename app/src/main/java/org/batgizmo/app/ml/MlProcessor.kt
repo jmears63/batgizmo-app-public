@@ -29,6 +29,9 @@ import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import timber.log.Timber
@@ -124,6 +127,15 @@ class MlProcessor(
     /** Bumped by [clearQueue] so in-flight resample results are dropped. */
     private val epoch = AtomicLong(0)
 
+    /**
+     * Chunks accepted for processing that have not yet finished (infer done,
+     * or abandoned after resample/epoch drop / queue drain).
+     */
+    private val activeWorkCount = AtomicInteger(0)
+    private val mutableBusyFlow = MutableStateFlow(false)
+    /** True while queued or in-flight Auto Id work remains. */
+    val isBusy: StateFlow<Boolean> = mutableBusyFlow.asStateFlow()
+
     @Volatile
     private var overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull
 
@@ -212,9 +224,11 @@ class MlProcessor(
         while (rawQueue.tryReceive().isSuccess) {
             dropped++
             pendingCount.decrementAndGet()
+            markWorkFinished()
         }
         while (inferQueue.tryReceive().isSuccess) {
             dropped++
+            markWorkFinished()
         }
         pendingCount.set(0)
         if (dropped > 0) {
@@ -276,6 +290,8 @@ class MlProcessor(
             if (!result.isSuccess) {
                 pendingCount.decrementAndGet()
                 Timber.w("MlProcessor queue closed: chunk not accepted (${owned.size} samples)")
+            } else {
+                markWorkStarted()
             }
             result.isSuccess
         } catch (_: ClosedSendChannelException) {
@@ -321,6 +337,8 @@ class MlProcessor(
         } finally {
             model?.close()
             model = null
+            activeWorkCount.set(0)
+            mutableBusyFlow.value = false
         }
     }
 
@@ -335,13 +353,21 @@ class MlProcessor(
                 pendingCount.decrementAndGet()
                 val jobEpoch = epoch.get()
                 val chunkId = chunkIdSeq.incrementAndGet()
-                val window = resampleToWindow(submission, chunkId) ?: continue
-                if (jobEpoch != epoch.get()) continue
+                val window = resampleToWindow(submission, chunkId)
+                if (window == null) {
+                    markWorkFinished()
+                    continue
+                }
+                if (jobEpoch != epoch.get()) {
+                    markWorkFinished()
+                    continue
+                }
                 try {
                     inferQueue.send(
                         ResampledJob(window, chunkId, jobEpoch, submission.observedAtEpochSec)
                     )
                 } catch (_: ClosedSendChannelException) {
+                    markWorkFinished()
                     break
                 }
             }
@@ -353,11 +379,31 @@ class MlProcessor(
     private suspend fun inferLoop(onResult: (MlResult) -> Unit) {
         try {
             for (job in inferQueue) {
-                if (job.epoch != epoch.get()) continue
-                onResult(inferWindow(job))
+                if (job.epoch != epoch.get()) {
+                    markWorkFinished()
+                    continue
+                }
+                try {
+                    onResult(inferWindow(job))
+                } finally {
+                    markWorkFinished()
+                }
             }
         } catch (_: CancellationException) {
             // Normal on shutdown.
+        }
+    }
+
+    private fun markWorkStarted() {
+        activeWorkCount.incrementAndGet()
+        mutableBusyFlow.value = true
+    }
+
+    private fun markWorkFinished() {
+        val remaining = activeWorkCount.decrementAndGet()
+        if (remaining <= 0) {
+            activeWorkCount.set(0)
+            mutableBusyFlow.value = false
         }
     }
 

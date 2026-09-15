@@ -31,6 +31,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -140,6 +143,16 @@ class MlClient(
         it.setWindowing(windowing)
     }
 
+    /** True while the processor has queued or in-flight Auto Id work. */
+    val isBusy = processor.isBusy
+
+    private val mutableBufferingFlow = MutableStateFlow(false)
+    /**
+     * True while [submit] is ingesting samples, or while incomplete chunk(s) are
+     * held waiting to reach window size for [MlProcessor].
+     */
+    val isBuffering: StateFlow<Boolean> = mutableBufferingFlow.asStateFlow()
+
     private val resampleParallelism = MlProcessor.defaultResampleParallelism()
 
     private val resampleThreadIndex = AtomicInteger(0)
@@ -226,6 +239,7 @@ class MlClient(
         hopSize = windowing.hopSizeForChunk(chunkSize)
         activeChunks.clear()
         activeChunks.addLast(Chunk(ShortArray(chunkSize)))
+        publishBuffering()
     }
 
     /**
@@ -262,68 +276,77 @@ class MlClient(
             "offset + count exceeds buffer size"
         }
 
-        if (sampleRateHz < windowing.minSampleRateHz) {
-            // Below the model's useful rate; drop this batch and any partial chunks.
-            return
-        }
-
-        val size = chunkSize
-        val hop = hopSize
-        val secPerSample = 1.0 / sampleRateHz
-        var srcOffset = offset
-        var remaining = count
-
-        while (remaining > 0) {
-            if (activeChunks.isEmpty()) {
-                activeChunks.addLast(Chunk(ShortArray(size)))
+        // Hold true for the whole ingest so viewer page submits keep the sparkle
+        // pulsing until all samples have been accepted into this client.
+        mutableBufferingFlow.value = true
+        try {
+            if (sampleRateHz < windowing.minSampleRateHz) {
+                // Below the model's useful rate; drop this batch and any partial chunks.
+                activeChunks.clear()
+                activeChunks.addLast(Chunk(ShortArray(chunkSize)))
+                return
             }
 
-            // Largest run we can write without missing a hop boundary or overflow.
-            var toCopy = remaining
-            for (chunk in activeChunks) {
-                toCopy = minOf(toCopy, size - chunk.filled)
-            }
-            val last = activeChunks.last()
-            if (last.filled < hop) {
-                toCopy = minOf(toCopy, hop - last.filled)
-            }
-            check(toCopy > 0) { "internal error: no progress filling overlapping chunks" }
+            val size = chunkSize
+            val hop = hopSize
+            val secPerSample = 1.0 / sampleRateHz
+            var srcOffset = offset
+            var remaining = count
 
-            val writeStartEpoch =
-                observedAtEpochSec + (srcOffset - offset) * secPerSample
-            for (chunk in activeChunks) {
-                if (chunk.filled == 0) {
-                    chunk.startEpochSec = writeStartEpoch
+            while (remaining > 0) {
+                if (activeChunks.isEmpty()) {
+                    activeChunks.addLast(Chunk(ShortArray(size)))
                 }
-                System.arraycopy(buffer, srcOffset, chunk.buffer, chunk.filled, toCopy)
-                chunk.filled += toCopy
-            }
-            srcOffset += toCopy
-            remaining -= toCopy
 
-            // Drain completed chunks, then open the next overlap when the newest
-            // reaches hopSize filled (may happen immediately after a completion).
-            while (activeChunks.isNotEmpty()) {
-                when {
-                    activeChunks.first().filled == size -> {
-                        val completed = activeChunks.removeFirst()
-                        enqueueChunk(
-                            completed.buffer,
-                            0,
-                            size,
-                            completed.startEpochSec,
-                        )
+                // Largest run we can write without missing a hop boundary or overflow.
+                var toCopy = remaining
+                for (chunk in activeChunks) {
+                    toCopy = minOf(toCopy, size - chunk.filled)
+                }
+                val last = activeChunks.last()
+                if (last.filled < hop) {
+                    toCopy = minOf(toCopy, hop - last.filled)
+                }
+                check(toCopy > 0) { "internal error: no progress filling overlapping chunks" }
+
+                val writeStartEpoch =
+                    observedAtEpochSec + (srcOffset - offset) * secPerSample
+                for (chunk in activeChunks) {
+                    if (chunk.filled == 0) {
+                        chunk.startEpochSec = writeStartEpoch
                     }
-                    activeChunks.last().filled == hop -> {
-                        activeChunks.addLast(Chunk(ShortArray(size)))
+                    System.arraycopy(buffer, srcOffset, chunk.buffer, chunk.filled, toCopy)
+                    chunk.filled += toCopy
+                }
+                srcOffset += toCopy
+                remaining -= toCopy
+
+                // Drain completed chunks, then open the next overlap when the newest
+                // reaches hopSize filled (may happen immediately after a completion).
+                while (activeChunks.isNotEmpty()) {
+                    when {
+                        activeChunks.first().filled == size -> {
+                            val completed = activeChunks.removeFirst()
+                            enqueueChunk(
+                                completed.buffer,
+                                0,
+                                size,
+                                completed.startEpochSec,
+                            )
+                        }
+                        activeChunks.last().filled == hop -> {
+                            activeChunks.addLast(Chunk(ShortArray(size)))
+                        }
+                        else -> break
                     }
-                    else -> break
                 }
             }
-        }
 
-        if (isLast) {
-            flushFinalChunk()
+            if (isLast) {
+                flushFinalChunk()
+            }
+        } finally {
+            publishBuffering()
         }
     }
 
@@ -349,6 +372,11 @@ class MlClient(
             fullest.buffer.fill(0, fullest.filled, size)
         }
         enqueueChunk(fullest.buffer, 0, size, fullest.startEpochSec)
+        publishBuffering()
+    }
+
+    private fun publishBuffering() {
+        mutableBufferingFlow.value = activeChunks.any { it.filled > 0 }
     }
 
     /** Non-blocking hand-off; ownership transfers to [MlProcessor] on success. */

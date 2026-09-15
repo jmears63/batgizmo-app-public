@@ -33,6 +33,7 @@ import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +51,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -89,6 +91,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -98,6 +101,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -870,12 +874,18 @@ class SpectrogramUI(
                     .fillMaxSize()
                     .padding(5.dp)
             ) {
-                // (1) ML results | heterodyne references | close button
+                // (1) Auto Id sparkle | ML results | heterodyne references | close button
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Top
                 ) {
                     if (localAutoId.current) {
+                        val mlBuffering by model.mlBufferingFlow.collectAsStateWithLifecycle()
+                        val mlBusy by model.mlBusyFlow.collectAsStateWithLifecycle()
+                        // Viewer page ingest is brief; keep pulsing while the processor
+                        // still has queued/in-flight work from that submit.
+                        AutoIdSparkleIcon(active = mlBuffering || mlBusy)
+
                         val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
                         val mlSummaryMode by model.mlSummaryModeFlow.collectAsStateWithLifecycle()
                         MlResultsPanel(
@@ -1079,6 +1089,62 @@ class SpectrogramUI(
                 }
             }
         }
+    }
+
+    /**
+     * Non-interactive Auto Id activity indicator. Always occupies layout space
+     * when shown. Animation phases while [active]:
+     * 1. Start: fade 0 → 1
+     * 2. Pulse: 0.5 ↔ 1 while work continues
+     * 3. Finish: when work ends, complete the current down-leg all the way to 0
+     *    (never snap off mid-fade).
+     */
+    @Composable
+    private fun AutoIdSparkleIcon(active: Boolean) {
+        val alpha = remember { Animatable(0f) }
+        var pulsing by remember { mutableStateOf(false) }
+        val activeState = rememberUpdatedState(active)
+
+        LaunchedEffect(active) {
+            if (active) pulsing = true
+        }
+
+        LaunchedEffect(pulsing) {
+            if (!pulsing) return@LaunchedEffect
+            val halfCycle = tween<Float>(800, easing = FastOutSlowInEasing)
+            // (1) Starting: 0 → 1
+            alpha.animateTo(1f, animationSpec = halfCycle)
+            // (2) Pulsate between 0.5 and 1 until inactive, then (3) finish to 0.
+            while (true) {
+                alpha.animateTo(0.5f, animationSpec = halfCycle)
+                if (!activeState.value) {
+                    // Extend this down-leg from 0.5 → 0
+                    alpha.animateTo(0f, animationSpec = halfCycle)
+                    pulsing = false
+                    break
+                }
+                alpha.animateTo(1f, animationSpec = halfCycle)
+                if (!activeState.value) {
+                    // Stopped at peak: one final fade 1 → 0
+                    alpha.animateTo(0f, animationSpec = halfCycle)
+                    pulsing = false
+                    break
+                }
+            }
+        }
+
+        val iconSize = with(LocalDensity.current) {
+            SpectrogramOverlayStyle.textSize.toDp() * 1.4f
+        }
+        Icon(
+            imageVector = Icons.Filled.AutoAwesome,
+            contentDescription = if (active || pulsing) "Auto Id working" else null,
+            tint = SpectrogramOverlayStyle.textColor,
+            modifier = Modifier
+                .padding(end = 6.dp, top = 2.dp)
+                .size(iconSize)
+                .graphicsLayer { this.alpha = alpha.value },
+        )
     }
 
     private fun updateHeterodyneUIState() {
