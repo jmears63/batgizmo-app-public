@@ -27,13 +27,13 @@ import android.content.Context
 import android.content.res.Configuration
 import android.net.Uri
 import android.view.WindowManager
+import android.webkit.WebView
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,10 +42,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import android.webkit.WebView
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -53,7 +51,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Info
@@ -64,6 +61,8 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ScreenLockRotation
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.WbTwilight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -73,7 +72,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -111,6 +109,7 @@ import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -128,7 +127,6 @@ import org.batgizmo.app.Settings
 import org.batgizmo.app.SunriseSunset
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
-import org.batgizmo.app.pipeline.AbstractPipeline
 import org.batgizmo.app.pipeline.LiveAudioStartResult
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
@@ -939,14 +937,18 @@ class SpectrogramUI(
                     }
                 }
 
-                // (3) Unused vertical space (sliders sit here when shown)
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (buttonState.slidersButtonChecked.value) {
-                        val bnCRange = model.bnCRangeFlow.collectAsStateWithLifecycle()
-                        val audioBoost = model.audioBoostFlow.collectAsStateWithLifecycle()
+                // (3) Spare height — only the spacer absorbs it.
+                Spacer(modifier = Modifier.weight(1f))
+
+                if (buttonState.slidersButtonChecked.value) {
+                    val bnCRange = model.bnCRangeFlow.collectAsStateWithLifecycle()
+                    val audioBoost = model.audioBoostFlow.collectAsStateWithLifecycle()
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Column(
                             modifier = Modifier
-                                .align(Alignment.Center)
                                 .widthIn(max = 400.dp)
                                 .fillMaxWidth(),
                             horizontalAlignment = Alignment.CenterHorizontally
