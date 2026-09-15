@@ -53,6 +53,8 @@ data class MlModelDescriptor(
     val labelCatalog: List<LabelCatalogEntry>,
     /** Absolute asset or file paths resolved for this variant. */
     val resourcePaths: MlResourcePaths,
+    /** When false, Settings hides/disables the Auto Id Suppressions control. */
+    val enableSuppressionsButton: Boolean = true,
 )
 
 /**
@@ -63,6 +65,13 @@ data class MlResourcePaths(
     val embeddingsRelativeOrNull: String?,
     val classifierOrModel: String,
     val labels: String,
+    /**
+     * Optional species-range (geo) TFLite path relative to [root], e.g.
+     * `../../BirdNET_…_MData_Model_FP16.tflite` for BirdNET.
+     */
+    val geoModelRelativeOrNull: String? = null,
+    /** Occurrence threshold for [geoModelRelativeOrNull]; unused if geo model absent. */
+    val geoThreshold: Float = 0.03f,
 )
 
 /** Where model bytes live. */

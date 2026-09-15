@@ -30,15 +30,17 @@ import org.tensorflow.lite.Interpreter
  *
  * Expects input shape `[batch, windowSamples]` and output logits
  * `[batch, numClasses]`, then applies [flatSigmoid]. Not thread-safe.
+ *
+ * Open for subclasses such as [BirdNetModel] that post-filter scores.
  */
-class SimpleModel(
-    assets: AssetManager,
+open class SimpleModel(
+    protected val assets: AssetManager,
     override val descriptor: MlModelDescriptor,
-    numThreads: Int = DEFAULT_TFLITE_NUM_THREADS,
+    protected val numThreads: Int = DEFAULT_TFLITE_NUM_THREADS,
 ) : MlModelBase {
 
     private val interpreter: Interpreter
-    private val numClasses: Int
+    protected val numClasses: Int
 
     init {
         val paths = descriptor.resourcePaths

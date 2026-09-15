@@ -1,10 +1,11 @@
 {
   "id": "battybirdnet",
-  "displayName": "BattyBirdNET",
+  "displayName": "BattyBirdNET (for bats)",
   "kind": "embed_then_classify",
   "sampleRateHz": 256000,
   "windowSamples": 144000,
   "overlapFraction": 0.25,
   "minSampleRateHz": 196000,
-  "minConfidence": 0.7
+  "minConfidence": 0.7,
+  "enableSuppressionsButton": true
 }

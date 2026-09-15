@@ -138,6 +138,13 @@ class MlProcessor(
     @Volatile
     private var suppressedLabelKeys: Set<String> = emptySet()
 
+    /**
+     * Optional BirdNET species-range query captured for this processor session.
+     * Applied once when a [BirdNetModel] is first opened.
+     */
+    @Volatile
+    private var geoSnapshot: BirdNetModel.GeoSnapshot? = null
+
     @Volatile
     private var windowing: MlWindowing? = null
 
@@ -159,6 +166,35 @@ class MlProcessor(
      */
     fun setSuppressions(suppressions: Map<String, Boolean>) {
         suppressedLabelKeys = suppressions.filterValues { it }.keys
+    }
+
+    /**
+     * Set the BirdNET geo filter query. First non-null snapshot wins so the
+     * species-range mask is computed once per session and does not track later
+     * GPS updates; use [clearGeoSnapshot] before applying a new file/live
+     * location. Applied when the model is first loaded (or immediately if
+     * already loaded and not yet resolved).
+     */
+    fun setGeoSnapshot(snapshot: BirdNetModel.GeoSnapshot?) {
+        if (snapshot == null) return
+        if (geoSnapshot != null) return
+        geoSnapshot = snapshot
+        val opened = model
+        if (opened is BirdNetModel) {
+            opened.setGeoSnapshot(snapshot)
+        }
+    }
+
+    /**
+     * Drop any stored geo snapshot and reset a loaded [BirdNetModel] geo filter
+     * so a new location can be applied (viewer file change / live restart).
+     */
+    fun clearGeoSnapshot() {
+        geoSnapshot = null
+        val opened = model
+        if (opened is BirdNetModel) {
+            opened.resetGeoFilter()
+        }
     }
 
     /** Apply windowing from the selected model descriptor (before [run]). */
@@ -331,6 +367,9 @@ class MlProcessor(
             MlCatalog.openModel(appContext.assets, modelId).also { opened ->
                 model = opened
                 windowing = MlWindowing.from(opened.descriptor)
+                if (opened is BirdNetModel) {
+                    geoSnapshot?.let { opened.setGeoSnapshot(it) }
+                }
                 Timber.i("MlProcessor: loaded Auto Id model ${opened.id}")
             }
         } catch (e: Exception) {

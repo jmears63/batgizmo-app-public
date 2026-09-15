@@ -62,14 +62,18 @@ class LocationTracker(
     }
 
     @SuppressLint("MissingPermission")
-    fun startPeriodicUpdates(intervalMillis: Long = 10000L) {
+    fun startPeriodicUpdates(intervalMillis: Long = TEN_MINUTES_MS) {
         if (callback != null || !hasPermission())
             return
 
+        // Fresh fix now; then refresh on the long interval while live.
+        requestOneTimeLocation()
+
         if (BuildConfig.DEBUG)
-            Timber.d("Starting periodic location updates")
+            Timber.d("Starting periodic location updates (interval=${intervalMillis}ms)")
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, intervalMillis)
-            .setMinUpdateDistanceMeters(5f)
+            .setMinUpdateIntervalMillis(intervalMillis)
+            .setMinUpdateDistanceMeters(0f)
             .build()
 
         callback = object : LocationCallback() {
@@ -92,5 +96,9 @@ class LocationTracker(
         return ActivityCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    companion object {
+        private const val TEN_MINUTES_MS = 10 * 60 * 1000L
     }
 }

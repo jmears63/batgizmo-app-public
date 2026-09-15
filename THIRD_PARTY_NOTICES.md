@@ -8,13 +8,16 @@ machine-learning model assets, native libraries, and spectrogram colour maps.
 
 ## Auto Id model assets (CC BY-NC-SA 4.0)
 
-The following assets under `app/src/main/assets/ml/battybirdnet/` are **not** MIT-licensed:
+The following assets under `app/src/main/assets/ml/` are **not** MIT-licensed:
 
 | Asset | Origin |
 | --- | --- |
-| `BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite` | Derived from BirdNET v2.4 (see below) |
-| `variants/*/BattyBirdNET-*.tflite` | BattyBirdNET regional classifiers |
-| `variants/*/labels.json` (and legacy `labels.txt`) | BattyBirdNET class labels |
+| `battybirdnet/BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite` | Derived from BirdNET v2.4 (see below) |
+| `battybirdnet/variants/*/BattyBirdNET-*.tflite` | BattyBirdNET regional classifiers |
+| `battybirdnet/variants/*/labels.json` (and legacy `labels.txt`) | BattyBirdNET class labels |
+| `birdnet/BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite` | BirdNET v2.4 species-range (geo) model |
+| `birdnet/variants/global-6k-v2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite` | BirdNET v2.4 end-to-end classifier |
+| `birdnet/variants/global-6k-v2.4/labels.json` (and legacy `labels.txt`) | BirdNET v2.4 class labels |
 
 These model/label materials are used under the
 [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/).
@@ -48,6 +51,12 @@ Please cite:
 License stated by the upstream project: https://creativecommons.org/licenses/by-nc-sa/4.0/
 
 ### BirdNET
+
+Auto Id can run the full BirdNET v2.4 FP32 TFLite classifier (48 kHz, 3 s
+windows) as the `birdnet` family, using assets under
+`app/src/main/assets/ml/birdnet/`. The companion FP16 species-range (MData)
+model filters detections to species plausible at the session's location and
+week when GPS is available.
 
 BattyBirdNET classifiers are trained on embeddings from
 [BirdNET](https://birdnet.cornell.edu/) / [BirdNET-Analyzer](https://github.com/birdnet-team/BirdNET-Analyzer)

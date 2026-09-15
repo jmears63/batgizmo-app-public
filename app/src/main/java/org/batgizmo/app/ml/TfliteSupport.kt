@@ -24,6 +24,7 @@ package org.batgizmo.app.ml
 
 import android.content.res.AssetManager
 import org.tensorflow.lite.Interpreter
+import timber.log.Timber
 import java.io.File
 import java.io.FileInputStream
 import java.nio.MappedByteBuffer
@@ -98,9 +99,22 @@ fun createInterpreter(
     relativePath: String,
     numThreads: Int,
 ): Interpreter {
+    val resolvedPath = when (root) {
+        is ModelResourceRoot.Assets -> resolveRelativePath(root.baseAssetDir, relativePath)
+        is ModelResourceRoot.Files -> File(root.baseDir, relativePath).path
+    }
     val options = Interpreter.Options().apply { setNumThreads(numThreads) }
-    return Interpreter(loadMappedModelBuffer(assets, root, relativePath), options).also {
-        it.allocateTensors()
+    return Interpreter(loadMappedModelBuffer(assets, root, relativePath), options).also { interpreter ->
+        interpreter.allocateTensors()
+        val inputs = (0 until interpreter.inputTensorCount).joinToString("; ") { i ->
+            val t = interpreter.getInputTensor(i)
+            "in[$i] shape=${t.shape().contentToString()} type=${t.dataType()}"
+        }
+        val outputs = (0 until interpreter.outputTensorCount).joinToString("; ") { i ->
+            val t = interpreter.getOutputTensor(i)
+            "out[$i] shape=${t.shape().contentToString()} type=${t.dataType()}"
+        }
+        Timber.i("TFLite loaded $resolvedPath: $inputs | $outputs")
     }
 }
 

@@ -772,12 +772,17 @@ class SettingsUI(private val model: UIModel) {
                     ) {
                         Button(
                             onClick = { showSuppressions = true },
-                            enabled = autoIdOn && selectedDescriptor != null
+                            enabled = autoIdOn &&
+                                selectedDescriptor != null &&
+                                selectedDescriptor.enableSuppressionsButton
                         ) {
                             Text("Suppressions")
                         }
                     }
-                    if (showSuppressions && selectedDescriptor != null) {
+                    if (showSuppressions &&
+                        selectedDescriptor != null &&
+                        selectedDescriptor.enableSuppressionsButton
+                    ) {
                         val labelCatalog = selectedDescriptor.labelCatalog
                         val suppressible = remember(labelCatalog) {
                             labelCatalog.filter { !it.discard }

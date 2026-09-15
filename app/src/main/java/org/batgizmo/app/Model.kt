@@ -55,6 +55,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.batgizmo.app.ml.BirdNetModel
 import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.MlClient
 import org.batgizmo.app.ml.MlOverflowPolicy
@@ -839,6 +840,7 @@ class UIModel(application: Application,
     val locationTracker = LocationTracker(getApplication()) { it ->
         Timber.d("Location update received: ${it.latitude} ${it.longitude}")
         locationMutableFlow.value = it
+        maybeOfferBirdNetGeoSnapshot(it)
     }
 
     val documentHelper = DocumentHelper()
@@ -1750,12 +1752,15 @@ class UIModel(application: Application,
      *   (e.g. starting analysis of a new file page).
      * @param overflowPolicy live [MlOverflowPolicy.DropIfFull] vs viewer [MlOverflowPolicy.QueueAll]
      * @param summaryMode Auto Id summary TTL policy applied when the client is reset
+     * @param preferFileGuanoLocation when true (viewer), use GUANO `Loc Position` if
+     *   present, otherwise [locationFlow]; when false (live), use [locationFlow] only
      */
     fun ensureMlClient(
         sampleRateHz: Int,
         forceReset: Boolean = false,
         overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull,
         summaryMode: MlSummaryMode = MlSummaryMode.Live,
+        preferFileGuanoLocation: Boolean = false,
     ) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         require(settings.isAutoIdEnabled()) { "Auto Id model must be selected" }
@@ -1782,6 +1787,14 @@ class UIModel(application: Application,
             client.setOverflowPolicy(overflowPolicy)
             client.setLabelLanguage(settings.autoIdLanguage)
             client.setSuppressions(settings.suppressionsFor(descriptor.id))
+            if (descriptor.resourcePaths.geoModelRelativeOrNull != null) {
+                if (forceReset) {
+                    client.clearGeoSnapshot()
+                }
+                resolveAutoIdGeoSnapshot(preferFileGuanoLocation)?.let { snap ->
+                    client.setGeoSnapshot(snap)
+                }
+            }
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz
@@ -1790,8 +1803,72 @@ class UIModel(application: Application,
         }
     }
 
+    /**
+     * BirdNET geo query: optionally GUANO `Loc Position` from the open file, else
+     * the current [locationFlow] fix. Returns null if neither is available.
+     */
+    private fun resolveAutoIdGeoSnapshot(
+        preferFileGuano: Boolean,
+    ): BirdNetModel.GeoSnapshot? {
+        val week = BirdNetModel.weekOfYear()
+        if (preferFileGuano) {
+            parseGuanoLocPosition()?.let { (lat, lon) ->
+                return BirdNetModel.GeoSnapshot(
+                    latitude = lat,
+                    longitude = lon,
+                    week = week,
+                    source = BirdNetModel.GeoSource.GUANO,
+                )
+            }
+        }
+        val loc = locationMutableFlow.value ?: return null
+        return BirdNetModel.GeoSnapshot(
+            latitude = loc.latitude.toFloat(),
+            longitude = loc.longitude.toFloat(),
+            week = week,
+            source = BirdNetModel.GeoSource.LIVE_GPS,
+        )
+    }
+
+    /**
+     * Parse GUANO `Loc Position` as `latitude longitude` (same order as
+     * [FileWriter]). Returns null if missing or invalid.
+     */
+    private fun parseGuanoLocPosition(): Pair<Float, Float>? {
+        val raw = wavFileInfo.get()
+            ?.guanoChunkInfo
+            ?.entriesMap
+            ?.get("loc position")
+            ?.value
+            ?: return null
+        val parts = raw.trim().split(Regex("\\s+"))
+        if (parts.size < 2) return null
+        val lat = parts[0].toFloatOrNull() ?: return null
+        val lon = parts[1].toFloatOrNull() ?: return null
+        if (lat !in -90f..90f || lon !in -180f..180f) return null
+        return lat to lon
+    }
+
     /** Current ML client, if [ensureMlClient] has been called. */
     fun mlClientOrNull(): MlClient? = synchronized(mlLock) { mlClient }
+
+    /**
+     * Offer a one-shot BirdNET geo snapshot from [location] if an Auto Id client
+     * is active. Ignored after the first accepted snapshot.
+     */
+    private fun maybeOfferBirdNetGeoSnapshot(location: Location) {
+        synchronized(mlLock) {
+            val client = mlClient ?: return
+            client.setGeoSnapshot(
+                BirdNetModel.GeoSnapshot(
+                    latitude = location.latitude.toFloat(),
+                    longitude = location.longitude.toFloat(),
+                    week = BirdNetModel.weekOfYear(),
+                    source = BirdNetModel.GeoSource.LIVE_GPS,
+                )
+            )
+        }
+    }
 
     /** True when live Auto Id should accept the next raw buffer. */
     fun shouldSubmitLiveAudioToMl(): Boolean =
@@ -1847,6 +1924,7 @@ class UIModel(application: Application,
             forceReset = true,
             overflowPolicy = MlOverflowPolicy.QueueAll,
             summaryMode = MlSummaryMode.Viewer,
+            preferFileGuanoLocation = true,
         )
         val observedAtEpochSec = System.currentTimeMillis() / 1000.0
         synchronized(mlLock) {

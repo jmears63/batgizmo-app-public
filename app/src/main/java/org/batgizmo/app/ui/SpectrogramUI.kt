@@ -1856,7 +1856,7 @@ class SpectrogramUI(
         buttonState.showMetadataEnabled.value = false
         buttonState.closeFileEnabled.value = false
 
-        // Request periodic location updates when we are in live mode:
+        // Fresh location now, then periodic updates while in live mode:
         model.locationTracker.startPeriodicUpdates()
 
         if (streaming)

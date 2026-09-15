@@ -188,6 +188,18 @@ class MlClient(
         processor.setSuppressions(suppressions)
     }
 
+    /**
+     * BirdNET geo location/week (first snapshot wins; see [MlProcessor.setGeoSnapshot]).
+     */
+    fun setGeoSnapshot(snapshot: BirdNetModel.GeoSnapshot?) {
+        processor.setGeoSnapshot(snapshot)
+    }
+
+    /** Clear geo snapshot/mask so a new location can be applied. */
+    fun clearGeoSnapshot() {
+        processor.clearGeoSnapshot()
+    }
+
     /** Discard queued chunks (not the in-flight one). */
     fun clearQueue() {
         processor.clearQueue()

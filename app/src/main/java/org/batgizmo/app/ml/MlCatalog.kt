@@ -92,7 +92,11 @@ object MlCatalog {
             MlModelKind.EMBED_THEN_CLASSIFY ->
                 EmbedThenClassifyModel(assets, descriptor, numThreads)
             MlModelKind.SINGLE_TFLITE ->
-                SimpleModel(assets, descriptor, numThreads)
+                if (descriptor.resourcePaths.geoModelRelativeOrNull != null) {
+                    BirdNetModel(assets, descriptor, numThreads)
+                } else {
+                    SimpleModel(assets, descriptor, numThreads)
+                }
         }
     }
 
@@ -219,6 +223,10 @@ object MlCatalog {
         val overlapFraction: Float,
         val minSampleRateHz: Int,
         val minConfidence: Float,
+        /** Path relative to the family directory; null if no species-range model. */
+        val geoModelRelativeToFamily: String?,
+        val geoThreshold: Float,
+        val enableSuppressionsButton: Boolean,
     )
 
     private fun readFamilyJson(
@@ -228,6 +236,11 @@ object MlCatalog {
     ): FamilyInfo {
         val json = JSONObject(openUtf8Resource(assets, root, relative))
         val sampleRateHz = json.getInt("sampleRateHz")
+        val geoModel = if (json.has("geoModel")) {
+            json.getString("geoModel").takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
         return FamilyInfo(
             id = json.getString("id"),
             displayName = json.getString("displayName"),
@@ -241,6 +254,9 @@ object MlCatalog {
                 (sampleRateHz * 0.75f).toInt().coerceAtLeast(1),
             ),
             minConfidence = json.optDouble("minConfidence", 0.7).toFloat(),
+            geoModelRelativeToFamily = geoModel,
+            geoThreshold = json.optDouble("geoThreshold", 0.03).toFloat(),
+            enableSuppressionsButton = json.optBoolean("enableSuppressionsButton", true),
         )
     }
 
@@ -263,6 +279,8 @@ object MlCatalog {
             MlModelKind.EMBED_THEN_CLASSIFY -> json.getString("classifier")
             MlModelKind.SINGLE_TFLITE -> json.getString("model")
         }
+        // Family-level geo asset → path relative to the variant root (`…/variants/<id>/`).
+        val geoFromVariant = family.geoModelRelativeToFamily?.let { "../../$it" }
 
         return MlModelDescriptor(
             id = json.getString("id"),
@@ -282,7 +300,10 @@ object MlCatalog {
                 embeddingsRelativeOrNull = embeddings,
                 classifierOrModel = classifierOrModel,
                 labels = labelsRelative,
+                geoModelRelativeOrNull = geoFromVariant,
+                geoThreshold = family.geoThreshold,
             ),
+            enableSuppressionsButton = family.enableSuppressionsButton,
         )
     }
 
