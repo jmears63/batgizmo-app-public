@@ -42,11 +42,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * Outcome of ML analysis for one submitted audio buffer.
  *
  * [observedAtEpochSec] is the Unix-epoch time (seconds) of the start of the
- * analysed window.
+ * analysed window. [completedAtEpochSec] is when [MlProcessor] finished this
+ * chunk (used for live UI age styling).
  */
 data class MlResult(
     val detections: List<MlDetection> = emptyList(),
     val observedAtEpochSec: Double = 0.0,
+    val completedAtEpochSec: Double = 0.0,
 )
 
 data class MlDetection(
@@ -55,7 +57,7 @@ data class MlDetection(
 )
 
 /**
- * One row in the Auto Id summary overlay, including when it was last reinforced
+ * One row in the Auto Id summary overlay, including when processing completed
  * (Unix epoch seconds) for age-based styling.
  */
 data class MlSummaryEntry(

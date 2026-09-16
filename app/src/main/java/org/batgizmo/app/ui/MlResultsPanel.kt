@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import org.batgizmo.app.ml.MlSummaryAccumulator
 import org.batgizmo.app.ml.MlSummaryEntry
-import org.batgizmo.app.ml.MlSummaryMode
 import kotlin.time.Duration.Companion.seconds
 
 private const val FRESH_AGE_SEC = 10.0
@@ -55,14 +54,15 @@ private const val RECENT_AGE_SEC = 20.0
  * Spectrogram overlay panel for the running ML summary.
  *
  * [summary] is already ordered and capped by [MlSummaryAccumulator].
- * [mode] Live: age-based colours (under 10s white, under 20s overlay grey,
- * darker grey after). Viewer: fixed [SpectrogramOverlayStyle.textColor].
+ * When [ageColors] is true (live): under 10s white, under 20s overlay grey,
+ * otherwise darker grey. When false (viewer): all rows use
+ * [SpectrogramOverlayStyle.textColor] with no age variation.
  */
 @Composable
 fun MlResultsPanel(
     modifier: Modifier = Modifier,
     summary: List<MlSummaryEntry> = emptyList(),
-    mode: MlSummaryMode = MlSummaryMode.Live,
+    ageColors: Boolean = true,
 ) {
     val panelHeight = with(LocalDensity.current) {
         (SpectrogramOverlayStyle.textSize * MlSummaryAccumulator.MAX_SUMMARY_ENTRIES).toDp()
@@ -71,7 +71,7 @@ fun MlResultsPanel(
     var nowEpochSec by remember {
         mutableDoubleStateOf(System.currentTimeMillis() / 1000.0)
     }
-    if (mode == MlSummaryMode.Live) {
+    if (ageColors) {
         LaunchedEffect(Unit) {
             while (true) {
                 delay(1.seconds)
@@ -91,15 +91,14 @@ fun MlResultsPanel(
             horizontalAlignment = Alignment.Start,
         ) {
             for (entry in summary) {
-                val color = when (mode) {
-                    MlSummaryMode.Viewer -> SpectrogramOverlayStyle.textColor
-                    MlSummaryMode.Live -> {
-                        val ageSec = nowEpochSec - entry.lastSeenAtEpochSec
-                        when {
-                            ageSec < FRESH_AGE_SEC -> Color.White
-                            ageSec < RECENT_AGE_SEC -> SpectrogramOverlayStyle.textColor
-                            else -> Color(0xFF555555)
-                        }
+                val color = if (!ageColors) {
+                    SpectrogramOverlayStyle.textColor
+                } else {
+                    val ageSec = nowEpochSec - entry.lastSeenAtEpochSec
+                    when {
+                        ageSec < FRESH_AGE_SEC -> Color.White
+                        ageSec < RECENT_AGE_SEC -> SpectrogramOverlayStyle.textColor
+                        else -> Color(0xFF555555)
                     }
                 }
                 Text(
@@ -108,6 +107,7 @@ fun MlResultsPanel(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = SpectrogramOverlayStyle.textStyle.copy(color = color),
+                    color = color,
                     textAlign = TextAlign.Start,
                 )
             }

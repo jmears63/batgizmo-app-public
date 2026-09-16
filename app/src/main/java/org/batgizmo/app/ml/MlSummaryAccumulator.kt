@@ -45,7 +45,7 @@ enum class MlSummaryMode {
 /**
  * Accumulates per-chunk [MlResult]s into a running UI summary: one entry per
  * label, keeping the highest confidence seen so far, with [lastSeenAtEpochSec]
- * for age styling.
+ * from [MlResult.completedAtEpochSec] for age styling.
  *
  * Sort / retention depend on [MlSummaryMode] ([mode] / [clear]):
  * - live = most recently seen first
@@ -124,7 +124,9 @@ class MlSummaryAccumulator {
     }
 
     private fun applyResult(result: MlResult) {
-        val at = result.observedAtEpochSec
+        // Age styling / live ordering use completion time so a delayed result
+        // appears fresh when it first shows, not aged by queue/infer latency.
+        val at = result.completedAtEpochSec
         for (detection in result.detections) {
             val previous = entries[detection.label]
             val confidence =

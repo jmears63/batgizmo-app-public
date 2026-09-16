@@ -730,7 +730,7 @@ class SpectrogramUI(
             if (micOptions.size > 1) {
                 // Real internal microphones are available, so let the user choose one.
                 MicSelectionDialog(
-                    title = "No USB microphone",
+                    title = "Internal Microphone",
                     message = "No suitable USB microphone was detected. " +
                         "Select an internal microphone to use instead.",
                     options = micOptions,
@@ -749,7 +749,7 @@ class SpectrogramUI(
                         uiState.showInternalMicFallbackDialog.value = false
                         liveSession.switchToInternalMicAndConnect(scope)
                     },
-                    title = "No USB microphone",
+                    title = "Internal Microphone",
                     message = "No suitable USB microphone was detected. " +
                         "Would you like to use the internal device microphone instead?",
                 )
@@ -887,11 +887,10 @@ class SpectrogramUI(
                         AutoIdSparkleIcon(active = mlBuffering || mlBusy)
 
                         val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
-                        val mlSummaryMode by model.mlSummaryModeFlow.collectAsStateWithLifecycle()
                         MlResultsPanel(
                             modifier = Modifier.weight(1f),
                             summary = mlSummary,
-                            mode = mlSummaryMode,
+                            ageColors = appMode.intValue == AppMode.LIVE.value,
                         )
                     } else {
                         Spacer(modifier.weight(1f))

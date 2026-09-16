@@ -55,7 +55,13 @@ data class MlModelDescriptor(
     val resourcePaths: MlResourcePaths,
     /** When false, Settings hides/disables the Auto Id Suppressions control. */
     val enableSuppressionsButton: Boolean = true,
-)
+) {
+    /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
+    val labelKeys: List<String> = labelCatalog.map { it.key }
+
+    /** Per-class discard flags; computed once. */
+    val labelDiscard: List<Boolean> = labelCatalog.map { it.discard }
+}
 
 /**
  * Resolved model file locations (assets paths or absolute filesystem paths).
@@ -96,8 +102,8 @@ interface MlModelBase : AutoCloseable {
     val languages: List<String> get() = descriptor.languages
     val labelCatalog: List<LabelCatalogEntry> get() = descriptor.labelCatalog
 
-    val labelKeys: List<String> get() = labelCatalog.map { it.key }
-    val labelDiscard: List<Boolean> get() = labelCatalog.map { it.discard }
+    val labelKeys: List<String> get() = descriptor.labelKeys
+    val labelDiscard: List<Boolean> get() = descriptor.labelDiscard
 
     fun labelsFor(languageIndex: Int): List<String> {
         val col = coerceLanguageIndex(languageIndex)

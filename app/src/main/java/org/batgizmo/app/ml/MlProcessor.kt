@@ -23,6 +23,7 @@
 package org.batgizmo.app.ml
 
 import android.content.Context
+import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineName
@@ -76,6 +77,9 @@ class MlProcessor(
         val sampleRateHz: Int,
         /** Unix-epoch seconds at the first sample of this chunk. */
         val observedAtEpochSec: Double,
+        val chunkId: Int,
+        /** [SystemClock.elapsedRealtime] when the client queued this chunk. */
+        val queuedAtElapsedRealtimeMs: Long,
     )
 
     private data class ResampledJob(
@@ -83,6 +87,15 @@ class MlProcessor(
         val chunkId: Int,
         val epoch: Long,
         val observedAtEpochSec: Double,
+        val queuedAtElapsedRealtimeMs: Long,
+        /** Wall time spent waiting in the raw chunk queue before resample started. */
+        val queueWaitMs: Long,
+        /** Wall time spent resampling this chunk. */
+        val resampleMs: Long,
+        /** [SystemClock.elapsedRealtime] when this job was offered to the infer queue. */
+        val inferQueuedAtElapsedRealtimeMs: Long,
+        /** Infer-queue depth when this job was added (includes this job). */
+        val inferQueueLengthWhenQueued: Int,
     )
 
     companion object {
@@ -123,6 +136,8 @@ class MlProcessor(
     /** Resampled windows waiting for the single infer thread. */
     private val inferQueue = Channel<ResampledJob>(capacity = Channel.UNLIMITED)
     private val pendingCount = AtomicInteger(0)
+    /** Jobs accepted into [inferQueue] but not yet taken by [inferLoop]. */
+    private val inferPendingCount = AtomicInteger(0)
     private val chunkIdSeq = AtomicInteger(0)
     /** Bumped by [clearQueue] so in-flight resample results are dropped. */
     private val epoch = AtomicLong(0)
@@ -228,9 +243,11 @@ class MlProcessor(
         }
         while (inferQueue.tryReceive().isSuccess) {
             dropped++
+            inferPendingCount.decrementAndGet()
             markWorkFinished()
         }
         pendingCount.set(0)
+        inferPendingCount.set(0)
         if (dropped > 0) {
             Timber.i("MlProcessor: cleared $dropped queued job(s) (epoch=$newEpoch)")
         }
@@ -262,12 +279,16 @@ class MlProcessor(
             if (offset == 0 && count == buffer.size) buffer
             else buffer.copyOfRange(offset, offset + count)
 
+        val chunkId = chunkIdSeq.incrementAndGet()
+        val queuedAtElapsedRealtimeMs = SystemClock.elapsedRealtime()
         val submission = ChunkSubmission(
             buffer = owned,
             offset = 0,
             count = owned.size,
             sampleRateHz = sampleRateHz,
             observedAtEpochSec = observedAtEpochSec,
+            chunkId = chunkId,
+            queuedAtElapsedRealtimeMs = queuedAtElapsedRealtimeMs,
         )
 
         if (overflowPolicy == MlOverflowPolicy.DropIfFull) {
@@ -275,7 +296,7 @@ class MlProcessor(
                 val pending = pendingCount.get()
                 if (pending >= MAX_LIVE_QUEUED_CHUNKS) {
                     Timber.w(
-                        "MlProcessor live queue depth $pending: chunk dropped (${owned.size} samples)"
+                        "MlProcessor live queue depth $pending: chunk #$chunkId dropped (${owned.size} samples)"
                     )
                     return false
                 }
@@ -289,9 +310,15 @@ class MlProcessor(
             val result = rawQueue.trySend(submission)
             if (!result.isSuccess) {
                 pendingCount.decrementAndGet()
-                Timber.w("MlProcessor queue closed: chunk not accepted (${owned.size} samples)")
+                Timber.w(
+                    "MlProcessor queue closed: chunk #$chunkId not accepted (${owned.size} samples)"
+                )
             } else {
                 markWorkStarted()
+                Timber.i(
+                    "MlProcessor: queued chunk #$chunkId (${owned.size} samples), " +
+                        "queue length ${pendingCount.get()}"
+                )
             }
             result.isSuccess
         } catch (_: ClosedSendChannelException) {
@@ -351,9 +378,12 @@ class MlProcessor(
         try {
             for (submission in rawQueue) {
                 pendingCount.decrementAndGet()
+                val dequeuedAtMs = SystemClock.elapsedRealtime()
+                val queueWaitMs = dequeuedAtMs - submission.queuedAtElapsedRealtimeMs
                 val jobEpoch = epoch.get()
-                val chunkId = chunkIdSeq.incrementAndGet()
+                val chunkId = submission.chunkId
                 val window = resampleToWindow(submission, chunkId)
+                val resampleMs = SystemClock.elapsedRealtime() - dequeuedAtMs
                 if (window == null) {
                     markWorkFinished()
                     continue
@@ -363,10 +393,23 @@ class MlProcessor(
                     continue
                 }
                 try {
+                    val inferQueuedAtMs = SystemClock.elapsedRealtime()
+                    val inferQueueLength = inferPendingCount.incrementAndGet()
                     inferQueue.send(
-                        ResampledJob(window, chunkId, jobEpoch, submission.observedAtEpochSec)
+                        ResampledJob(
+                            window,
+                            chunkId,
+                            jobEpoch,
+                            submission.observedAtEpochSec,
+                            submission.queuedAtElapsedRealtimeMs,
+                            queueWaitMs,
+                            resampleMs,
+                            inferQueuedAtMs,
+                            inferQueueLength,
+                        )
                     )
                 } catch (_: ClosedSendChannelException) {
+                    inferPendingCount.decrementAndGet()
                     markWorkFinished()
                     break
                 }
@@ -379,6 +422,7 @@ class MlProcessor(
     private suspend fun inferLoop(onResult: (MlResult) -> Unit) {
         try {
             for (job in inferQueue) {
+                inferPendingCount.decrementAndGet()
                 if (job.epoch != epoch.get()) {
                     markWorkFinished()
                     continue
@@ -473,44 +517,74 @@ class MlProcessor(
     }
 
     private fun inferWindow(job: ResampledJob): MlResult {
-        val autoId = ensureModel() ?: return MlResult(observedAtEpochSec = job.observedAtEpochSec)
+        fun completedResult(
+            detections: List<MlDetection> = emptyList(),
+        ): MlResult = MlResult(
+            detections = detections,
+            observedAtEpochSec = job.observedAtEpochSec,
+            completedAtEpochSec = System.currentTimeMillis() / 1000.0,
+        )
+
+        val autoId = ensureModel() ?: return completedResult()
         val minConfidence = autoId.minConfidence
 
         return try {
+            val inferStartedAtMs = SystemClock.elapsedRealtime()
             val scores = autoId.predict(job.window)
-            val displayLabels = autoId.labelsFor(labelLanguageIndex)
+            // Hoist once — previously each loop iteration rebuilt these lists
+            // via interface getters (O(n²) on BirdNET's ~6.5k classes).
+            val labelDiscard = autoId.labelDiscard
+            val labelKeys = autoId.labelKeys
+            // Defer labelsFor() until a score passes the filters.
+            var displayLabels: List<String>? = null
             val detections = ArrayList<MlDetection>()
             for (i in scores.indices) {
                 val score = scores[i]
-                if (autoId.labelDiscard[i] ||
-                    autoId.labelKeys[i] in suppressedLabelKeys ||
-                    score <= minConfidence
+                if (score <= minConfidence ||
+                    labelDiscard[i] ||
+                    labelKeys[i] in suppressedLabelKeys
                 ) {
                     continue
                 }
+                val labels = displayLabels
+                    ?: autoId.labelsFor(labelLanguageIndex).also { displayLabels = it }
                 detections.add(
                     MlDetection(
-                        label = displayLabels[i],
+                        label = labels[i],
                         confidence = score,
                     )
                 )
             }
             detections.sortByDescending { it.confidence }
+            val inferMs = SystemClock.elapsedRealtime() - inferStartedAtMs
+            val inferQueueWaitMs = inferStartedAtMs - job.inferQueuedAtElapsedRealtimeMs
+            val totalMs = SystemClock.elapsedRealtime() - job.queuedAtElapsedRealtimeMs
+            val timing =
+                "queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
+                    "infer-queue ${job.inferQueueLengthWhenQueued} deep / $inferQueueWaitMs ms, " +
+                    "infer $inferMs ms, total $totalMs ms"
             if (detections.isEmpty()) {
-                Timber.i("MlProcessor: chunk #${job.chunkId} detections: (none)")
+                Timber.i(
+                    "MlProcessor: chunk #${job.chunkId} detections: (none) ($timing)"
+                )
             } else {
                 val listed = detections.joinToString { d ->
                     "${d.label}=${"%.0f".format(d.confidence * 100)}%"
                 }
-                Timber.i("MlProcessor: chunk #${job.chunkId} detections: $listed")
+                Timber.i(
+                    "MlProcessor: chunk #${job.chunkId} detections: $listed ($timing)"
+                )
             }
-            MlResult(
-                detections = detections,
-                observedAtEpochSec = job.observedAtEpochSec,
-            )
+            completedResult(detections)
         } catch (e: Exception) {
-            Timber.e(e, "MlProcessor: inference failed on chunk #${job.chunkId}")
-            MlResult(observedAtEpochSec = job.observedAtEpochSec)
+            val totalMs = SystemClock.elapsedRealtime() - job.queuedAtElapsedRealtimeMs
+            Timber.e(
+                e,
+                "MlProcessor: inference failed on chunk #${job.chunkId} " +
+                    "(queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
+                    "total $totalMs ms)"
+            )
+            completedResult()
         }
     }
 }
