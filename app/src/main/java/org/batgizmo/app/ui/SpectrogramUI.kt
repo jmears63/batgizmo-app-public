@@ -33,7 +33,6 @@ import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,7 +50,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FiberManualRecord
@@ -91,7 +89,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -101,7 +98,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -132,7 +128,6 @@ import org.batgizmo.app.SunriseSunset
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.LiveAudioStartResult
-import org.batgizmo.app.ui.SpectrogramUI.Companion.SPARKLE_DIM
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
@@ -1104,64 +1099,6 @@ class SpectrogramUI(
                 }
             }
         }
-    }
-
-    /**
-     * Non-interactive Auto Id activity indicator. Occupies layout space while
-     * composed. Animation phases while [active]:
-     * 1. Start: fade up to full
-     * 2. Pulse: [SPARKLE_DIM] ↔ 1 while work continues
-     * 3. Idle: when work ends, finish the current down-leg to [SPARKLE_DIM]
-     *    and stay visible (never fade fully out while this icon is shown).
-     */
-    @Composable
-    private fun AutoIdSparkleIcon(active: Boolean) {
-        val alpha = remember { Animatable(SPARKLE_DIM) }
-        var pulsing by remember { mutableStateOf(false) }
-        val activeState = rememberUpdatedState(active)
-
-        LaunchedEffect(active) {
-            if (active) pulsing = true
-        }
-
-        LaunchedEffect(pulsing) {
-            if (!pulsing) return@LaunchedEffect
-            val halfCycle = tween<Float>(800, easing = FastOutSlowInEasing)
-            // (1) Starting: up to full brightness
-            alpha.animateTo(1f, animationSpec = halfCycle)
-            // (2) Pulsate between dim and full until inactive, then (3) rest at dim.
-            while (true) {
-                alpha.animateTo(SPARKLE_DIM, animationSpec = halfCycle)
-                if (!activeState.value) {
-                    pulsing = false
-                    break
-                }
-                alpha.animateTo(1f, animationSpec = halfCycle)
-                if (!activeState.value) {
-                    alpha.animateTo(SPARKLE_DIM, animationSpec = halfCycle)
-                    pulsing = false
-                    break
-                }
-            }
-        }
-
-        val iconSize = with(LocalDensity.current) {
-            SpectrogramOverlayStyle.textSize.toDp() * 1.4f
-        }
-        Icon(
-            imageVector = Icons.Filled.AutoAwesome,
-            contentDescription = if (active || pulsing) "Auto Id working" else "Auto Id",
-            tint = SpectrogramOverlayStyle.textColor,
-            modifier = Modifier
-                .padding(end = 6.dp, top = 2.dp)
-                .size(iconSize)
-                .graphicsLayer { this.alpha = alpha.value },
-        )
-    }
-
-    companion object {
-        /** Idle / pulse-floor alpha for [AutoIdSparkleIcon]. */
-        private const val SPARKLE_DIM = 0.5f
     }
 
     private fun updateHeterodyneUIState() {
