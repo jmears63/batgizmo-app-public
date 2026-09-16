@@ -629,7 +629,7 @@ class SettingsUI(private val model: UIModel) {
             settingsSection(SettingsSection.AUTO_ID, expandedSections) {
                 item {
                     MyCheckbox(
-                        "Enable auto ID", autoIdEnabled
+                        "Enable auto classification", autoIdEnabled
                     ) { value: Boolean ->
                         autoIdEnabled = value
                         scope.launch {
@@ -1064,7 +1064,7 @@ private enum class SettingsSection(val title: String) {
     AUTO_BNC("Auto Brightness/Contrast"),
     RENDERING("Rendering"),
     RECORDING("Recording"),
-    AUTO_ID("Auto ID"),
+    AUTO_ID("Auto classification"),
     WARNINGS("Warnings"),
     DIAGNOSTICS("Diagnostics"),
 }
