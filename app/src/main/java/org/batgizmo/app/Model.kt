@@ -567,6 +567,15 @@ class UIModel(application: Application,
     val mlBusyFlow: StateFlow<Boolean> = mutableMlBusyFlow.asStateFlow()
     private var mlBusyCollectJob: Job? = null
 
+    /**
+     * True when the Auto Id client will ingest audio at the current sample rate
+     * (at or above the model minimum). False when there is no client or the rate
+     * is too low.
+     */
+    private val mutableMlWillAcceptAudioFlow = MutableStateFlow(false)
+    val mlWillAcceptAudioFlow: StateFlow<Boolean> = mutableMlWillAcceptAudioFlow.asStateFlow()
+    private var mlWillAcceptAudioCollectJob: Job? = null
+
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClient? = null
     private var mlClientSampleRateHz: Int? = null
@@ -1755,6 +1764,9 @@ class UIModel(application: Application,
         mlBusyCollectJob?.cancel()
         mlBusyCollectJob = null
         mutableMlBusyFlow.value = false
+        mlWillAcceptAudioCollectJob?.cancel()
+        mlWillAcceptAudioCollectJob = null
+        mutableMlWillAcceptAudioFlow.value = false
         mlClient?.shutdown()
         mlClient = null
         mlClientSampleRateHz = null
@@ -1772,6 +1784,12 @@ class UIModel(application: Application,
         mlBusyCollectJob = viewModelScope.launch {
             client.isBusy.collect { busy ->
                 mutableMlBusyFlow.value = busy
+            }
+        }
+        mlWillAcceptAudioCollectJob?.cancel()
+        mlWillAcceptAudioCollectJob = viewModelScope.launch {
+            client.willAcceptAudioFlow.collect { accepts ->
+                mutableMlWillAcceptAudioFlow.value = accepts
             }
         }
     }

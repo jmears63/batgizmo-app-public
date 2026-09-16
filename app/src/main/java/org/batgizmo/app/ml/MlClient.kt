@@ -155,6 +155,20 @@ class MlClient(
      */
     val isBuffering: StateFlow<Boolean> = mutableBufferingFlow.asStateFlow()
 
+    private val mutableWillAcceptAudioFlow = MutableStateFlow(false)
+    /**
+     * True when [reset] has set a sample rate at or above [MlWindowing.minSampleRateHz]
+     * so [submit] will ingest rather than drop audio.
+     */
+    val willAcceptAudioFlow: StateFlow<Boolean> = mutableWillAcceptAudioFlow.asStateFlow()
+
+    /**
+     * Whether the current [sampleRateHz] is high enough for this model to use
+     * submitted audio. False until [reset], or when below [MlWindowing.minSampleRateHz].
+     */
+    fun willAcceptAudio(): Boolean =
+        sampleRateHz > 0 && sampleRateHz >= windowing.minSampleRateHz
+
     private val resampleParallelism = MlProcessor.defaultResampleParallelism()
 
     private val resampleThreadIndex = AtomicInteger(0)
@@ -227,6 +241,7 @@ class MlClient(
     fun updateWindowing(windowing: MlWindowing) {
         this.windowing = windowing
         processor.setWindowing(windowing)
+        publishWillAcceptAudio()
     }
 
     /**
@@ -242,6 +257,7 @@ class MlClient(
         activeChunks.clear()
         activeChunks.addLast(Chunk(ShortArray(chunkSize)))
         publishBuffering()
+        publishWillAcceptAudio()
     }
 
     /**
@@ -282,7 +298,7 @@ class MlClient(
         // pulsing until all samples have been accepted into this client.
         mutableBufferingFlow.value = true
         try {
-            if (sampleRateHz < windowing.minSampleRateHz) {
+            if (!willAcceptAudio()) {
                 // Below the model's useful rate; drop this batch and any partial chunks.
                 activeChunks.clear()
                 activeChunks.addLast(Chunk(ShortArray(chunkSize)))
@@ -379,6 +395,10 @@ class MlClient(
 
     private fun publishBuffering() {
         mutableBufferingFlow.value = activeChunks.any { it.filled > 0 }
+    }
+
+    private fun publishWillAcceptAudio() {
+        mutableWillAcceptAudioFlow.value = willAcceptAudio()
     }
 
     /** Non-blocking hand-off; ownership transfers to [MlProcessor] on success. */

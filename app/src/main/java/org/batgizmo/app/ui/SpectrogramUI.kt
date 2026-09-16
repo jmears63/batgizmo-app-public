@@ -132,6 +132,7 @@ import org.batgizmo.app.SunriseSunset
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
 import org.batgizmo.app.pipeline.LiveAudioStartResult
+import org.batgizmo.app.ui.SpectrogramUI.Companion.SPARKLE_DIM
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
@@ -880,15 +881,19 @@ class SpectrogramUI(
                     verticalAlignment = Alignment.Top
                 ) {
                     if (localAutoId.current) {
-                        // Sparkle only while Auto Id has a session context: viewer with a
-                        // file open, or live acquisition streaming/paused. Hidden after
-                        // the viewer is closed (live with acquisition off).
+                        // Sparkle only while Auto Id has a session context and the
+                        // client will accept audio at the current sample rate.
+                        // Hidden after the viewer is closed (live with acquisition off),
+                        // or when the rate is below the model minimum.
+                        val mlWillAcceptAudio by
+                            model.mlWillAcceptAudioFlow.collectAsStateWithLifecycle()
                         val showSparkle =
-                            appMode.intValue == AppMode.VIEWER.value ||
-                                uiState.liveMode.intValue in setOf(
-                                    LiveMode.STREAMING.value,
-                                    LiveMode.PAUSED.value,
-                                )
+                            mlWillAcceptAudio &&
+                                (appMode.intValue == AppMode.VIEWER.value ||
+                                    uiState.liveMode.intValue in setOf(
+                                        LiveMode.STREAMING.value,
+                                        LiveMode.PAUSED.value,
+                                    ))
                         if (showSparkle) {
                             val mlBuffering by model.mlBufferingFlow.collectAsStateWithLifecycle()
                             val mlBusy by model.mlBusyFlow.collectAsStateWithLifecycle()
