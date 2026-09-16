@@ -94,7 +94,7 @@ data class Settings(
      * Master switch for Auto Id. When false, Auto Id is off but [autoIdModelId]
      * is retained so re-enabling restores the last model.
      */
-    var autoIdEnabled: Boolean = true,
+    var autoIdEnabled: Boolean = false,
     /**
      * Selected Auto Id model id (e.g. `battybirdnet/uk-256khz`).
      * Kept even when Auto Id is off. See [org.batgizmo.app.ml.MlCatalog].
