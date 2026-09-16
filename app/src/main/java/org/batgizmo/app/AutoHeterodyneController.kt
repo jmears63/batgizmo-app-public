@@ -69,7 +69,6 @@ class AutoHeterodyneController(
     /** Viewer: skip enqueue until the playhead enters a new time bucket. */
     private var lastEnqueuedBucket: Int? = null
     private var viewerStride: Int? = null
-    private var viewerRawOffset: Int? = null
     private var viewerTimeBucketCount: Int? = null
     private val workChannel = Channel<Work>(Channel.BUFFERED)
     private var workerJob: Job? = null
@@ -107,7 +106,6 @@ class AutoHeterodyneController(
     suspend fun refreshViewerCache() {
         val mapping = pipeline()?.spectrogramTimeMapping() ?: return
         viewerStride = mapping.fftStride
-        viewerRawOffset = mapping.rawOffsetToPage
         viewerTimeBucketCount = mapping.timeBucketCount
     }
 
@@ -152,7 +150,6 @@ class AutoHeterodyneController(
         drainChannel(workChannel)
         lastEnqueuedBucket = null
         viewerStride = null
-        viewerRawOffset = null
         viewerTimeBucketCount = null
     }
 
@@ -192,9 +189,9 @@ class AutoHeterodyneController(
 
     private fun viewerBucketForSample(sampleIndex: Int): Int? {
         val stride = viewerStride ?: return null
-        val offset = viewerRawOffset ?: return null
         val count = viewerTimeBucketCount ?: return null
-        return ((sampleIndex - offset) / stride).coerceIn(0, count - 1)
+        // sampleIndex is page-local (audio progress into the page buffer).
+        return (sampleIndex / stride).coerceIn(0, count - 1)
     }
 
     private fun activitySearchBandHz(): Pair<Float, Float> =
