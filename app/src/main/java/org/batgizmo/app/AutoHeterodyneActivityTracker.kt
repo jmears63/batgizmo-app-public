@@ -308,7 +308,7 @@ class AutoHeterodyneActivityTracker {
         10.0.pow(db / 10.0).toFloat()
 
     companion object {
-        const val ACTIVITY_TAU_S = 0.5f
+        const val ACTIVITY_TAU_S = 0.2f
         /** Minimum σ/μ (linear power) for an active bin. */
         const val MIN_COEFF_VAR = 5f
         /**
