@@ -561,7 +561,6 @@ abstract class AbstractPipeline(
      */
     data class SpectrogramTimeMapping(
         val fftStride: Int,
-        val rawOffsetToPage: Int,
         val timeBucketCount: Int
     )
 
@@ -571,7 +570,6 @@ abstract class AbstractPipeline(
             return@withLock null
         return@withLock SpectrogramTimeMapping(
             calcs.fftStride,
-            calcs.rawOffsetToPage,
             calcs.transformedTimeBucketCount
         )
     }
@@ -580,8 +578,8 @@ abstract class AbstractPipeline(
         val calcs = pipelineData?.calcs ?: return@withLock null
         if (calcs.fftStride < 1 || calcs.transformedTimeBucketCount < 1)
             return@withLock null
-        val relative = sampleIndex - calcs.rawOffsetToPage
-        return@withLock (relative / calcs.fftStride)
+        // sampleIndex is page-local (into the raw page buffer), matching audio progress.
+        return@withLock (sampleIndex / calcs.fftStride)
             .coerceIn(0, calcs.transformedTimeBucketCount - 1)
     }
 
