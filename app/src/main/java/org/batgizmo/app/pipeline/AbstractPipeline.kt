@@ -462,10 +462,14 @@ abstract class AbstractPipeline(
         pipelineData?.let { pd ->
             pd.rangedRawDataBuffer?.buffer?.let { buffer ->
                 val timeAxisRange = timeAxisRangeFlow.value
+                // timeAxisRange is absolute file time; the buffer is page-local, so
+                // subtract rawOffsetToPage when converting seconds to buffer indices.
+                val pageOffset = pd.calcs.rawOffsetToPage
                 val range = HORange(
-                    maxOf(0, (timeAxisRange.start * pd.calcs.rawSampleRate).toInt()),
-                    minOf(buffer.size, (timeAxisRange.endInclusive * pd.calcs.rawSampleRate).toInt())
+                    maxOf(0, (timeAxisRange.start * pd.calcs.rawSampleRate).toInt() - pageOffset),
+                    minOf(buffer.size, (timeAxisRange.endInclusive * pd.calcs.rawSampleRate).toInt() - pageOffset)
                 )
+                if (range.exclusiveEnd <= range.start) return null
 
                 return Pair(buffer, range)
             }
