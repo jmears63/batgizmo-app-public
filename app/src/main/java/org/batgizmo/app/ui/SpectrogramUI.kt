@@ -880,11 +880,22 @@ class SpectrogramUI(
                     verticalAlignment = Alignment.Top
                 ) {
                     if (localAutoId.current) {
-                        val mlBuffering by model.mlBufferingFlow.collectAsStateWithLifecycle()
-                        val mlBusy by model.mlBusyFlow.collectAsStateWithLifecycle()
-                        // Viewer page ingest is brief; keep pulsing while the processor
-                        // still has queued/in-flight work from that submit.
-                        AutoIdSparkleIcon(active = mlBuffering || mlBusy)
+                        // Sparkle only while Auto Id has a session context: viewer with a
+                        // file open, or live acquisition streaming/paused. Hidden after
+                        // the viewer is closed (live with acquisition off).
+                        val showSparkle =
+                            appMode.intValue == AppMode.VIEWER.value ||
+                                uiState.liveMode.intValue in setOf(
+                                    LiveMode.STREAMING.value,
+                                    LiveMode.PAUSED.value,
+                                )
+                        if (showSparkle) {
+                            val mlBuffering by model.mlBufferingFlow.collectAsStateWithLifecycle()
+                            val mlBusy by model.mlBusyFlow.collectAsStateWithLifecycle()
+                            // Viewer page ingest is brief; keep pulsing while the processor
+                            // still has queued/in-flight work from that submit.
+                            AutoIdSparkleIcon(active = mlBuffering || mlBusy)
+                        }
 
                         val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
                         MlResultsPanel(
@@ -1091,16 +1102,16 @@ class SpectrogramUI(
     }
 
     /**
-     * Non-interactive Auto Id activity indicator. Always occupies layout space
-     * when shown. Animation phases while [active]:
-     * 1. Start: fade 0 → 1
-     * 2. Pulse: 0.5 ↔ 1 while work continues
-     * 3. Finish: when work ends, complete the current down-leg all the way to 0
-     *    (never snap off mid-fade).
+     * Non-interactive Auto Id activity indicator. Occupies layout space while
+     * composed. Animation phases while [active]:
+     * 1. Start: fade up to full
+     * 2. Pulse: [SPARKLE_DIM] ↔ 1 while work continues
+     * 3. Idle: when work ends, finish the current down-leg to [SPARKLE_DIM]
+     *    and stay visible (never fade fully out while this icon is shown).
      */
     @Composable
     private fun AutoIdSparkleIcon(active: Boolean) {
-        val alpha = remember { Animatable(0f) }
+        val alpha = remember { Animatable(SPARKLE_DIM) }
         var pulsing by remember { mutableStateOf(false) }
         val activeState = rememberUpdatedState(active)
 
@@ -1111,21 +1122,18 @@ class SpectrogramUI(
         LaunchedEffect(pulsing) {
             if (!pulsing) return@LaunchedEffect
             val halfCycle = tween<Float>(800, easing = FastOutSlowInEasing)
-            // (1) Starting: 0 → 1
+            // (1) Starting: up to full brightness
             alpha.animateTo(1f, animationSpec = halfCycle)
-            // (2) Pulsate between 0.5 and 1 until inactive, then (3) finish to 0.
+            // (2) Pulsate between dim and full until inactive, then (3) rest at dim.
             while (true) {
-                alpha.animateTo(0.5f, animationSpec = halfCycle)
+                alpha.animateTo(SPARKLE_DIM, animationSpec = halfCycle)
                 if (!activeState.value) {
-                    // Extend this down-leg from 0.5 → 0
-                    alpha.animateTo(0f, animationSpec = halfCycle)
                     pulsing = false
                     break
                 }
                 alpha.animateTo(1f, animationSpec = halfCycle)
                 if (!activeState.value) {
-                    // Stopped at peak: one final fade 1 → 0
-                    alpha.animateTo(0f, animationSpec = halfCycle)
+                    alpha.animateTo(SPARKLE_DIM, animationSpec = halfCycle)
                     pulsing = false
                     break
                 }
@@ -1137,13 +1145,18 @@ class SpectrogramUI(
         }
         Icon(
             imageVector = Icons.Filled.AutoAwesome,
-            contentDescription = if (active || pulsing) "Auto Id working" else null,
+            contentDescription = if (active || pulsing) "Auto Id working" else "Auto Id",
             tint = SpectrogramOverlayStyle.textColor,
             modifier = Modifier
                 .padding(end = 6.dp, top = 2.dp)
                 .size(iconSize)
                 .graphicsLayer { this.alpha = alpha.value },
         )
+    }
+
+    companion object {
+        /** Idle / pulse-floor alpha for [AutoIdSparkleIcon]. */
+        private const val SPARKLE_DIM = 0.5f
     }
 
     private fun updateHeterodyneUIState() {
