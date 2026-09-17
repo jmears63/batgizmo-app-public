@@ -39,7 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -928,7 +928,12 @@ private fun MlSuppressionsDialog(
                     .fillMaxWidth()
                     .heightIn(max = 420.dp)
             ) {
-                items(entries, key = { it.key }) { entry ->
+                // Index in the key: some catalogs reuse the same Latin name for
+                // distinct classes (e.g. Bavaria horseshoe echolocation vs social).
+                itemsIndexed(
+                    entries,
+                    key = { index, entry -> "$index:${entry.key}" },
+                ) { _, entry ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
