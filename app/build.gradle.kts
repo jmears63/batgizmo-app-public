@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,11 +7,18 @@ plugins {
     alias(libs.plugins.kotlin.parcelize)
 }
 
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties().apply {
+    keystorePropertiesFile.inputStream().use { load(it) }
+}
+
 android {
     signingConfigs {
         create("release") {
             storeFile = file("/home/jmears/src/gizmokeystore.jks")
             keyAlias = "key0"
+            storePassword = keystoreProperties.getProperty("storePassword")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
         }
     }
     namespace = "uk.org.gimell.batgimzoapp"
