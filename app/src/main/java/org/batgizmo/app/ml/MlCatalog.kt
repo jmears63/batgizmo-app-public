@@ -227,6 +227,8 @@ object MlCatalog {
         val geoModelRelativeToFamily: String?,
         val geoThreshold: Float,
         val enableSuppressionsButton: Boolean,
+        /** Optional full model id of the family's preferred variant. */
+        val defaultVariantId: String?,
     )
 
     private fun readFamilyJson(
@@ -238,6 +240,11 @@ object MlCatalog {
         val sampleRateHz = json.getInt("sampleRateHz")
         val geoModel = if (json.has("geoModel")) {
             json.getString("geoModel").takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
+        val defaultVariantId = if (json.has("defaultVariantId")) {
+            json.getString("defaultVariantId").takeIf { it.isNotBlank() }
         } else {
             null
         }
@@ -257,6 +264,7 @@ object MlCatalog {
             geoModelRelativeToFamily = geoModel,
             geoThreshold = json.optDouble("geoThreshold", 0.03).toFloat(),
             enableSuppressionsButton = json.optBoolean("enableSuppressionsButton", true),
+            defaultVariantId = defaultVariantId,
         )
     }
 
@@ -304,6 +312,7 @@ object MlCatalog {
                 geoThreshold = family.geoThreshold,
             ),
             enableSuppressionsButton = family.enableSuppressionsButton,
+            familyDefaultVariantId = family.defaultVariantId,
         )
     }
 

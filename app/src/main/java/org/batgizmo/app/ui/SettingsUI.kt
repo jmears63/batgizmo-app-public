@@ -657,7 +657,12 @@ class SettingsUI(private val model: UIModel) {
                                 AutoIdFamily(
                                     id = familyId,
                                     displayName = variants.first().familyDisplayName,
-                                    variants = variants.sortedBy { it.displayName },
+                                    // Family defaultVariantId (if present) first, then A–Z.
+                                    variants = variants.sortedWith(
+                                        compareBy<MlModelDescriptor> {
+                                            it.id != it.familyDefaultVariantId
+                                        }.thenBy { it.displayName }
+                                    ),
                                 )
                             }
                             .sortedBy { it.displayName }

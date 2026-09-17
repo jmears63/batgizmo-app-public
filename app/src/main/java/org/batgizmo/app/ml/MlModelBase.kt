@@ -55,6 +55,11 @@ data class MlModelDescriptor(
     val resourcePaths: MlResourcePaths,
     /** When false, Settings hides/disables the Auto Id Suppressions control. */
     val enableSuppressionsButton: Boolean = true,
+    /**
+     * Optional preferred variant id for this family (from family.json
+     * `defaultVariantId`). When set and present, Settings lists it first.
+     */
+    val familyDefaultVariantId: String? = null,
 ) {
     /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
     val labelKeys: List<String> = labelCatalog.map { it.key }

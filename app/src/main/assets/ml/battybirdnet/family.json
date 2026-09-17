@@ -7,5 +7,6 @@
   "overlapFraction": 0.25,
   "minSampleRateHz": 196000,
   "minConfidence": 0.7,
-  "enableSuppressionsButton": true
+  "enableSuppressionsButton": true,
+  "defaultVariantId": "battybirdnet/uk-256khz"
 }
