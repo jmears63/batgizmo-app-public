@@ -23,10 +23,13 @@
 package org.batgizmo.app.ui
 
 import android.content.Context
+import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
 import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +49,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,6 +63,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,15 +79,20 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
-import org.batgizmo.app.ml.MlCatalog
+import org.batgizmo.app.ml.ByomCommitException
 import org.batgizmo.app.ml.LabelCatalogEntry
+import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.MlModelDescriptor
+import timber.log.Timber
 import java.util.Locale
 
 class SettingsUI(private val model: UIModel) {
@@ -645,8 +655,24 @@ class SettingsUI(private val model: UIModel) {
                         val id: String,
                         val displayName: String,
                         val variants: List<MlModelDescriptor>,
+                        val isByom: Boolean,
                     )
-                    val descriptors = remember {
+                    var catalogRevision by remember { mutableIntStateOf(0) }
+                    var importBusy by remember { mutableStateOf(false) }
+                    var importError by remember { mutableStateOf<String?>(null) }
+                    var confirmRemove by remember { mutableStateOf(false) }
+                    var pendingOverwrite by remember {
+                        mutableStateOf<PendingByomOverwrite?>(null)
+                    }
+
+                    LaunchedEffect(Unit) {
+                        withContext(Dispatchers.IO) {
+                            MlCatalog.ensureInitialized(context)
+                        }
+                        catalogRevision++
+                    }
+
+                    val descriptors = remember(catalogRevision) {
                         MlCatalog.listDescriptors(context.assets)
                     }
                     // Families that currently have at least one installable variant.
@@ -663,6 +689,7 @@ class SettingsUI(private val model: UIModel) {
                                             it.id != it.familyDefaultVariantId
                                         }.thenBy { it.displayName }
                                     ),
+                                    isByom = variants.any { it.isByom },
                                 )
                             }
                             .sortedBy { it.displayName }
@@ -677,11 +704,16 @@ class SettingsUI(private val model: UIModel) {
                     val familyVariants = remember(selectedFamilyId, families) {
                         families.firstOrNull { it.id == selectedFamilyId }?.variants.orEmpty()
                     }
+                    val selectedIsByom = selectedDescriptor?.isByom == true
+
+                    fun versionLabel(version: String?): String =
+                        version?.takeIf { it.isNotBlank() } ?: "unknown"
 
                     fun persistModelId(modelId: String) {
                         if (modelId.isBlank()) return
                         autoIdModelId = modelId
-                        scope.launch {
+                        // ViewModel scope: survives file-picker / composition pauses.
+                        model.viewModelScope.launch {
                             val desc = MlCatalog.resolveDescriptor(context.assets, modelId)
                             val defaults = desc.labelCatalog
                                 .filter { !it.discard }
@@ -689,6 +721,80 @@ class SettingsUI(private val model: UIModel) {
                             val updated = model.settings.copy(autoIdModelId = desc.id)
                             updated.mergeAutoIdSuppressionDefaults(desc.id, defaults)
                             model.updateStoredSettings(updated)
+                        }
+                    }
+
+                    val appContext = context.applicationContext
+
+                    fun runByomImport(uri: Uri, replaceExisting: Boolean) {
+                        importBusy = true
+                        importError = null
+                        model.viewModelScope.launch {
+                            try {
+                                val installed = model.importByomClassifier(
+                                    uri,
+                                    replaceExisting = replaceExisting,
+                                )
+                                catalogRevision++
+                                autoIdModelId = installed.id
+                            } catch (e: Exception) {
+                                Timber.e(e, "BYOM import failed")
+                                importError = when (e) {
+                                    is ByomCommitException ->
+                                        e.message ?: "Failed to install classifier"
+                                    else ->
+                                        e.message ?: e.javaClass.simpleName
+                                }
+                            } finally {
+                                importBusy = false
+                            }
+                        }
+                    }
+
+                    val importLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.OpenDocument()
+                    ) { uri ->
+                        if (uri == null) return@rememberLauncherForActivityResult
+                        importBusy = true
+                        importError = null
+                        pendingOverwrite = null
+                        // Must not use rememberCoroutineScope here: returning from the
+                        // document picker can leave composition and cancel that scope.
+                        model.viewModelScope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    MlCatalog.ensureInitialized(appContext)
+                                }
+                                val summary = withContext(Dispatchers.IO) {
+                                    MlCatalog.peekByomZip(appContext, uri)
+                                }
+                                val existing = MlCatalog.installedByomSummary(summary.familyId)
+                                if (existing != null) {
+                                    importBusy = false
+                                    pendingOverwrite = PendingByomOverwrite(
+                                        uri = uri,
+                                        incoming = summary,
+                                        existingVersionName = existing.versionName,
+                                    )
+                                } else {
+                                    val installed = model.importByomClassifier(
+                                        uri,
+                                        replaceExisting = false,
+                                    )
+                                    catalogRevision++
+                                    autoIdModelId = installed.id
+                                    importBusy = false
+                                }
+                            } catch (e: Exception) {
+                                Timber.e(e, "BYOM import failed")
+                                importError = when (e) {
+                                    is ByomCommitException ->
+                                        e.message ?: "Failed to install classifier"
+                                    else ->
+                                        e.message ?: e.javaClass.simpleName
+                                }
+                                importBusy = false
+                            }
                         }
                     }
 
@@ -734,16 +840,8 @@ class SettingsUI(private val model: UIModel) {
                             }
                         }
                     }
-                }
 
-                item {
                     var showSuppressions by rememberSaveable { mutableStateOf(false) }
-                    val descriptors = remember {
-                        MlCatalog.listDescriptors(context.assets)
-                    }
-                    val selectedDescriptor = remember(autoIdModelId, descriptors) {
-                        descriptors.firstOrNull { it.id == autoIdModelId }
-                    }
                     val languages = selectedDescriptor?.languages.orEmpty()
                     val languageOptions = remember(languages) {
                         languages.mapIndexed { index, name -> index.toString() to name }
@@ -776,7 +874,7 @@ class SettingsUI(private val model: UIModel) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.End
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Button(
                             onClick = { showSuppressions = true },
@@ -786,7 +884,82 @@ class SettingsUI(private val model: UIModel) {
                         ) {
                             Text("Suppressions")
                         }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (selectedIsByom) {
+                                TextButton(
+                                    onClick = { confirmRemove = true },
+                                    enabled = !importBusy
+                                ) {
+                                    Text("Remove")
+                                }
+                            }
+                            TextButton(
+                                onClick = {
+                                    importLauncher.launch(
+                                        arrayOf(
+                                            "application/zip",
+                                            "application/x-zip-compressed",
+                                        )
+                                    )
+                                },
+                                enabled = !importBusy
+                            ) {
+                                Text("Import classifier…")
+                            }
+                        }
                     }
+
+                    if (importBusy) {
+                        AlertDialog(
+                            onDismissRequest = {},
+                            title = { Text("Importing classifier") },
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                ) {
+                                    CircularProgressIndicator()
+                                    Text("Please wait…")
+                                }
+                            },
+                            confirmButton = {},
+                        )
+                    }
+
+                    pendingOverwrite?.let { pending ->
+                        AlertDialog(
+                            onDismissRequest = { pendingOverwrite = null },
+                            title = { Text("Replace classifier?") },
+                            text = {
+                                Text(
+                                    "\"${pending.incoming.familyId}\" " +
+                                        "(version ${versionLabel(pending.existingVersionName)}) " +
+                                        "is already installed. Replace it with version " +
+                                        "${versionLabel(pending.incoming.versionName)}?"
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        val uri = pending.uri
+                                        pendingOverwrite = null
+                                        runByomImport(uri, replaceExisting = true)
+                                    }
+                                ) {
+                                    Text("Overwrite")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { pendingOverwrite = null }) {
+                                    Text("Cancel")
+                                }
+                            },
+                        )
+                    }
+
                     if (showSuppressions &&
                         selectedDescriptor != null &&
                         selectedDescriptor.enableSuppressionsButton
@@ -808,6 +981,57 @@ class SettingsUI(private val model: UIModel) {
                                         model.settings.copy(autoIdSuppressions = nested)
                                     )
                                     showSuppressions = false
+                                }
+                            },
+                        )
+                    }
+
+                    if (confirmRemove && selectedDescriptor != null && selectedIsByom) {
+                        val familyName = selectedDescriptor.familyDisplayName
+                        val familyId = selectedDescriptor.familyId
+                        AlertDialog(
+                            onDismissRequest = { confirmRemove = false },
+                            title = { Text("Remove model") },
+                            text = {
+                                Text(
+                                    "Remove \"$familyName\"? This deletes the imported " +
+                                        "classifier from the device."
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        confirmRemove = false
+                                        model.viewModelScope.launch {
+                                            val ok = model.removeByomClassifier(familyId)
+                                            if (!ok) {
+                                                importError = "Could not remove classifier"
+                                                return@launch
+                                            }
+                                            catalogRevision++
+                                            autoIdModelId = model.settings.autoIdModelId
+                                        }
+                                    }
+                                ) {
+                                    Text("Remove")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { confirmRemove = false }) {
+                                    Text("Cancel")
+                                }
+                            },
+                        )
+                    }
+
+                    importError?.let { message ->
+                        AlertDialog(
+                            onDismissRequest = {},
+                            title = { Text("Import failed") },
+                            text = { Text(message) },
+                            confirmButton = {
+                                TextButton(onClick = { importError = null }) {
+                                    Text("OK")
                                 }
                             },
                         )
@@ -900,6 +1124,13 @@ class SettingsUI(private val model: UIModel) {
     }
 }
 
+/** Held while the user decides whether to replace an installed BYOM pack. */
+private data class PendingByomOverwrite(
+    val uri: Uri,
+    val incoming: MlCatalog.ByomManifestSummary,
+    val existingVersionName: String?,
+)
+
 /**
  * Modal listing Auto Id classes that are not discarded. Checkboxes bind to
  * [suppressions] (settings per-model Auto Id suppressions); missing keys fall back
@@ -926,7 +1157,7 @@ private fun MlSuppressionsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Ids to Ignore") },
+        title = { Text("Classes to ignore") },
         text = {
             LazyColumn(
                 modifier = Modifier

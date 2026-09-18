@@ -6,7 +6,7 @@
   "windowSamples": 144000,
   "overlapFraction": 0.25,
   "minSampleRateHz": 196000,
-  "minConfidence": 0.7,
+  "detectionThreshold": 0.7,
   "enableSuppressionsButton": true,
   "defaultVariantId": "battybirdnet/uk-256khz"
 }

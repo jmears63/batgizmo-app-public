@@ -28,8 +28,8 @@ android {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 29
         targetSdk = 37
-        versionCode = 36
-        versionName = "3.0.1"
+        versionCode = 37
+        versionName = "feature/byom"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {

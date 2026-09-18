@@ -6,7 +6,7 @@
   "windowSamples": 144000,
   "overlapFraction": 0.25,
   "minSampleRateHz": 36000,
-  "minConfidence": 0.1,
+  "detectionThreshold": 0.1,
   "geoModel": "BirdNET_GLOBAL_6K_V2.4_MData_Model_FP16.tflite",
   "geoThreshold": 0.03,
   "enableSuppressionsButton": false

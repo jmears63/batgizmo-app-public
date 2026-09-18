@@ -48,7 +48,7 @@ data class MlModelDescriptor(
     val windowSamples: Int,
     val overlapFraction: Float,
     val minSampleRateHz: Int,
-    val minConfidence: Float,
+    val detectionThreshold: Float,
     val languages: List<String>,
     val labelCatalog: List<LabelCatalogEntry>,
     /** Absolute asset or file paths resolved for this variant. */
@@ -60,6 +60,13 @@ data class MlModelDescriptor(
      * `defaultVariantId`). When set and present, Settings lists it first.
      */
     val familyDefaultVariantId: String? = null,
+    /** True for bring-your-own packs under the app-private models directory. */
+    val isByom: Boolean = false,
+    /**
+     * Optional pack version string (BYOM `byom.json` `version`). Null for
+     * bundled models that do not declare one.
+     */
+    val versionName: String? = null,
 ) {
     /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
     val labelKeys: List<String> = labelCatalog.map { it.key }
@@ -103,7 +110,7 @@ interface MlModelBase : AutoCloseable {
     val windowSamples: Int get() = descriptor.windowSamples
     val overlapFraction: Float get() = descriptor.overlapFraction
     val minSampleRateHz: Int get() = descriptor.minSampleRateHz
-    val minConfidence: Float get() = descriptor.minConfidence
+    val detectionThreshold: Float get() = descriptor.detectionThreshold
     val languages: List<String> get() = descriptor.languages
     val labelCatalog: List<LabelCatalogEntry> get() = descriptor.labelCatalog
 

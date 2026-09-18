@@ -25,6 +25,7 @@ package org.batgizmo.app
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import org.batgizmo.app.ml.MlCatalog
 import timber.log.Timber
 import uk.org.gimell.batgimzoapp.BuildConfig
 import java.io.PrintWriter
@@ -85,5 +86,18 @@ class BatGizmoApplication : Application() {
         val handler = LoggingExceptionHandler(defaultHandler, this)
 
         Thread.setDefaultUncaughtExceptionHandler(handler)
+
+        // Scan installed BYOM packs off the main thread - files can be quite large
+        // and take time to download.
+        Thread(
+            {
+                try {
+                    MlCatalog.ensureInitialized(this)
+                } catch (e: Exception) {
+                    Timber.e(e, "MlCatalog.ensureInitialized failed")
+                }
+            },
+            "MlCatalogInit",
+        ).start()
     }
 }

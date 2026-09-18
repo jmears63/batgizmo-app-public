@@ -454,13 +454,17 @@ class MlProcessor(
     private fun ensureModel(): MlModelBase? {
         model?.let { return it }
         return try {
+            MlCatalog.ensureInitialized(appContext)
             MlCatalog.openModel(appContext.assets, modelId).also { opened ->
                 model = opened
                 windowing = MlWindowing.from(opened.descriptor)
                 if (opened is BirdNetModel) {
                     geoSnapshot?.let { opened.setGeoSnapshot(it) }
                 }
-                Timber.i("MlProcessor: loaded Auto Id model ${opened.id}")
+                Timber.i(
+                    "MlProcessor: loaded Auto Id model ${opened.id} " +
+                        "(${opened.sampleRateHz} Hz, ${opened.windowSamples} samples)"
+                )
             }
         } catch (e: Exception) {
             Timber.e(e, "MlProcessor: failed to load Auto Id model $modelId")
@@ -477,6 +481,7 @@ class MlProcessor(
             // Force model load on infer thread only; resample still needs rates.
             // Use catalog metadata without opening TFLite.
             val descriptor = try {
+                MlCatalog.ensureInitialized(appContext)
                 MlCatalog.resolveDescriptor(appContext.assets, modelId)
             } catch (e: Exception) {
                 Timber.e(e, "MlProcessor: no descriptor for $modelId")
@@ -526,7 +531,7 @@ class MlProcessor(
         )
 
         val autoId = ensureModel() ?: return completedResult()
-        val minConfidence = autoId.minConfidence
+        val detectionThreshold = autoId.detectionThreshold
 
         return try {
             val inferStartedAtMs = SystemClock.elapsedRealtime()
@@ -540,7 +545,7 @@ class MlProcessor(
             val detections = ArrayList<MlDetection>()
             for (i in scores.indices) {
                 val score = scores[i]
-                if (score <= minConfidence ||
+                if (score <= detectionThreshold ||
                     labelDiscard[i] ||
                     labelKeys[i] in suppressedLabelKeys
                 ) {

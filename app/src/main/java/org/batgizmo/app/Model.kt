@@ -58,6 +58,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.batgizmo.app.ml.BirdNetModel
 import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.MlClient
+import org.batgizmo.app.ml.MlModelDescriptor
 import org.batgizmo.app.ml.MlOverflowPolicy
 import org.batgizmo.app.ml.MlSummaryAccumulator
 import org.batgizmo.app.ml.MlSummaryMode
@@ -895,6 +896,7 @@ class UIModel(application: Application,
                     if (settings.isAutoIdEnabled()) {
                         val modelId = settings.autoIdModelId
                         val descriptor = try {
+                            MlCatalog.ensureInitialized(getApplication())
                             MlCatalog.resolveDescriptor(
                                 getApplication<Application>().assets,
                                 modelId,
@@ -1007,6 +1009,85 @@ class UIModel(application: Application,
                 }
             }
         }
+    }
+
+    /**
+     * Drop (and optionally recreate) the live Auto Id client so TFLite is
+     * reopened from disk. Required after BYOM replace of the same model id,
+     * and before deleting the active BYOM pack.
+     */
+    suspend fun reloadAutoIdClient(recreate: Boolean = true) {
+        withContext(Dispatchers.Default) {
+            synchronized(mlLock) {
+                clearMlClientLocked()
+            }
+            mlSummaryAccumulator.clear(MlSummaryMode.Live)
+            if (!recreate || !settings.isAutoIdEnabled()) return@withContext
+            when (val p = pipeline) {
+                is LiveUSBPipeline -> {
+                    liveMlAccepting = true
+                    ensureMlClient(p.sampleRateHz(), forceReset = true)
+                }
+                is FileViewerPipeline -> submitFilePageToMl(p)
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * Import a BYOM zip, select it, and force-reload TFLite (even when the
+     * model id is unchanged after an overwrite).
+     */
+    suspend fun importByomClassifier(
+        uri: Uri,
+        replaceExisting: Boolean,
+    ): MlModelDescriptor {
+        val app = getApplication<Application>()
+        val installed = withContext(Dispatchers.IO) {
+            MlCatalog.importByomZip(app, uri, replaceExisting = replaceExisting)
+        }
+        val defaults = installed.labelCatalog
+            .filter { !it.discard }
+            .associate { it.key to it.disableByDefault }
+        val updated = settings.copy(autoIdModelId = installed.id)
+        updated.mergeAutoIdSuppressionDefaults(installed.id, defaults)
+        updateStoredSettings(updated)
+        // Same-id overwrite does not flip autoIdModelChanged; always remmap.
+        reloadAutoIdClient(recreate = true)
+        return installed
+    }
+
+    /**
+     * Remove an installed BYOM family. Tears down TFLite first when the active
+     * model belongs to that family, then selects a bundled fallback.
+     */
+    suspend fun removeByomClassifier(familyId: String): Boolean {
+        val app = getApplication<Application>()
+        val assets = app.assets
+        val removedModelIds = MlCatalog.listDescriptors(assets)
+            .filter { it.familyId == familyId }
+            .map { it.id }
+            .toSet()
+        val removingActive = settings.autoIdModelId in removedModelIds
+        if (removingActive) {
+            reloadAutoIdClient(recreate = false)
+        }
+        val removed = withContext(Dispatchers.IO) {
+            MlCatalog.removeByomFamily(app, familyId)
+        }
+        if (!removed) return false
+        val nested = settings.autoIdSuppressions.filterKeys { it !in removedModelIds }
+        val fallback = MlCatalog.resolveDescriptor(assets, null)
+        val updated = settings.copy(
+            autoIdModelId = fallback.id,
+            autoIdSuppressions = nested,
+        )
+        val defaults = fallback.labelCatalog
+            .filter { !it.discard }
+            .associate { it.key to it.disableByDefault }
+        updated.mergeAutoIdSuppressionDefaults(fallback.id, defaults)
+        updateStoredSettings(updated)
+        return true
     }
 
     val oomMessage = "Your device has insufficient free memory for rendering spectrograms of this size.\n\n"+
@@ -1820,6 +1901,7 @@ class UIModel(application: Application,
             if (existing != null && existing.modelId != modelId) {
                 clearMlClientLocked()
             }
+            MlCatalog.ensureInitialized(getApplication())
             val descriptor = MlCatalog.resolveDescriptor(
                 getApplication<Application>().assets,
                 modelId,
