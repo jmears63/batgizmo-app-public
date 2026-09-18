@@ -273,6 +273,8 @@ class TopLevelUI(private val model: UIModel) {
                             showReleaseNotesFromWhatsNew = false
                         })
                     }
+
+                    IncomingByomImportHost(model)
                 }
             }
         }

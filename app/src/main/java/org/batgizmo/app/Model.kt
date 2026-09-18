@@ -799,6 +799,18 @@ class UIModel(application: Application,
         startupPrompts.noteLaunchedForFileView()
     }
 
+    private val mutableIncomingByomZip = MutableStateFlow<Uri?>(null)
+    /** Non-null when a BYOM zip was opened via VIEW / SEND and awaits import UI. */
+    val incomingByomZip: StateFlow<Uri?> = mutableIncomingByomZip.asStateFlow()
+
+    fun offerIncomingByomZip(uri: Uri) {
+        mutableIncomingByomZip.value = uri
+    }
+
+    fun consumeIncomingByomZip() {
+        mutableIncomingByomZip.value = null
+    }
+
     fun dismissHighRateMicOffer(suppressFurther: Boolean = false) {
         startupPrompts.dismissHighRateMicOffer(suppressFurther)
     }

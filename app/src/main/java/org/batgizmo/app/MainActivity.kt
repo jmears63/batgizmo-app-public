@@ -25,7 +25,6 @@ package org.batgizmo.app
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -84,8 +83,12 @@ class MainActivity : ComponentActivity() {
         val factory = UIModelFactory(application, dataStore)
         val model = ViewModelProvider(this, factory).get(UIModel::class.java)
 
-        // Suppress the high-rate mic startup helper when opened via VIEW (e.g. a .wav).
-        if (intent?.action == Intent.ACTION_VIEW) {
+        // Suppress the high-rate mic startup helper when opened via VIEW of a recording.
+        val launchUri = ByomZipIntents.uriFromIntent(intent)
+        if (intent?.action == Intent.ACTION_VIEW &&
+            launchUri != null &&
+            !ByomZipIntents.isZip(this, intent, launchUri)
+        ) {
             model.noteLaunchedForFileView()
         }
 
@@ -128,16 +131,22 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-
+        setIntent(intent)
         handleIncomingIntent(intent)
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_VIEW) {
-            Timber.i("handleIncomingIntent called.")   // This gets called repeatedly.
-            val fileUri: Uri? = intent.data
-            fileUri?.let { uri ->
-                uiTopLevel.processViewIntent(this, lifecycleScope, viewModel, uri)
+        if (intent == null) return
+        val uri = ByomZipIntents.uriFromIntent(intent) ?: return
+        when (intent.action) {
+            Intent.ACTION_VIEW, Intent.ACTION_SEND -> {
+                if (ByomZipIntents.isZip(this, intent, uri)) {
+                    Timber.i("handleIncomingIntent: BYOM zip $uri")
+                    viewModel.offerIncomingByomZip(uri)
+                } else if (intent.action == Intent.ACTION_VIEW) {
+                    Timber.i("handleIncomingIntent: audio VIEW")
+                    uiTopLevel.processViewIntent(this, lifecycleScope, viewModel, uri)
+                }
             }
         }
     }

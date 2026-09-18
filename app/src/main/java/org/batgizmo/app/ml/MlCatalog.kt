@@ -248,8 +248,9 @@ object MlCatalog {
         val packPrefix = detectByomPackPrefix(entries)
         val manifestPath = packPrefix + BYOM_MANIFEST
         require(entries.any { !it.endsWith('/') && it == manifestPath }) {
-            "Zip does not contain $BYOM_MANIFEST at the pack root" +
-                if (packPrefix.isEmpty()) "" else " (under ${packPrefix.trimEnd('/')})"
+            missingByomManifestMessage(
+                if (packPrefix.isEmpty()) null else packPrefix.trimEnd('/'),
+            )
         }
         val text = readZipEntryUtf8(context, zipUri, manifestPath)
             ?: error("Could not read $manifestPath from zip")
@@ -295,7 +296,7 @@ object MlCatalog {
                 unzipSafely(app, zipUri, staging)
                 val packDir = resolveByomPackRoot(staging)
                 require(File(packDir, BYOM_MANIFEST).isFile) {
-                    "Zip does not contain $BYOM_MANIFEST at the pack root"
+                    missingByomManifestMessage(underFolder = null)
                 }
                 val preview = readByomPack(assets, packDir, validateTflite = true)
                 val familyId = preview.first().familyId
@@ -391,6 +392,16 @@ object MlCatalog {
                 }
             }
         }
+    }
+
+    private fun missingByomManifestMessage(underFolder: String?): String {
+        val location = if (underFolder.isNullOrEmpty()) {
+            "at the pack root"
+        } else {
+            "at the pack root (under $underFolder)"
+        }
+        return "Zip does not contain $BYOM_MANIFEST $location. " +
+            "Are you sure it is a BatGizmo classifier pack?"
     }
 
     private fun requireUnderByomRoot(root: File, dirName: String) {

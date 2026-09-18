@@ -60,6 +60,27 @@
                 <data android:scheme="file" android:mimeType="audio/vnd.wave" />
             </intent-filter>
 
+            <!-- Open BYOM classifier zips (Downloads / Files / browser). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:mimeType="application/zip" />
+                <data android:scheme="content" android:mimeType="application/x-zip-compressed" />
+                <data android:scheme="content" android:mimeType="application/zip-compressed" />
+                <data android:scheme="file" android:mimeType="application/zip" />
+                <data android:scheme="file" android:mimeType="application/x-zip-compressed" />
+                <data android:scheme="file" android:mimeType="application/zip-compressed" />
+            </intent-filter>
+
+            <!-- Share a zip into Batgizmo (e.g. from Downloads). -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/zip-compressed" />
+            </intent-filter>
+
             <!-- Handle URL opening -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
