@@ -129,7 +129,7 @@
         "NOISE",
         "NOISE"
       ],
-      "discard": false,
+      "discard": true,
       "disable_by_default": false
     },
     {
