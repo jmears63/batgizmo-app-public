@@ -16,3 +16,4 @@ local.properties
 private
 .idea
 app/release/
+key.properties
