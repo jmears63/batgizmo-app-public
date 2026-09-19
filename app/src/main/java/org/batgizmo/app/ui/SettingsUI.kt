@@ -907,7 +907,7 @@ class SettingsUI(private val model: UIModel) {
                                 },
                                 enabled = !importBusy
                             ) {
-                                Text("Import classifier…")
+                                Text("Import…")
                             }
                         }
                     }

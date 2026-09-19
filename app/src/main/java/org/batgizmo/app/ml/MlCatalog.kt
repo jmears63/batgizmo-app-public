@@ -25,6 +25,7 @@ package org.batgizmo.app.ml
 import android.content.Context
 import android.content.res.AssetManager
 import org.json.JSONObject
+import org.tensorflow.lite.DataType
 import timber.log.Timber
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
@@ -846,7 +847,8 @@ object MlCatalog {
 
     /**
      * Open [modelRelative] as TFLite and require input/output lengths match
-     * [inputSize] / [outputSize] (same conventions as [SimpleModel]).
+     * [inputSize] / [outputSize] and that both tensors are FP32
+     * (same conventions as [SimpleModel]).
      */
     private fun validateByomTfliteFile(
         assets: AssetManager,
@@ -871,7 +873,11 @@ object MlCatalog {
             require(interpreter.outputTensorCount >= 1) {
                 "TFLite model has no output tensors"
             }
-            var inputLen = interpreter.getInputTensor(0).shape().last()
+            val inputTensor = interpreter.getInputTensor(0)
+            require(inputTensor.dataType() == DataType.FLOAT32) {
+                "TFLite input data type must be FLOAT32 (got ${inputTensor.dataType()})"
+            }
+            var inputLen = inputTensor.shape().last()
             if (inputLen <= 0) {
                 interpreter.resizeInput(0, intArrayOf(1, inputSize))
                 interpreter.allocateTensors()
@@ -880,7 +886,11 @@ object MlCatalog {
             require(inputLen == inputSize) {
                 "TFLite input length $inputLen does not match model.inputSize $inputSize"
             }
-            val outShape = interpreter.getOutputTensor(0).shape()
+            val outputTensor = interpreter.getOutputTensor(0)
+            require(outputTensor.dataType() == DataType.FLOAT32) {
+                "TFLite output data type must be FLOAT32 (got ${outputTensor.dataType()})"
+            }
+            val outShape = outputTensor.shape()
             val outputLen = when {
                 outShape.size >= 2 && outShape[1] > 0 -> outShape[1]
                 else -> outShape.last()
