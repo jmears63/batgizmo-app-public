@@ -23,7 +23,7 @@
 package org.batgizmo.app
 
 import org.batgizmo.app.AutoHeterodyneActivityTracker.Companion.ACTIVITY_TAU_S
-import org.batgizmo.app.AutoHeterodyneActivityTracker.Companion.MIN_COEFF_VAR
+import org.batgizmo.app.AutoHeterodyneActivityTracker.Companion.MIN_SD_PER_MEAN
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.pow
@@ -31,10 +31,12 @@ import kotlin.math.sqrt
 
 /**
  * Auto heterodyne activity tracker: per-bin EWMA mean and variance of linear
- * power (τ = [ACTIVITY_TAU_S]). Active bins have σ/μ above [MIN_COEFF_VAR].
- * Contiguous active runs in one time column are activity spans; spans outside
- * [rangeMinHz, rangeMaxHz] are truncated or discarded. Span choice depends on
- * [Settings.AutoHeterodyneModeOptions]:
+ * power. Mean uses τ = [ACTIVITY_TAU_S]; variance uses τ = [ACTIVITY_VAR_TAU_S]
+ * (= half the mean τ) so that σ = √v adapts on a similar timescale to μ.
+ * Variance is also capped so σ/μ ≤ [MAX_SD_PER_MEAN]. Active bins have σ/μ
+ * above [MIN_SD_PER_MEAN]. Contiguous active runs in one time column are
+ * activity spans; spans outside [rangeMinHz, rangeMaxHz] are truncated or
+ * discarded. Span choice depends on [Settings.AutoHeterodyneModeOptions]:
  * - Hockey Stick: among spans near the column's peak activity, the lowest-
  *   frequency span (observation = its low edge)
  * - Rhinolophus: among spans near the column's peak activity, the highest-
@@ -114,7 +116,12 @@ class AutoHeterodyneActivityTracker {
         if (nBins < 1 || band.size != nBins || dfHz <= 0f || dtSeconds <= 0f)
             return null
 
-        val alpha = (1.0 - exp((-dtSeconds / ACTIVITY_TAU_S).toDouble())).toFloat()
+        val alphaMean = (1.0 - exp((-dtSeconds / ACTIVITY_TAU_S).toDouble())).toFloat()
+            .coerceIn(0f, 1f)
+        // Variance is E[(p−μ)²]. With the same τ as the mean, σ = √v would forget
+        // twice as slowly (v(t)∝e^{−t/τ} ⇒ σ(t)∝e^{−t/(2τ)}). Use half τ so σ and μ
+        // adapt on a similar timescale when forming σ/μ.
+        val alphaVar = (1.0 - exp((-dtSeconds / ACTIVITY_VAR_TAU_S).toDouble())).toFloat()
             .coerceIn(0f, 1f)
         val minMeanPower = dbToPower(MIN_MEAN_POWER_DB)
 
@@ -131,9 +138,14 @@ class AutoHeterodyneActivityTracker {
         for (f in 0 until nBins) {
             val p = dbToPower(band[f])
             val prevMean = meanPower[f]
-            val newMean = prevMean + alpha * (p - prevMean)
+            val newMean = prevMean + alphaMean * (p - prevMean)
             val dev = p - prevMean
-            varPower[f] += alpha * (dev * dev - varPower[f])
+            varPower[f] += alphaVar * (dev * dev - varPower[f])
+            // Cap σ/μ at MAX_SD_PER_MEAN so loud bursts (e.g. bush crickets)
+            // cannot inflate variance enough to delay recovery.
+            val maxVar = newMean * newMean * MAX_SD_PER_MEAN * MAX_SD_PER_MEAN
+            if (varPower[f] > maxVar)
+                varPower[f] = maxVar
             meanPower[f] = newMean
         }
         columnCount++
@@ -190,7 +202,7 @@ class AutoHeterodyneActivityTracker {
                 if (mu < minMeanPower)
                     continue
                 val cv = sqrt(varPower[f]) / mu
-                if (cv <= MIN_COEFF_VAR)
+                if (cv <= MIN_SD_PER_MEAN)
                     continue
                 if (truncStart < 0) {
                     truncStart = f
@@ -229,7 +241,7 @@ class AutoHeterodyneActivityTracker {
                 continue
             }
             val cv = sqrt(varPower[f]) / mu
-            if (cv <= MIN_COEFF_VAR) {
+            if (cv <= MIN_SD_PER_MEAN) {
                 closeSpan()
                 continue
             }
@@ -308,9 +320,16 @@ class AutoHeterodyneActivityTracker {
         10.0.pow(db / 10.0).toFloat()
 
     companion object {
-        const val ACTIVITY_TAU_S = 0.2f
+        const val ACTIVITY_TAU_S = 0.3f
+        /**
+         * Variance EWMA time constant: half of [ACTIVITY_TAU_S] so that
+         * σ = √v forgets on a similar timescale to the mean.
+         */
+        const val ACTIVITY_VAR_TAU_S = ACTIVITY_TAU_S / 2f
         /** Minimum σ/μ (linear power) for an active bin. */
-        const val MIN_COEFF_VAR = 5f
+        const val MIN_SD_PER_MEAN = 5f
+        /** Cap on stored variance so σ/μ never exceeds this (see EWMA update). */
+        const val MAX_SD_PER_MEAN = MIN_SD_PER_MEAN + 2f
         /**
          * Hockey Stick / Rhinolophus: only spans whose peak σ/μ is at least this
          * fraction of the column's strongest span may compete for the edge pick.
