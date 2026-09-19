@@ -682,8 +682,8 @@ object MlCatalog {
                 "(got $minSampleRateHz)"
         }
         val overlapFraction = json.optDouble("overlapFraction", 0.25).toFloat()
-        require(overlapFraction in 0f..1f) {
-            "overlapFraction must be in 0.0..1.0 (got $overlapFraction)"
+        require(overlapFraction in 0f..MAX_BYOM_OVERLAP_FRACTION) {
+            "overlapFraction must be in 0.0..$MAX_BYOM_OVERLAP_FRACTION (got $overlapFraction)"
         }
         val detectionThreshold = when {
             json.has("detectionThreshold") ->
@@ -1154,6 +1154,7 @@ object MlCatalog {
     private const val MAX_BYOM_MODEL_SAMPLE_RATE_HZ = 512_000
     private const val MIN_BYOM_INPUT_SIZE = 1024
     private const val MIN_BYOM_OUTPUT_SIZE = 1
+    private const val MAX_BYOM_OVERLAP_FRACTION = 0.75f
 }
 
 /** Thrown when BYOM stage/validate succeeded but installing into `filesDir/ml` failed. */
