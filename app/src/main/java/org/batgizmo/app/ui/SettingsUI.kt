@@ -23,6 +23,7 @@
 package org.batgizmo.app.ui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
@@ -33,13 +34,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -76,6 +78,7 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -801,42 +804,83 @@ class SettingsUI(private val model: UIModel) {
                     val familyOptions = remember(families) {
                         families.map { it.id to it.displayName }
                     }
-                    if (familyOptions.isNotEmpty()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            MyDynamicSelector(
-                                options = familyOptions,
-                                description = "Model",
-                                selectedValue = selectedFamilyId,
-                                enabled = autoIdEnabled
-                            ) { familyId: String ->
-                                val variants = families.firstOrNull { it.id == familyId }
-                                    ?.variants
-                                    .orEmpty()
-                                if (variants.isEmpty()) return@MyDynamicSelector
-                                // Keep current variant when staying in-family; else pick the first.
-                                val nextId =
-                                    if (selectedDescriptor?.familyId == familyId) {
-                                        selectedDescriptor.id
-                                    } else {
-                                        variants.first().id
-                                    }
-                                persistModelId(nextId)
-                            }
+                    val variantOptions = remember(familyVariants) {
+                        familyVariants.map { it.id to it.displayName }
+                    }
+                    val isLandscape =
+                        LocalConfiguration.current.orientation ==
+                            Configuration.ORIENTATION_LANDSCAPE
+                    val showFamily = familyOptions.isNotEmpty()
+                    val showVariant = familyVariants.isNotEmpty()
+
+                    val onFamilySelected: (String) -> Unit = { familyId ->
+                        val variants = families.firstOrNull { it.id == familyId }
+                            ?.variants
+                            .orEmpty()
+                        if (variants.isNotEmpty()) {
+                            // Keep current variant when staying in-family; else pick the first.
+                            val nextId =
+                                if (selectedDescriptor?.familyId == familyId) {
+                                    selectedDescriptor.id
+                                } else {
+                                    variants.first().id
+                                }
+                            persistModelId(nextId)
                         }
                     }
 
-                    if (familyVariants.isNotEmpty()) {
-                        val variantOptions = remember(familyVariants) {
-                            familyVariants.map { it.id to it.displayName }
+                    if (isLandscape && showFamily && showVariant) {
+                        // Landscape: Model 2/3, Variant 1/3 on one row.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(2f)
+                                    .padding(end = 8.dp),
+                            ) {
+                                MyDynamicSelector(
+                                    options = familyOptions,
+                                    description = "Model",
+                                    selectedValue = selectedFamilyId,
+                                    enabled = autoIdEnabled,
+                                    onChange = onFamilySelected,
+                                )
+                            }
+                            Box(modifier = Modifier.weight(1f)) {
+                                MyDynamicSelector(
+                                    options = variantOptions,
+                                    description = "Variant",
+                                    selectedValue = autoIdModelId,
+                                    enabled = autoIdEnabled && familyVariants.size > 1,
+                                ) { variantId: String ->
+                                    persistModelId(variantId)
+                                }
+                            }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            MyDynamicSelector(
-                                options = variantOptions,
-                                description = "Variant",
-                                selectedValue = autoIdModelId,
-                                enabled = autoIdEnabled && familyVariants.size > 1
-                            ) { variantId: String ->
-                                persistModelId(variantId)
+                    } else {
+                        if (showFamily) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                MyDynamicSelector(
+                                    options = familyOptions,
+                                    description = "Model",
+                                    selectedValue = selectedFamilyId,
+                                    enabled = autoIdEnabled,
+                                    onChange = onFamilySelected,
+                                )
+                            }
+                        }
+                        if (showVariant) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                MyDynamicSelector(
+                                    options = variantOptions,
+                                    description = "Variant",
+                                    selectedValue = autoIdModelId,
+                                    enabled = autoIdEnabled && familyVariants.size > 1,
+                                ) { variantId: String ->
+                                    persistModelId(variantId)
+                                }
                             }
                         }
                     }
