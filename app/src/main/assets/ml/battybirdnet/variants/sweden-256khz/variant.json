@@ -1,6 +1,6 @@
 {
   "id": "battybirdnet/sweden-256khz",
-  "displayName": "BattyBirdNET Sweden",
+  "displayName": "Sweden",
   "embeddings": "../../BirdNET_GLOBAL_6K_V2.4_Embeddings_FP32.tflite",
   "classifier": "BattyBirdNET-Sweden-256kHz.tflite",
   "labels": "labels.json"
