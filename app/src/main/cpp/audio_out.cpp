@@ -87,12 +87,48 @@ static void signal_progress(PlaybackContext *ctx, JNIEnv *env, int32_t current_p
     if (!ctx->global_callback)
         return;
 
+    /*
+     * Call Function1.invoke(Object), not the specialized invoke(I)V.
+     * R8 often strips or renames the int overload on lambda/method-reference
+     * adapters (seen as NoSuchMethodError on "Le;.invoke(I)V").
+     * Use GetObjectClass so this works on the AAudio callback thread
+     * (FindClass for app/Kotlin types can fail there).
+     */
     jclass funcClass = env->GetObjectClass(ctx->global_callback);
-    jmethodID invokeMethod = env->GetMethodID(funcClass, "invoke", "(I)V");
-    if (invokeMethod) {
-        env->CallVoidMethod(ctx->global_callback, invokeMethod, current_position);
-    }
+    jmethodID invokeMethod =
+            env->GetMethodID(funcClass, "invoke", "(Ljava/lang/Object;)Ljava/lang/Object;");
     env->DeleteLocalRef(funcClass);
+    if (!invokeMethod) {
+        env->ExceptionClear();
+        return;
+    }
+
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    if (!integerClass) {
+        env->ExceptionClear();
+        return;
+    }
+    jmethodID valueOf =
+            env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    if (!valueOf) {
+        env->ExceptionClear();
+        env->DeleteLocalRef(integerClass);
+        return;
+    }
+    jobject boxed =
+            env->CallStaticObjectMethod(integerClass, valueOf, (jint) current_position);
+    env->DeleteLocalRef(integerClass);
+    if (!boxed) {
+        env->ExceptionClear();
+        return;
+    }
+
+    jobject result = env->CallObjectMethod(ctx->global_callback, invokeMethod, boxed);
+    if (env->ExceptionCheck())
+        env->ExceptionClear();
+    if (result)
+        env->DeleteLocalRef(result);
+    env->DeleteLocalRef(boxed);
 }
 
 static inline int32_t copy_audio_data(int32_t frames_requested,

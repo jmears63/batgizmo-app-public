@@ -25,3 +25,9 @@
 -keep class org.batgizmo.app.LiveDataBridge {
     public static void onDataBufferReady(long, int);
 }
+
+# Native audio_out.cpp calls Function1.invoke(Object) on the playback
+# progress callback (Kotlin (Int) -> Unit). Keep the interface method name.
+-keep class kotlin.jvm.functions.Function1 {
+    public java.lang.Object invoke(java.lang.Object);
+}

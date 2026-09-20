@@ -217,6 +217,13 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
+    /**
+     * Audio playback modes passed to native as [value] ints (JNI has no enum names).
+     *
+     * WARNING: These numeric values must stay in sync with `dsp_playback_mode_t` in
+     * `app/src/main/cpp/dsp_types.h`. Renaming is fine; reordering or changing a
+     * `value` without updating C++ will silently pick the wrong DSP path.
+     */
     enum class AudioPlaybackModeOptions(val value: Int, val label: String) : EnumHelper {
         AUTO_TUNED_HETERODYNE(5, "Auto heterodyne"),
         SINGLE_HETERODYNE(0, "Classic heterodyne"),

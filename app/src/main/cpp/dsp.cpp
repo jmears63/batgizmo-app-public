@@ -33,6 +33,7 @@
 static volatile int s_decimation_factor = 0;
 
 typedef enum {
+    /* Internal remapping of dsp_playback_mode_t — not the Kotlin/JNI contract. */
     DSP_MODE_HETERODYNE = 0,
     DSP_MODE_DIRECT = 1,
     DSP_MODE_PITCH_SHIFT = 2,

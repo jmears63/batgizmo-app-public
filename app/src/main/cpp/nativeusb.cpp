@@ -537,6 +537,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromStream(JNIEnv *env, jobje
 
     pthread_mutex_lock(&s_mutex);
 
+    /* playback_mode: int from Settings.AudioPlaybackModeOptions; must match dsp_playback_mode_t. */
     jboolean rc = audio_out_start_live(env, audio_device_id,
                                        s_sample_rate, s_nominal_samples_per_frame,
                                        heterodyne1_kHz, heterodyne2_kHz,
@@ -562,6 +563,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromLiveInput(JNIEnv *env, jo
 
     pthread_mutex_lock(&s_mutex);
 
+    /* playback_mode: int from Settings.AudioPlaybackModeOptions; must match dsp_playback_mode_t. */
     jboolean rc = audio_out_start_live(env, audio_device_id,
                                        sample_rate, sample_rate / 1000,
                                        heterodyne1_kHz, heterodyne2_kHz,
@@ -617,6 +619,7 @@ Java_org_batgizmo_app_pipeline_NativeUSB_startAudioFromBuffer(JNIEnv *env, jobje
 
     pthread_mutex_lock(&s_mutex);
 
+    /* playback_mode: int from Settings.AudioPlaybackModeOptions; must match dsp_playback_mode_t. */
     jboolean rc = audio_out_start_buffer(env, audio_device_id, sample_rate,
                                          heterodyne1_kHz, heterodyne2_kHz,
                                          audio_boost_factor, buffer,

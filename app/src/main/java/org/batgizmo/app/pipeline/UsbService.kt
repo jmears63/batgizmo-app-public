@@ -857,11 +857,16 @@ class UsbService(private val context: Context,
         ON
     }
 
+    /**
+     * Legacy mode ints; do not confuse with [Settings.AudioPlaybackModeOptions],
+     * which is what native DSP actually receives today (`dsp_playback_mode_t`).
+     * If this enum is wired to native again, keep its `value`s in lockstep with C++.
+     */
     enum class AudioMode(val value: Int) {
-        NONE(0),                    // !!!
-        DIRECT(1),                  // !!! Don't change these values, they match an enum in native code.
-        HETERODYNE(2),              // !!!
-        FREQUENCY_DIVISION(3)       // !!!
+        NONE(0),
+        DIRECT(1),
+        HETERODYNE(2),
+        FREQUENCY_DIVISION(3)
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager;

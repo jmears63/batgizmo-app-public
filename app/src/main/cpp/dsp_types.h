@@ -26,7 +26,12 @@
 #include <stdint.h>
 
 /*
- * Playback mode values must match Settings.AudioPlaybackModeOptions in Kotlin.
+ * Playback modes received from Kotlin as plain ints (JNI has no enum names).
+ *
+ * WARNING: Numeric values must stay in sync with
+ * Settings.AudioPlaybackModeOptions in Settings.kt. Renaming is fine; changing
+ * an assigned number without updating Kotlin will silently pick the wrong DSP
+ * path. (This is not a minify/R8 issue — it is a duplicated numeric contract.)
  */
 typedef enum {
     DSP_PLAYBACK_SINGLE_HETERODYNE = 0,
