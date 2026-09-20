@@ -22,9 +22,7 @@
 
 package org.batgizmo.app.ui
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -41,21 +39,53 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import org.batgizmo.app.ml.MlSummaryAccumulator
 import org.batgizmo.app.ml.MlSummaryEntry
 import kotlin.time.Duration.Companion.seconds
 
-private const val FRESH_AGE_SEC = 10.0
-private const val RECENT_AGE_SEC = 20.0
+/**
+ * Layout and age-styling knobs for [MlResultsPanel]. Padding is defined once and
+ * reused for both the modifier and the reserved panel height.
+ */
+private object MlResultsPanelStyle {
+    val paddingHorizontal: Dp = 4.dp
+    val paddingVertical: Dp = 2.dp
+
+    /** Live: newer than this (seconds) → [freshColor]. */
+    const val FRESH_AGE_SEC = 10.0
+    /** Live: newer than this (seconds) → overlay grey; else [staleColor]. */
+    const val RECENT_AGE_SEC = 20.0
+
+    val freshColor = Color.White
+    val recentColor: Color get() = SpectrogramOverlayStyle.textColor
+    val staleColor = Color(0xFF555555)
+
+    fun panelHeight(rowHeight: Dp): Dp =
+        rowHeight * MlSummaryAccumulator.MAX_SUMMARY_ENTRIES + paddingVertical * 2
+
+    fun colorFor(ageColors: Boolean, ageSec: Double): Color {
+        if (!ageColors) return recentColor
+        return when {
+            ageSec < FRESH_AGE_SEC -> freshColor
+            ageSec < RECENT_AGE_SEC -> recentColor
+            else -> staleColor
+        }
+    }
+
+    fun formatEntry(entry: MlSummaryEntry): String =
+        "${entry.label}  ${"%.0f".format(entry.confidence * 100)}%"
+}
 
 /**
  * Spectrogram overlay panel for the running ML summary.
  *
  * [summary] is already ordered and capped by [MlSummaryAccumulator].
- * When [ageColors] is true (live): under 10s white, under 20s overlay grey,
- * otherwise darker grey. When false (viewer): all rows use
+ * When [ageColors] is true (live): under [MlResultsPanelStyle.FRESH_AGE_SEC]
+ * white, under [MlResultsPanelStyle.RECENT_AGE_SEC] overlay grey, otherwise
+ * darker grey. When false (viewer): all rows use
  * [SpectrogramOverlayStyle.textColor] with no age variation.
  */
 @Composable
@@ -64,9 +94,8 @@ fun MlResultsPanel(
     summary: List<MlSummaryEntry> = emptyList(),
     ageColors: Boolean = true,
 ) {
-    val panelHeight = with(LocalDensity.current) {
-        (SpectrogramOverlayStyle.textSize * MlSummaryAccumulator.MAX_SUMMARY_ENTRIES).toDp()
-    }
+    val rowHeight = with(LocalDensity.current) { SpectrogramOverlayStyle.textSize.toDp() }
+    val panelHeight = MlResultsPanelStyle.panelHeight(rowHeight)
 
     var nowEpochSec by remember {
         mutableDoubleStateOf(System.currentTimeMillis() / 1000.0)
@@ -80,37 +109,32 @@ fun MlResultsPanel(
         }
     }
 
-    Box(
+    Column(
         modifier
             .height(panelHeight)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        contentAlignment = Alignment.TopStart,
+            .padding(
+                horizontal = MlResultsPanelStyle.paddingHorizontal,
+                vertical = MlResultsPanelStyle.paddingVertical,
+            ),
+        horizontalAlignment = Alignment.Start,
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.Start,
-        ) {
-            for (entry in summary) {
-                val color = if (!ageColors) {
-                    SpectrogramOverlayStyle.textColor
-                } else {
-                    val ageSec = nowEpochSec - entry.lastSeenAtEpochSec
-                    when {
-                        ageSec < FRESH_AGE_SEC -> Color.White
-                        ageSec < RECENT_AGE_SEC -> SpectrogramOverlayStyle.textColor
-                        else -> Color(0xFF555555)
-                    }
-                }
-                Text(
-                    text = "${entry.label}  ${"%.0f".format(entry.confidence * 100)}%",
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = SpectrogramOverlayStyle.textStyle.copy(color = color),
-                    color = color,
-                    textAlign = TextAlign.Start,
-                )
-            }
+        for (entry in summary) {
+            val color = MlResultsPanelStyle.colorFor(
+                ageColors,
+                nowEpochSec - entry.lastSeenAtEpochSec,
+            )
+            Text(
+                text = MlResultsPanelStyle.formatEntry(entry),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(rowHeight),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                style = SpectrogramOverlayStyle.textStyle.copy(color = color),
+                color = color,
+                textAlign = TextAlign.Start,
+            )
         }
     }
 }

@@ -23,7 +23,9 @@
 package org.batgizmo.app.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.sp
 
 /** Shared text appearance for spectrogram overlay chrome (ML panel, time/details, etc.). */
@@ -32,6 +34,13 @@ object SpectrogramOverlayStyle {
     val textColor = Color.Gray
     val textStyle = TextStyle(
         fontSize = textSize,
+        // Tight metrics so N×textSize panel height fits N rows without clipping.
+        lineHeight = textSize,
+        lineHeightStyle = LineHeightStyle(
+            alignment = LineHeightStyle.Alignment.Center,
+            trim = LineHeightStyle.Trim.Both,
+        ),
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
         color = textColor,
     )
 }
