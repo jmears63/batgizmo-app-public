@@ -1148,7 +1148,7 @@ object MlCatalog {
     private const val BYOM_MANIFEST = "byom.json"
     private const val MAX_BYOM_UNCOMPRESSED_BYTES = 512L * 1024L * 1024L
     private const val DEFAULT_BYOM_MIC_SAMPLE_RATE_HZ = 48_000
-    private const val MIN_BYOM_MIC_SAMPLE_RATE_HZ = 36_000
+    private const val MIN_BYOM_MIC_SAMPLE_RATE_HZ = 32_000
     private const val MAX_BYOM_MIC_SAMPLE_RATE_HZ = 512_000
     private const val MIN_BYOM_MODEL_SAMPLE_RATE_HZ = 48_000
     private const val MAX_BYOM_MODEL_SAMPLE_RATE_HZ = 512_000
