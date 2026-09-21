@@ -2045,8 +2045,8 @@ class UIModel(application: Application,
         settings.isAutoIdEnabled() && liveMlAccepting
 
     /**
-     * Cheap path from [USBSourceStep]: copy samples into [MlClient] chunk buffers when
-     * Auto Id is accepting. Does not take [mutex].
+     * Cheap path from [USBSourceStep]: submit samples to [MlClient] when Auto Id is
+     * accepting. Does not take [mutex].
      */
     fun maybeSubmitLiveAudioToMl(buffer: ShortArray, offset: Int, count: Int) {
         if (!shouldSubmitLiveAudioToMl() || count <= 0) return

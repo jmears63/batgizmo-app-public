@@ -23,30 +23,24 @@
 package org.batgizmo.app.ml
 
 import android.content.Context
+import android.os.Process
 import android.os.SystemClock
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.ClosedSendChannelException
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.min
 
 /**
- * How [MlProcessor.tryEnqueue] behaves when many chunks are already waiting.
+ * How [MlProcessor.tryEnqueue] behaves when many buffers are already waiting.
  *
- * - [DropIfFull]: live audio — never queue more than [MlProcessor.MAX_LIVE_QUEUED_CHUNKS];
- *   drop new chunks so inference stays near real time.
- * - [QueueAll]: file viewer — accept every chunk (unlimited channel); process in order
- *   no matter how long it takes.
+ * - [DropIfFull]: live audio — never queue more than [MlProcessor.MAX_LIVE_QUEUED];
+ *   drop new buffers so inference stays near real time.
+ * - [QueueAll]: file viewer — accept every buffer; process in order no matter how long
+ *   it takes.
  */
 enum class MlOverflowPolicy {
     DropIfFull,
@@ -56,119 +50,378 @@ enum class MlOverflowPolicy {
 /**
  * ML processing backend.
  *
- * Raw chunks go through a pool of resample workers (r8brain, multi-core), then a
- * single infer worker owns the active [MlModelBase] (LiteRT is not thread-safe).
+ * Raw PCM is resampled once on a dedicated thread (stateful r8brain → model-rate
+ * ring), then overlapping windows are offered to a single infer thread (LiteRT
+ * is not thread-safe).
  *
- * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingCount]
- * already reaches [MAX_LIVE_QUEUED_CHUNKS].
+ * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingRawCount]
+ * already reaches [MAX_LIVE_QUEUED].
  */
 class MlProcessor(
     context: Context,
     private val modelId: String,
 ) {
-    /**
-     * One owned PCM chunk awaiting analysis.
-     * [buffer] is fully owned; [offset] / [count] select the live region.
-     */
-    data class ChunkSubmission(
-        val buffer: ShortArray,
-        val offset: Int,
-        val count: Int,
-        val sampleRateHz: Int,
-        /** Unix-epoch seconds at the first sample of this chunk. */
-        val observedAtEpochSec: Double,
-        val chunkId: Int,
-        /** [SystemClock.elapsedRealtime] when the client queued this chunk. */
-        val queuedAtElapsedRealtimeMs: Long,
-    )
+    private sealed class RawItem {
+        class Audio(
+            val buffer: ShortArray,
+            val sampleRateHz: Int,
+            val observedAtEpochSec: Double,
+            val isLast: Boolean,
+            val bufferId: Int,
+            val queuedAtElapsedRealtimeMs: Long,
+            val epoch: Long,
+        ) : RawItem()
 
-    private data class ResampledJob(
-        val window: FloatArray,
-        val chunkId: Int,
-        val epoch: Long,
-        val observedAtEpochSec: Double,
-        val queuedAtElapsedRealtimeMs: Long,
-        /** Wall time spent waiting in the raw chunk queue before resample started. */
+        /** Clear ring + resampler; keep workers alive. */
+        object ClearStream : RawItem()
+
+        object Shutdown : RawItem()
+    }
+
+    private sealed class InferItem {
+        class Job(
+            val window: FloatArray,
+            val bufferId: Int,
+            val epoch: Long,
+            val observedAtEpochSec: Double,
+            val queuedAtElapsedRealtimeMs: Long,
+            val queueWaitMs: Long,
+            val resampleMs: Long,
+            val inferQueuedAtElapsedRealtimeMs: Long,
+            val inferQueueLengthWhenQueued: Int,
+        ) : InferItem()
+
+        object Shutdown : InferItem()
+    }
+
+    /** Timing / identity carried from a raw buffer through window emission. */
+    private data class EmissionContext(
+        val windowing: MlWindowing,
+        val bufferId: Int,
+        val jobEpoch: Long,
+        val queuedAtMs: Long,
         val queueWaitMs: Long,
-        /** Wall time spent resampling this chunk. */
-        val resampleMs: Long,
-        /** [SystemClock.elapsedRealtime] when this job was offered to the infer queue. */
-        val inferQueuedAtElapsedRealtimeMs: Long,
-        /** Infer-queue depth when this job was added (includes this job). */
-        val inferQueueLengthWhenQueued: Int,
-    )
+        val resampleStartedAtMs: Long,
+    ) {
+        val hop: Int get() = windowing.hopSamples()
+        val resampleMs: Long
+            get() = SystemClock.elapsedRealtime() - resampleStartedAtMs
+    }
+
+    /** Model-rate float ring: append resampled samples, copy fixed windows with hop. */
+    private class FloatRing {
+        private var buf = FloatArray(0)
+        private var head = 0
+        var size: Int = 0
+            private set
+
+        fun clear() {
+            head = 0
+            size = 0
+        }
+
+        fun append(samples: FloatArray, offset: Int = 0, count: Int = samples.size - offset) {
+            if (count <= 0) return
+            ensureCapacity(size + count)
+            var src = offset
+            var remaining = count
+            while (remaining > 0) {
+                val tail = (head + size) % buf.size
+                val contiguous = min(remaining, buf.size - tail)
+                System.arraycopy(samples, src, buf, tail, contiguous)
+                size += contiguous
+                src += contiguous
+                remaining -= contiguous
+            }
+        }
+
+        fun appendZeros(count: Int) {
+            if (count <= 0) return
+            ensureCapacity(size + count)
+            var remaining = count
+            while (remaining > 0) {
+                val tail = (head + size) % buf.size
+                val contiguous = min(remaining, buf.size - tail)
+                buf.fill(0f, tail, tail + contiguous)
+                size += contiguous
+                remaining -= contiguous
+            }
+        }
+
+        fun copyWindow(dest: FloatArray) {
+            require(dest.size <= size) { "window larger than ring" }
+            val first = min(dest.size, buf.size - head)
+            System.arraycopy(buf, head, dest, 0, first)
+            if (first < dest.size) {
+                System.arraycopy(buf, 0, dest, first, dest.size - first)
+            }
+        }
+
+        fun discard(n: Int) {
+            require(n in 0..size) { "discard out of range" }
+            if (n == 0) return
+            head = (head + n) % buf.size
+            size -= n
+            if (size == 0) head = 0
+        }
+
+        private fun ensureCapacity(needed: Int) {
+            if (needed <= buf.size) return
+            val grown = FloatArray(
+                needed.coerceAtLeast((buf.size * 2).coerceAtLeast(16))
+            )
+            if (size > 0) {
+                val first = min(size, buf.size - head)
+                System.arraycopy(buf, head, grown, 0, first)
+                if (first < size) {
+                    System.arraycopy(buf, 0, grown, first, size - first)
+                }
+            }
+            buf = grown
+            head = 0
+        }
+    }
+
+    /**
+     * Resample-thread state: stateful resampler, model-rate ring, and timeline.
+     * Not thread-safe — owned exclusively by [resampleLoop].
+     */
+    private inner class ResampleStream {
+        val ring = FloatRing()
+        private var resamplerHandle = 0L
+        private var resamplerInHz = 0
+        private var resamplerOutHz = 0
+        private var ringStartEpochSec = 0.0
+        private var ringHasTimeline = false
+        var streamEpoch: Long = epoch.get()
+
+        fun noteRing() {
+            ringFillForUi = ring.size
+            publishBuffering()
+        }
+
+        fun clear() {
+            destroyResampler()
+            ring.clear()
+            ringHasTimeline = false
+            streamEpoch = epoch.get()
+            noteRing()
+        }
+
+        fun ensureResampler(inHz: Int, outHz: Int): Boolean {
+            val identity = inHz == outHz
+            val ready =
+                resamplerInHz == inHz &&
+                    resamplerOutHz == outHz &&
+                    (identity || resamplerHandle != 0L)
+            if (ready) return true
+
+            destroyResampler()
+            resamplerInHz = inHz
+            resamplerOutHz = outHz
+            if (identity) return true
+
+            val handle = nativeResamplerCreate(inHz, outHz)
+            if (handle == 0L) {
+                Timber.e("MlProcessor: failed to create resampler $inHz → $outHz")
+                resamplerInHz = 0
+                resamplerOutHz = 0
+                return false
+            }
+            resamplerHandle = handle
+            return true
+        }
+
+        fun appendPcm(pcm: ShortArray, offset: Int = 0, count: Int = pcm.size - offset) {
+            if (count <= 0) return
+            val floats = FloatArray(count)
+            for (i in 0 until count) {
+                floats[i] = pcm[offset + i] / 32768f
+            }
+            ring.append(floats)
+        }
+
+        fun appendResampledOrIdentity(
+            pcm: ShortArray,
+            captureRateHz: Int,
+            modelRateHz: Int,
+            bufferId: Int,
+            observedAtEpochSec: Double,
+        ) {
+            if (pcm.isEmpty()) return
+            if (!ringHasTimeline) {
+                ringStartEpochSec = observedAtEpochSec
+                ringHasTimeline = true
+            }
+            if (captureRateHz == modelRateHz) {
+                appendPcm(pcm)
+                return
+            }
+            val out = nativeResamplerProcess(resamplerHandle, pcm, 0, pcm.size)
+            if (out == null) {
+                Timber.e("MlProcessor: resample failed on buffer #$bufferId")
+            } else {
+                appendPcm(out)
+            }
+        }
+
+        fun flushResampler() {
+            if (resamplerHandle == 0L) return
+            val flushed = nativeResamplerFlush(resamplerHandle) ?: return
+            if (flushed.isNotEmpty()) appendPcm(flushed)
+        }
+
+        fun emitFullWindows(ctx: EmissionContext) {
+            val w = ctx.windowing
+            val resampleMs = ctx.resampleMs
+            while (ring.size >= w.windowSamples) {
+                if (ctx.jobEpoch != epoch.get()) return
+                val window = FloatArray(w.windowSamples)
+                ring.copyWindow(window)
+                val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
+                offerWindow(window, ctx, observed, resampleMs)
+                ring.discard(ctx.hop)
+                if (ringHasTimeline) {
+                    ringStartEpochSec += ctx.hop.toDouble() / w.modelSampleRateHz
+                }
+            }
+            noteRing()
+        }
+
+        /**
+         * Emit every full window, then zero-pad any partial remainder into one
+         * final window. No-op if the ring is empty.
+         */
+        fun emitEndOfStream(ctx: EmissionContext) {
+            if (ring.size <= 0) return
+            if (ctx.jobEpoch != epoch.get()) return
+            emitFullWindows(ctx)
+            if (ring.size <= 0 || ctx.jobEpoch != epoch.get()) return
+            if (ring.size >= ctx.windowing.windowSamples) return
+
+            ring.appendZeros(ctx.windowing.windowSamples - ring.size)
+            val window = FloatArray(ctx.windowing.windowSamples)
+            ring.copyWindow(window)
+            val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
+            offerWindow(window, ctx, observed, ctx.resampleMs)
+            ring.clear()
+            ringHasTimeline = false
+            noteRing()
+        }
+
+        private fun destroyResampler() {
+            if (resamplerHandle != 0L) {
+                nativeResamplerDestroy(resamplerHandle)
+                resamplerHandle = 0L
+            }
+            resamplerInHz = 0
+            resamplerOutHz = 0
+        }
+
+        private fun offerWindow(
+            window: FloatArray,
+            ctx: EmissionContext,
+            observedAtEpochSec: Double,
+            resampleMs: Long,
+        ) {
+            if (ctx.jobEpoch != epoch.get()) return
+            val inferQueuedAtMs = SystemClock.elapsedRealtime()
+            val inferDepth = inferPendingCount.incrementAndGet()
+            markWorkStarted()
+            val offered = inferQueue.offer(
+                InferItem.Job(
+                    window = window,
+                    bufferId = ctx.bufferId,
+                    epoch = ctx.jobEpoch,
+                    observedAtEpochSec = observedAtEpochSec,
+                    queuedAtElapsedRealtimeMs = ctx.queuedAtMs,
+                    queueWaitMs = ctx.queueWaitMs,
+                    resampleMs = resampleMs,
+                    inferQueuedAtElapsedRealtimeMs = inferQueuedAtMs,
+                    inferQueueLengthWhenQueued = inferDepth,
+                )
+            )
+            if (!offered) {
+                inferPendingCount.decrementAndGet()
+                markWorkFinished()
+                Timber.w(
+                    "MlProcessor: infer queue rejected window from buffer #${ctx.bufferId}"
+                )
+            }
+        }
+    }
 
     companion object {
         /**
-         * Soft cap on queued chunks in live mode ([MlOverflowPolicy.DropIfFull]).
+         * Soft cap on queued raw buffers in live mode ([MlOverflowPolicy.DropIfFull]).
          * Viewer mode ([MlOverflowPolicy.QueueAll]) ignores this.
          */
-        const val MAX_LIVE_QUEUED_CHUNKS = 10
-
-        /**
-         * Parallel resample workers. Caps at 4 to limit memory/bandwidth contention.
-         */
-        fun defaultResampleParallelism(): Int =
-            Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+        const val MAX_LIVE_QUEUED = 10
 
         init {
             System.loadLibrary("batgizmo-native")
         }
 
-        /**
-         * Resample mono 16-bit PCM to [outputSampleRateHz] via r8brain (native).
-         * Returns a newly allocated buffer, or null on failure.
-         * Safe to call from multiple threads (oneshot resampler per call).
-         */
         @JvmStatic
-        private external fun nativeResample(
+        private external fun nativeResamplerCreate(
+            inputSampleRateHz: Int,
+            outputSampleRateHz: Int,
+        ): Long
+
+        @JvmStatic
+        private external fun nativeResamplerProcess(
+            handle: Long,
             input: ShortArray,
             offset: Int,
             count: Int,
-            inputSampleRateHz: Int,
-            outputSampleRateHz: Int,
         ): ShortArray?
+
+        @JvmStatic
+        private external fun nativeResamplerFlush(handle: Long): ShortArray?
+
+        @JvmStatic
+        private external fun nativeResamplerDestroy(handle: Long)
     }
 
     private val appContext = context.applicationContext
-    /** Unlimited so viewer mode can queue an entire page; live drops via [pendingCount]. */
-    private val rawQueue = Channel<ChunkSubmission>(capacity = Channel.UNLIMITED)
-    /** Resampled windows waiting for the single infer thread. */
-    private val inferQueue = Channel<ResampledJob>(capacity = Channel.UNLIMITED)
-    private val pendingCount = AtomicInteger(0)
-    /** Jobs accepted into [inferQueue] but not yet taken by [inferLoop]. */
+    private val rawQueue = LinkedBlockingQueue<RawItem>()
+    private val inferQueue = LinkedBlockingQueue<InferItem>()
+
+    private val pendingRawCount = AtomicInteger(0)
     private val inferPendingCount = AtomicInteger(0)
-    private val chunkIdSeq = AtomicInteger(0)
-    /** Bumped by [clearQueue] so in-flight resample results are dropped. */
+    private val bufferIdSeq = AtomicInteger(0)
+    /** Bumped by [clearQueue] / [reset] so in-flight work is ignored. */
     private val epoch = AtomicLong(0)
 
-    /**
-     * Chunks accepted for processing that have not yet finished (infer done,
-     * or abandoned after resample/epoch drop / queue drain).
-     */
     private val activeWorkCount = AtomicInteger(0)
     private val mutableBusyFlow = MutableStateFlow(false)
-    /** True while queued or in-flight Auto Id work remains. */
+    /**
+     * True while any work unit is outstanding (queued or in-flight raw/infer).
+     * Drives the Auto Id sparkle together with [isBuffering].
+     */
     val isBusy: StateFlow<Boolean> = mutableBusyFlow.asStateFlow()
+
+    private val mutableBufferingFlow = MutableStateFlow(false)
+    /**
+     * True while raw PCM is waiting to be resampled, or the model-rate ring holds
+     * a partial window (not yet a full infer input). Does not include infer-only
+     * work — that is covered by [isBusy].
+     */
+    val isBuffering: StateFlow<Boolean> = mutableBufferingFlow.asStateFlow()
+
+    /** Ring fill observed on the resample thread; used for [isBuffering]. */
+    @Volatile
+    private var ringFillForUi: Int = 0
 
     @Volatile
     private var overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull
 
-    /** Species-name language index from settings; out-of-range falls back to 0. */
     @Volatile
     private var labelLanguageIndex: Int = 0
 
-    /**
-     * Label keys the user chose to ignore (settings suppressions where value is
-     * true). Matched against [MlModelBase.labelKeys].
-     */
     @Volatile
     private var suppressedLabelKeys: Set<String> = emptySet()
 
-    /**
-     * Optional BirdNET species-range query captured for this processor session.
-     * Applied once when a [BirdNetModel] is first opened.
-     */
     @Volatile
     private var geoSnapshot: BirdNetModel.GeoSnapshot? = null
 
@@ -177,31 +430,35 @@ class MlProcessor(
 
     private var model: MlModelBase? = null
 
-    /** Switch live drop-vs-viewer queue-all behaviour. Safe to call from any thread. */
+    /**
+     * Capture rate from the last [reset]. Recorded for API honesty; each
+     * [tryEnqueue] still carries its own rate (resampler adapts if it differs).
+     */
+    @Volatile
+    private var captureSampleRateHz: Int = 0
+
+    /**
+     * True after [start] until [close] begins. Cleared at the start of [close]
+     * so [tryEnqueue] stops accepting before workers are torn down.
+     */
+    @Volatile
+    private var running = false
+
+    private var resampleThread: Thread? = null
+    private var inferThread: Thread? = null
+
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
         overflowPolicy = policy
     }
 
-    /** Update display-name language index for subsequent detections. Safe from any thread. */
     fun setLabelLanguage(languageIndex: Int) {
         labelLanguageIndex = languageIndex
     }
 
-    /**
-     * Update user suppressions for subsequent detections. Keys with value `true`
-     * are ignored (in addition to labels JSON `discard`). Safe from any thread.
-     */
     fun setSuppressions(suppressions: Map<String, Boolean>) {
         suppressedLabelKeys = suppressions.filterValues { it }.keys
     }
 
-    /**
-     * Set the BirdNET geo filter query. First non-null snapshot wins so the
-     * species-range mask is computed once per session and does not track later
-     * GPS updates; use [clearGeoSnapshot] before applying a new file/live
-     * location. Applied when the model is first loaded (or immediately if
-     * already loaded and not yet resolved).
-     */
     fun setGeoSnapshot(snapshot: BirdNetModel.GeoSnapshot?) {
         if (snapshot == null) return
         if (geoSnapshot != null) return
@@ -212,10 +469,6 @@ class MlProcessor(
         }
     }
 
-    /**
-     * Drop any stored geo snapshot and reset a loaded [BirdNetModel] geo filter
-     * so a new location can be applied (viewer file change / live restart).
-     */
     fun clearGeoSnapshot() {
         geoSnapshot = null
         val opened = model
@@ -224,43 +477,79 @@ class MlProcessor(
         }
     }
 
-    /** Apply windowing from the selected model descriptor (before [run]). */
     fun setWindowing(windowing: MlWindowing) {
         this.windowing = windowing
     }
 
     /**
-     * Discard queued raw and resampled work. In-flight resample/infer may still
-     * finish; stale resampled jobs are ignored via [epoch].
+     * Record the capture sample rate and clear stream/queue state.
+     * Must be called before [tryEnqueue], and again whenever the rate changes.
+     */
+    fun reset(sampleRateHz: Int) {
+        require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
+        captureSampleRateHz = sampleRateHz
+        clearQueue()
+    }
+
+    /**
+     * Discard queued raw and infer work and reset the resample stream.
+     *
+     * Each queued [RawItem.Audio] / [InferItem.Job] holds one [activeWorkCount]
+     * unit: this method finishes those units. In-flight items (already taken by
+     * a worker) are finished by that worker's `finally` / epoch skip path — never
+     * by both. [Shutdown] sentinels are preserved if encountered while draining.
      */
     fun clearQueue() {
         val newEpoch = epoch.incrementAndGet()
         var dropped = 0
-        while (rawQueue.tryReceive().isSuccess) {
-            dropped++
-            pendingCount.decrementAndGet()
-            markWorkFinished()
+        var sawRawShutdown = false
+        while (true) {
+            val item = rawQueue.poll() ?: break
+            when (item) {
+                is RawItem.Audio -> {
+                    dropped++
+                    pendingRawCount.decrementAndGet()
+                    markWorkFinished()
+                }
+                RawItem.ClearStream -> Unit
+                RawItem.Shutdown -> sawRawShutdown = true
+            }
         }
-        while (inferQueue.tryReceive().isSuccess) {
-            dropped++
-            inferPendingCount.decrementAndGet()
-            markWorkFinished()
+        var sawInferShutdown = false
+        while (true) {
+            val item = inferQueue.poll() ?: break
+            when (item) {
+                is InferItem.Job -> {
+                    dropped++
+                    inferPendingCount.decrementAndGet()
+                    markWorkFinished()
+                }
+                InferItem.Shutdown -> sawInferShutdown = true
+            }
         }
-        pendingCount.set(0)
-        inferPendingCount.set(0)
+        // Do not pendingRawCount.set(0): in-flight takes already decremented;
+        // forcing zero would desync the live depth cap from the real queue.
+        rawQueue.offer(RawItem.ClearStream)
+        if (sawRawShutdown) {
+            rawQueue.offer(RawItem.Shutdown)
+        }
+        if (sawInferShutdown) {
+            inferQueue.offer(InferItem.Shutdown)
+        }
         if (dropped > 0) {
             Timber.i("MlProcessor: cleared $dropped queued job(s) (epoch=$newEpoch)")
         }
+        publishBuffering()
     }
 
     /**
-     * Offer a chunk for background processing without blocking.
+     * Offer PCM for background processing without blocking.
      *
-     * On success, ownership of [buffer] transfers to this processor (or of a
-     * copied slice when [offset]/[count] is not the whole array). On failure
-     * (live depth limit, or closed), the caller retains ownership and may discard it.
+     * On success, ownership of [buffer] transfers when [offset] is 0 and [count]
+     * equals [buffer].size; otherwise a slice is copied. Empty [count] with
+     * [isLast] true flushes the stream (end of page / disconnect).
      *
-     * @return true if the chunk was queued
+     * @return true if accepted
      */
     fun tryEnqueue(
         buffer: ShortArray,
@@ -268,173 +557,235 @@ class MlProcessor(
         count: Int,
         sampleRateHz: Int,
         observedAtEpochSec: Double,
+        isLast: Boolean = false,
     ): Boolean {
         require(offset >= 0) { "offset must be >= 0" }
         require(count >= 0) { "count must be >= 0" }
         require(offset + count <= buffer.size) { "offset + count exceeds buffer size" }
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
-        if (count == 0) return true
+        if (!running) return false
+        if (count == 0 && !isLast) return true
 
         val owned =
-            if (offset == 0 && count == buffer.size) buffer
-            else buffer.copyOfRange(offset, offset + count)
+            when {
+                count == 0 -> ShortArray(0)
+                offset == 0 && count == buffer.size -> buffer
+                else -> buffer.copyOfRange(offset, offset + count)
+            }
 
-        val chunkId = chunkIdSeq.incrementAndGet()
-        val queuedAtElapsedRealtimeMs = SystemClock.elapsedRealtime()
-        val submission = ChunkSubmission(
-            buffer = owned,
-            offset = 0,
-            count = owned.size,
-            sampleRateHz = sampleRateHz,
-            observedAtEpochSec = observedAtEpochSec,
-            chunkId = chunkId,
-            queuedAtElapsedRealtimeMs = queuedAtElapsedRealtimeMs,
-        )
-
+        val bufferId = bufferIdSeq.incrementAndGet()
+        // Snapshot epoch after reserving the slot so a concurrent clearQueue that
+        // already bumped epoch either drains us (finishes our work unit) or we
+        // carry the new epoch.
         if (overflowPolicy == MlOverflowPolicy.DropIfFull) {
             while (true) {
-                val pending = pendingCount.get()
-                if (pending >= MAX_LIVE_QUEUED_CHUNKS) {
+                if (!running) return false
+                val pending = pendingRawCount.get()
+                if (pending >= MAX_LIVE_QUEUED) {
                     Timber.w(
-                        "MlProcessor live queue depth $pending: chunk #$chunkId dropped (${owned.size} samples)"
+                        "MlProcessor live queue depth $pending: buffer #$bufferId dropped " +
+                            "(${owned.size} samples)"
                     )
                     return false
                 }
-                if (pendingCount.compareAndSet(pending, pending + 1)) break
+                if (pendingRawCount.compareAndSet(pending, pending + 1)) break
             }
         } else {
-            pendingCount.incrementAndGet()
+            pendingRawCount.incrementAndGet()
         }
 
-        return try {
-            val result = rawQueue.trySend(submission)
-            if (!result.isSuccess) {
-                pendingCount.decrementAndGet()
-                Timber.w(
-                    "MlProcessor queue closed: chunk #$chunkId not accepted (${owned.size} samples)"
-                )
-            } else {
-                markWorkStarted()
-                Timber.i(
-                    "MlProcessor: queued chunk #$chunkId (${owned.size} samples), " +
-                        "queue length ${pendingCount.get()}"
-                )
-            }
-            result.isSuccess
-        } catch (_: ClosedSendChannelException) {
-            pendingCount.decrementAndGet()
-            false
+        markWorkStarted()
+        if (captureSampleRateHz != 0 && sampleRateHz != captureSampleRateHz) {
+            Timber.d(
+                "MlProcessor: enqueue rate $sampleRateHz Hz differs from " +
+                    "last reset $captureSampleRateHz Hz (buffer #$bufferId)"
+            )
         }
+        val submission = RawItem.Audio(
+            buffer = owned,
+            sampleRateHz = sampleRateHz,
+            observedAtEpochSec = observedAtEpochSec,
+            isLast = isLast,
+            bufferId = bufferId,
+            queuedAtElapsedRealtimeMs = SystemClock.elapsedRealtime(),
+            epoch = epoch.get(),
+        )
+        if (!running || !rawQueue.offer(submission)) {
+            pendingRawCount.decrementAndGet()
+            markWorkFinished()
+            Timber.w("MlProcessor: buffer #$bufferId not accepted")
+            return false
+        }
+        Timber.i(
+            "MlProcessor: queued buffer #$bufferId (${owned.size} samples" +
+                "${if (isLast) ", last" else ""}), queue length ${pendingRawCount.get()}"
+        )
+        publishBuffering()
+        return true
+    }
+
+    /** Start the resample and infer worker threads. Safe to call once. */
+    fun start(onResult: (MlResult) -> Unit) {
+        check(!running) { "MlProcessor already started" }
+        running = true
+        val resample = Thread({
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            resampleLoop()
+        }, "MlResample")
+        val infer = Thread({
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            inferLoop(onResult)
+        }, "MlInfer")
+        resampleThread = resample
+        inferThread = infer
+        resample.start()
+        infer.start()
     }
 
     /**
-     * Run resample workers and a single infer worker until [close].
-     *
-     * Resample is the CPU heavy task so is distributed across a thread pool.
-     * ML inference is not so heavy, and a single Interpreter instance only supports one
-     * thread. Interpreters are also memory intensive. So, there is only one Interpreter thread.
-     *
-     * @param resampleDispatcher multi-thread dispatcher for r8brain
-     * @param inferDispatcher single-thread dispatcher for LiteRT
-     * @param resampleParallelism number of concurrent resample coroutines
+     * Stop accepting work, wake workers, join them, then release the model.
+     * Idempotent. [running] is cleared first so [tryEnqueue] fails immediately.
      */
-    suspend fun run(
-        resampleDispatcher: CoroutineDispatcher,
-        inferDispatcher: CoroutineDispatcher,
-        resampleParallelism: Int,
-        onResult: (MlResult) -> Unit,
-    ) {
-        require(resampleParallelism >= 1) { "resampleParallelism must be >= 1" }
+    fun close() {
+        if (!running) return
+        running = false
+        rawQueue.offer(RawItem.Shutdown)
+        val resample = resampleThread
+        val infer = inferThread
         try {
-            coroutineScope {
-                val resampleJobs = List(resampleParallelism) { index ->
-                    launch(resampleDispatcher + CoroutineName("MlResample-$index")) {
-                        resampleLoop()
+            resample?.join(5_000)
+            infer?.join(5_000)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        if (resample?.isAlive == true || infer?.isAlive == true) {
+            Timber.w("MlProcessor: workers still alive after join; interrupting")
+            resample?.interrupt()
+            infer?.interrupt()
+            try {
+                resample?.join(1_000)
+                infer?.join(1_000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        // Model is owned by the infer thread until workers have stopped.
+        model?.close()
+        model = null
+        resampleThread = null
+        inferThread = null
+        activeWorkCount.set(0)
+        mutableBusyFlow.value = false
+        mutableBufferingFlow.value = false
+        ringFillForUi = 0
+    }
+
+    private fun resampleLoop() {
+        val stream = ResampleStream()
+        try {
+            while (true) {
+                when (val item = rawQueue.take()) {
+                    RawItem.Shutdown -> {
+                        stream.clear()
+                        inferQueue.offer(InferItem.Shutdown)
+                        break
+                    }
+                    RawItem.ClearStream -> stream.clear()
+                    is RawItem.Audio -> processAudio(stream, item)
+                }
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            inferQueue.offer(InferItem.Shutdown)
+        } finally {
+            stream.clear()
+        }
+    }
+
+    private fun processAudio(stream: ResampleStream, item: RawItem.Audio) {
+        pendingRawCount.decrementAndGet()
+        val dequeuedAtMs = SystemClock.elapsedRealtime()
+        val queueWaitMs = dequeuedAtMs - item.queuedAtElapsedRealtimeMs
+        try {
+            if (item.epoch != epoch.get()) return
+            val w = resolveWindowing() ?: return
+            val ctx = EmissionContext(
+                windowing = w,
+                bufferId = item.bufferId,
+                jobEpoch = item.epoch,
+                queuedAtMs = item.queuedAtElapsedRealtimeMs,
+                queueWaitMs = queueWaitMs,
+                resampleStartedAtMs = dequeuedAtMs,
+            )
+
+            // Defense in depth with MlClient.willAcceptAudio: client avoids
+            // enqueueing useless live audio; we still gate here for BYOM /
+            // model switches and flush-only isLast submits below the min rate.
+            if (item.sampleRateHz < w.minSampleRateHz) {
+                Timber.i(
+                    "MlProcessor: buffer #${item.bufferId} dropped " +
+                        "(${item.sampleRateHz} Hz < min ${w.minSampleRateHz} Hz)"
+                )
+                if (item.isLast) {
+                    stream.emitEndOfStream(ctx)
+                    stream.clear()
+                }
+                return
+            }
+
+            if (item.epoch != stream.streamEpoch) {
+                stream.clear()
+                stream.streamEpoch = item.epoch
+            }
+            if (!stream.ensureResampler(item.sampleRateHz, w.modelSampleRateHz)) {
+                return
+            }
+
+            stream.appendResampledOrIdentity(
+                item.buffer,
+                item.sampleRateHz,
+                w.modelSampleRateHz,
+                item.bufferId,
+                item.observedAtEpochSec,
+            )
+            stream.emitFullWindows(ctx)
+
+            if (item.isLast) {
+                stream.flushResampler()
+                stream.emitEndOfStream(ctx)
+                stream.clear()
+            } else {
+                stream.noteRing()
+            }
+        } finally {
+            markWorkFinished()
+            publishBuffering()
+        }
+    }
+
+    private fun inferLoop(onResult: (MlResult) -> Unit) {
+        try {
+            while (true) {
+                when (val item = inferQueue.take()) {
+                    InferItem.Shutdown -> break
+                    is InferItem.Job -> {
+                        inferPendingCount.decrementAndGet()
+                        if (item.epoch != epoch.get()) {
+                            markWorkFinished()
+                            publishBuffering()
+                            continue
+                        }
+                        try {
+                            onResult(inferWindow(item))
+                        } finally {
+                            markWorkFinished()
+                            publishBuffering()
+                        }
                     }
                 }
-                val inferJob = launch(inferDispatcher + CoroutineName("MlInfer")) {
-                    inferLoop(onResult)
-                }
-                resampleJobs.joinAll()
-                inferQueue.close()
-                inferJob.join()
             }
-        } catch (_: CancellationException) {
-            // Normal on shutdown.
-        } finally {
-            model?.close()
-            model = null
-            activeWorkCount.set(0)
-            mutableBusyFlow.value = false
-        }
-    }
-
-    /** Stop accepting chunks; resample workers exit, then infer drains and exits. */
-    fun close() {
-        rawQueue.close()
-    }
-
-    private suspend fun resampleLoop() {
-        try {
-            for (submission in rawQueue) {
-                pendingCount.decrementAndGet()
-                val dequeuedAtMs = SystemClock.elapsedRealtime()
-                val queueWaitMs = dequeuedAtMs - submission.queuedAtElapsedRealtimeMs
-                val jobEpoch = epoch.get()
-                val chunkId = submission.chunkId
-                val window = resampleToWindow(submission, chunkId)
-                val resampleMs = SystemClock.elapsedRealtime() - dequeuedAtMs
-                if (window == null) {
-                    markWorkFinished()
-                    continue
-                }
-                if (jobEpoch != epoch.get()) {
-                    markWorkFinished()
-                    continue
-                }
-                try {
-                    val inferQueuedAtMs = SystemClock.elapsedRealtime()
-                    val inferQueueLength = inferPendingCount.incrementAndGet()
-                    inferQueue.send(
-                        ResampledJob(
-                            window,
-                            chunkId,
-                            jobEpoch,
-                            submission.observedAtEpochSec,
-                            submission.queuedAtElapsedRealtimeMs,
-                            queueWaitMs,
-                            resampleMs,
-                            inferQueuedAtMs,
-                            inferQueueLength,
-                        )
-                    )
-                } catch (_: ClosedSendChannelException) {
-                    inferPendingCount.decrementAndGet()
-                    markWorkFinished()
-                    break
-                }
-            }
-        } catch (_: CancellationException) {
-            // Normal on shutdown.
-        }
-    }
-
-    private suspend fun inferLoop(onResult: (MlResult) -> Unit) {
-        try {
-            for (job in inferQueue) {
-                inferPendingCount.decrementAndGet()
-                if (job.epoch != epoch.get()) {
-                    markWorkFinished()
-                    continue
-                }
-                try {
-                    onResult(inferWindow(job))
-                } finally {
-                    markWorkFinished()
-                }
-            }
-        } catch (_: CancellationException) {
-            // Normal on shutdown.
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
@@ -445,9 +796,34 @@ class MlProcessor(
 
     private fun markWorkFinished() {
         val remaining = activeWorkCount.decrementAndGet()
-        if (remaining <= 0) {
+        if (remaining < 0) {
+            Timber.w("MlProcessor: activeWorkCount went negative ($remaining); clamping to 0")
             activeWorkCount.set(0)
             mutableBusyFlow.value = false
+        } else if (remaining == 0) {
+            mutableBusyFlow.value = false
+        }
+    }
+
+    private fun publishBuffering() {
+        val windowSamples = windowing?.windowSamples ?: Int.MAX_VALUE
+        val ringFill = ringFillForUi
+        // Ingest / partial-window only — not infer (see [isBusy]).
+        mutableBufferingFlow.value =
+            pendingRawCount.get() > 0 ||
+                (ringFill > 0 && ringFill < windowSamples)
+    }
+
+    private fun resolveWindowing(): MlWindowing? {
+        windowing?.let { return it }
+        return try {
+            MlCatalog.ensureInitialized(appContext)
+            MlWindowing.from(MlCatalog.resolveDescriptor(appContext.assets, modelId)).also {
+                windowing = it
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "MlProcessor: no descriptor for $modelId")
+            null
         }
     }
 
@@ -472,56 +848,7 @@ class MlProcessor(
         }
     }
 
-    private fun activeWindowing(): MlWindowing? =
-        windowing ?: model?.descriptor?.let { MlWindowing.from(it) }
-
-    private fun resampleToWindow(submission: ChunkSubmission, chunkId: Int): FloatArray? {
-        val win = activeWindowing()
-        if (win == null) {
-            // Force model load on infer thread only; resample still needs rates.
-            // Use catalog metadata without opening TFLite.
-            val descriptor = try {
-                MlCatalog.ensureInitialized(appContext)
-                MlCatalog.resolveDescriptor(appContext.assets, modelId)
-            } catch (e: Exception) {
-                Timber.e(e, "MlProcessor: no descriptor for $modelId")
-                return null
-            }
-            windowing = MlWindowing.from(descriptor)
-        }
-        val w = activeWindowing() ?: return null
-
-        val resampled = nativeResample(
-            submission.buffer,
-            submission.offset,
-            submission.count,
-            submission.sampleRateHz,
-            w.modelSampleRateHz,
-        )
-        if (resampled == null) {
-            Timber.e("MlProcessor: resample to ${w.modelSampleRateHz} Hz failed")
-            return null
-        }
-
-        if (resampled.size != w.windowSamples) {
-            Timber.w(
-                "MlProcessor: chunk #$chunkId resampled length ${resampled.size} " +
-                    "(expected ${w.windowSamples}); pad/truncate"
-            )
-        }
-        return pcmToModelWindow(resampled, w.windowSamples)
-    }
-
-    private fun pcmToModelWindow(pcm: ShortArray, windowSamples: Int): FloatArray {
-        val window = FloatArray(windowSamples)
-        val n = min(pcm.size, windowSamples)
-        for (i in 0 until n) {
-            window[i] = pcm[i] / 32768f
-        }
-        return window
-    }
-
-    private fun inferWindow(job: ResampledJob): MlResult {
+    private fun inferWindow(job: InferItem.Job): MlResult {
         fun completedResult(
             detections: List<MlDetection> = emptyList(),
         ): MlResult = MlResult(
@@ -536,11 +863,8 @@ class MlProcessor(
         return try {
             val inferStartedAtMs = SystemClock.elapsedRealtime()
             val scores = autoId.predict(job.window)
-            // Hoist once — previously each loop iteration rebuilt these lists
-            // via interface getters (O(n²) on BirdNET's ~6.5k classes).
             val labelDiscard = autoId.labelDiscard
             val labelKeys = autoId.labelKeys
-            // Defer labelsFor() until a score passes the filters.
             var displayLabels: List<String>? = null
             val detections = ArrayList<MlDetection>()
             for (i in scores.indices) {
@@ -570,14 +894,14 @@ class MlProcessor(
                     "infer $inferMs ms, total $totalMs ms"
             if (detections.isEmpty()) {
                 Timber.i(
-                    "MlProcessor: chunk #${job.chunkId} detections: (none) ($timing)"
+                    "MlProcessor: buffer #${job.bufferId} detections: (none) ($timing)"
                 )
             } else {
                 val listed = detections.joinToString { d ->
                     "${d.label}=${"%.0f".format(d.confidence * 100)}%"
                 }
                 Timber.i(
-                    "MlProcessor: chunk #${job.chunkId} detections: $listed ($timing)"
+                    "MlProcessor: buffer #${job.bufferId} detections: $listed ($timing)"
                 )
             }
             completedResult(detections)
@@ -585,7 +909,7 @@ class MlProcessor(
             val totalMs = SystemClock.elapsedRealtime() - job.queuedAtElapsedRealtimeMs
             Timber.e(
                 e,
-                "MlProcessor: inference failed on chunk #${job.chunkId} " +
+                "MlProcessor: inference failed on buffer #${job.bufferId} " +
                     "(queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
                     "total $totalMs ms)"
             )
