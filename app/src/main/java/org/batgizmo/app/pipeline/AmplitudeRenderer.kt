@@ -56,7 +56,9 @@ class AmplitudeDrawThread(model: UIModel, surfaceHolder: SurfaceHolder, bitmapHo
                 if (canvas != null) {
                     if (bitmap != null) {
                         val (expandedSrcRect, expandedDestRect) = calculateImageMapping(
-                            bitmap, canvas,
+                            bitmap,
+                            canvas.width,
+                            canvas.height,
                             model.timeVisibleRangeFlow,
                             model.amplitudeVisibleRangeFlow)
 

@@ -22,15 +22,12 @@
 
 package org.batgizmo.app.pipeline
 
-import android.graphics.Canvas
-import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Rect
 import android.view.SurfaceHolder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
@@ -40,64 +37,76 @@ import org.batgizmo.app.ui.GraphBase
 class SpectrogramDrawThread(
     model: UIModel,
     surfaceHolder: SurfaceHolder,
-    bitmapHolder: BitmapHolder
-)
-    : DrawThread(model, surfaceHolder, bitmapHolder)
-{
-    private val cursorColour = Color.Yellow
-    val lineWidthPx = 2f    // Slight improvement: use dp and convert to px.
+    bitmapHolder: BitmapHolder,
+    private val presenter: SurfaceBitmapPresenter,
+) : DrawThread(model, surfaceHolder, bitmapHolder) {
 
-    private val cursorPaint = Paint().apply {
-        color = cursorColour.toArgb()
-        // textSize = with(density) { textHeightDp.toPx() }
-        // textAlign = Paint.Align.LEFT
-        strokeWidth = lineWidthPx
-        pathEffect = DashPathEffect(floatArrayOf(2f, 20f), 0f)
-    }
+    private val unusedRect = Rect()
 
     override fun draw(bmPaint: Paint) {
-        val bitmap = bitmapHolder.bitmap
-        var canvas1: Canvas? = null
-        try {
-            // The bitmap is also accessed by the pipeline thread:
-            synchronized(model.spectrogramBitmapHolder) {
-                val canvas = surfaceHolder.lockHardwareCanvas()
-                canvas1 = canvas
-                if (canvas != null) {
-                    if (bitmap == null) {
-                        // Blank the display if the bitmap is null:
-                        canvas.drawColor(Color.Black.toArgb())
-                    } else {
-                        val (expandedSrcRect, expandedDestRect) = calculateImageMapping(
-                            bitmap, canvas,
-                            model.timeVisibleRangeFlow,
-                            model.frequencyVisibleRangeFlow)
-
-                        // Log.d(this::class.simpleName, "expandedSrcRect = $expandedSrcRect, expandedDestRect = $expandedDestRect")
-                        // Copy the data from the source to the screen in one go:
-                        canvas.drawBitmap(
-                            bitmap,
-                            expandedSrcRect,
-                            expandedDestRect,
-                            bmPaint
-                        )
-                    }
-                }
+        // The bitmap is also accessed by the pipeline thread:
+        synchronized(model.spectrogramBitmapHolder) {
+            val bitmap = bitmapHolder.bitmap
+            if (bitmap == null) {
+                presenter.present(
+                    surfaceHolder,
+                    bitmap = null,
+                    src = unusedRect,
+                    dst = unusedRect,
+                    paint = bmPaint,
+                )
+                return
             }
-        } finally {
-            if (canvas1 != null) {
-                surfaceHolder.unlockCanvasAndPost(canvas1)
-            }
+            val frame = surfaceHolder.surfaceFrame
+            val (expandedSrcRect, expandedDestRect) = calculateImageMapping(
+                bitmap,
+                frame.width(),
+                frame.height(),
+                model.timeVisibleRangeFlow,
+                model.frequencyVisibleRangeFlow,
+            )
+            presenter.present(
+                surfaceHolder,
+                bitmap,
+                expandedSrcRect,
+                expandedDestRect,
+                bmPaint,
+            )
         }
     }
 }
 
 class SpectrogramSHCallback(
     private var model: UIModel,
-    bitmapHolder: BitmapHolder
+    bitmapHolder: BitmapHolder,
 ) : SHCallback(model, bitmapHolder) {
+
+    private val presenter: SurfaceBitmapPresenter = SpectrogramSurfacePresenters.create()
+
     override fun createThread(model: UIModel, surfaceHolder: SurfaceHolder): DrawThread {
-        return SpectrogramDrawThread(model, surfaceHolder, bitmapHolder)
+        return SpectrogramDrawThread(model, surfaceHolder, bitmapHolder, presenter)
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        presenter.onSurfaceCreated(holder)
+        super.surfaceCreated(holder)
+    }
+
+    override fun surfaceChanged(
+        holder: SurfaceHolder,
+        format: Int,
+        width: Int,
+        height: Int,
+    ) {
+        presenter.onSurfaceChanged(holder, width, height)
+        super.surfaceChanged(holder, format, width, height)
+    }
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        // Stop the draw thread before tearing down the presenter (EGL must not
+        // be current on another thread while present() could still run).
+        super.surfaceDestroyed(holder)
+        presenter.onSurfaceDestroyed(holder)
     }
 }
 
@@ -111,12 +120,12 @@ class SpectrogramRenderer(
     @Composable
     override fun Compose(
         modifier: Modifier,
-        settings: Settings
+        settings: Settings,
     ) {
         Compose(
             modifier,
             settings,
-            SpectrogramSHCallback(model, model.spectrogramBitmapHolder)
+            SpectrogramSHCallback(model, model.spectrogramBitmapHolder),
         )
     }
 }

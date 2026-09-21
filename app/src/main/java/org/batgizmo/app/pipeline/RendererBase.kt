@@ -23,7 +23,6 @@
 package org.batgizmo.app.pipeline
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.view.SurfaceHolder
@@ -92,7 +91,8 @@ abstract class DrawThread(
 
     protected fun calculateImageMapping(
         bitmap: Bitmap,
-        canvas: Canvas,
+        viewportWidth: Int,
+        viewportHeight: Int,
         xVisibleRangeFlow: StateFlow<FloatRange>,
         yVisibleRangeFlow: StateFlow<FloatRange>,
     ): Pair<Rect, Rect> {
@@ -160,7 +160,7 @@ abstract class DrawThread(
         )
 
         // Calculate the source bitmap margins between the visible and expanded regions:
-        val xScalingFactor: Float = canvas.width.toFloat() /
+        val xScalingFactor: Float = viewportWidth.toFloat() /
                 (srcXVisibleRangePixels.second - srcXVisibleRangePixels.first)
         val deltaXSrcMinPx =
             srcXVisibleRangePixels.first - expandedSrcRect.left
@@ -169,7 +169,7 @@ abstract class DrawThread(
             expandedSrcRect.right - srcXVisibleRangePixels.second
         val deltaXDstMaxPx = deltaXSrcMaxPx * xScalingFactor
 
-        val yScalingFactor: Float = canvas.height.toFloat() /
+        val yScalingFactor: Float = viewportHeight.toFloat() /
                 (srcYVisibleRangePixels.second - srcYVisibleRangePixels.first)
         val deltaYSrcMinPx =
             srcYVisibleRangePixels.first - expandedSrcRect.top
@@ -182,8 +182,8 @@ abstract class DrawThread(
         val expandedDestRect = Rect(
             -deltaXDstMinPx.roundToInt(),
             -deltaYDstMinPx.roundToInt(),
-            canvas.width + deltaXDstMaxPx.roundToInt(),
-            canvas.height + deltaYDstMaxPx.roundToInt()
+            viewportWidth + deltaXDstMaxPx.roundToInt(),
+            viewportHeight + deltaYDstMaxPx.roundToInt()
         )
 
         return Pair(expandedSrcRect, expandedDestRect)
