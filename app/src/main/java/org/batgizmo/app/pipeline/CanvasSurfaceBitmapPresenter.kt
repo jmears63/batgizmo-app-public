@@ -31,9 +31,15 @@ import androidx.compose.ui.graphics.toArgb
 import org.batgizmo.app.HORange
 
 /**
- * Existing spectrogram path: [SurfaceHolder.lockHardwareCanvas] + [Canvas.drawBitmap].
+ * Hardware-canvas blit: [SurfaceHolder.lockHardwareCanvas] + [Canvas.drawBitmap].
  */
 class CanvasSurfaceBitmapPresenter : SurfaceBitmapPresenter {
+
+    private val cursorPaint = Paint().apply {
+        color = Color.Yellow.toArgb()
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
 
     override fun onSurfaceCreated(holder: SurfaceHolder) {}
 
@@ -48,13 +54,17 @@ class CanvasSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         dst: Rect,
         paint: Paint,
         dirtyColumns: HORange?,
+        cursorX: Float?,
     ) {
-        var canvas = holder.lockHardwareCanvas() ?: return
+        val canvas = holder.lockHardwareCanvas() ?: return
         try {
             if (bitmap == null) {
                 canvas.drawColor(Color.Black.toArgb())
             } else {
                 canvas.drawBitmap(bitmap, src, dst, paint)
+                cursorX?.let { x ->
+                    canvas.drawLine(x, 0f, x, (canvas.height - 1).toFloat(), cursorPaint)
+                }
             }
         } finally {
             holder.unlockCanvasAndPost(canvas)

@@ -29,9 +29,11 @@ import android.view.SurfaceHolder
 import org.batgizmo.app.HORange
 
 /**
- * Last-mile spectrogram blit: full [Bitmap] + windowing rects → [SurfaceHolder].
+ * Last-mile bitmap blit: full [Bitmap] + windowing rects → [SurfaceHolder].
  *
- * [CanvasSurfaceBitmapPresenter] is the existing hardware-canvas path.
+ * Used for spectrogram and amplitude graphs.
+ *
+ * [CanvasSurfaceBitmapPresenter] is the hardware-canvas path.
  * [GlesSurfaceBitmapPresenter] uploads the bitmap as a GLES texture and draws a quad.
  *
  * Flip [SpectrogramSurfacePresenters.USE_GLES] to select the implementation.
@@ -44,8 +46,8 @@ interface SurfaceBitmapPresenter {
     fun onSurfaceDestroyed(holder: SurfaceHolder)
 
     /**
-     * Called on the spectrogram [DrawThread] while the caller holds the
-     * bitmap-holder lock (and usually the [Bitmap] lock).
+     * Called on the graph [DrawThread] while the caller holds the
+     * bitmap-holder lock (and usually the [Bitmap] lock for spectrogram).
      *
      * @param bitmap null clears the surface to black; [src]/[dst]/[dirtyColumns] ignored
      * @param src window into [bitmap] (from [DrawThread.calculateImageMapping])
@@ -55,6 +57,7 @@ interface SurfaceBitmapPresenter {
      *   (from [org.batgizmo.app.BitmapHolder.takeDirtyColumns]); null means no
      *   pixel changes. GLES uploads `dirty ∩ src` when [src] is unchanged, or
      *   rebuilds the visible-window texture when [src] changes. Canvas ignores this.
+     * @param cursorX optional vertical cursor in surface pixels (amplitude playback)
      */
     fun present(
         holder: SurfaceHolder,
@@ -63,6 +66,7 @@ interface SurfaceBitmapPresenter {
         dst: Rect,
         paint: Paint,
         dirtyColumns: HORange? = null,
+        cursorX: Float? = null,
     )
 }
 
@@ -72,7 +76,7 @@ object SpectrogramSurfacePresenters {
      * When false (default): [CanvasSurfaceBitmapPresenter].
      * When true: [GlesSurfaceBitmapPresenter].
      */
-    const val USE_GLES = true
+    const val USE_GLES = false
 
     /**
      * Debug: when > 0, [GlesSurfaceBitmapPresenter] treats this as
@@ -80,7 +84,7 @@ object SpectrogramSurfacePresenters {
      * Use `2048` (or similar) to exercise the oversized-visible-window downsample path.
      * Keep `0` for the real GPU limit.
      */
-    const val DEBUG_MAX_TEXTURE_SIZE_CAP = 1024
+    const val DEBUG_MAX_TEXTURE_SIZE_CAP = 0
 
     fun create(): SurfaceBitmapPresenter =
         if (USE_GLES) GlesSurfaceBitmapPresenter()

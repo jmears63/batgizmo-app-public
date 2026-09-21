@@ -292,6 +292,12 @@ class TransformStep(
                         calcs.sliceTransformedTimeBucketCount,
                         amplitudeBitmapHolder.bitmap!!
                     )
+                    if (rc3 > 0) {
+                        amplitudeBitmapHolder.markDirtyColumns(
+                            transformedEntryIndex,
+                            transformedEntryIndex + rc3,
+                        )
+                    }
 
                     if (showCursor)
                         amplitudeBitmapHolder.cursorTime =

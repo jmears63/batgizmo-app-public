@@ -635,6 +635,7 @@ abstract class AbstractPipeline(
         }
         synchronized(amplitudeBitmapHolder) {
             amplitudeBitmapHolder.bitmap = null
+            amplitudeBitmapHolder.markAllDirty()
         }
 
         if (updateUI) {
@@ -703,6 +704,7 @@ abstract class AbstractPipeline(
             amplitudeBitmapHolder.bitmap?.apply {
                 eraseColor(Color.BLACK)
             }
+            amplitudeBitmapHolder.markAllDirty()
         }
     }
 
@@ -1101,6 +1103,7 @@ abstract class AbstractPipeline(
                 eraseColor(Color.BLACK)
             }
             amplitudeBitmapHolder.bitmap = amplitudeBitmap
+            amplitudeBitmapHolder.markAllDirty()
 
             /**
              * Create the steps in REVERSE order below so that each step can be passed

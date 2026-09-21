@@ -85,6 +85,8 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
     /** True when the resident texture is a downscaled copy of [textureSrc]. */
     private var textureDownsampled: Boolean = false
     private var vboId: Int = 0
+    /** 1×1 yellow RGB_565 texture for the amplitude cursor overlay. */
+    private var cursorTextureId: Int = 0
 
     /** Scratch for tightly packed RGB_565 uploads (draw-thread only). */
     private var pixelScratch: ByteBuffer? = null
@@ -105,6 +107,7 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
     /** Scratch for clipping [src] / dirty intersections (draw-thread only). */
     private val clipScratch = Rect()
     private val dirtyIntersectScratch = Rect()
+    private val cursorDstScratch = Rect()
 
     override fun onSurfaceCreated(holder: SurfaceHolder) {
         // EGL is created on first [present] (draw thread).
@@ -128,6 +131,7 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         dst: Rect,
         paint: Paint,
         dirtyColumns: HORange?,
+        cursorX: Float?,
     ) {
         synchronized(sync) {
             if (!ensureEglLocked(holder))
@@ -154,8 +158,19 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
                     syncTextureLocked(bitmap, src, dirtyColumns) &&
                     textureHasContent
                 ) {
-                    drawQuadLocked(dst, w, h)
+                    drawQuadLocked(dst, w, h, textureId)
                 }
+            }
+
+            if (cursorX != null && ensureProgramLocked() && ensureCursorTextureLocked()) {
+                val half = CURSOR_WIDTH_PX * 0.5f
+                cursorDstScratch.set(
+                    (cursorX - half).toInt(),
+                    0,
+                    (cursorX + half).toInt().coerceAtLeast((cursorX - half).toInt() + 1),
+                    h,
+                )
+                drawQuadLocked(cursorDstScratch, w, h, cursorTextureId)
             }
 
             if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) {
@@ -260,6 +275,7 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         textureHasContent = false
         textureDownsampled = false
         vboId = 0
+        cursorTextureId = 0
 
         val maxTex = IntArray(1)
         GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTex, 0)
@@ -629,11 +645,12 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         return packed
     }
 
-    /** Draw [dst]; texture content is exactly the visible window (UVs 0..1). */
+    /** Draw [dst] sampling [texId] with UVs 0..1. */
     private fun drawQuadLocked(
         dst: Rect,
         viewportW: Int,
         viewportH: Int,
+        texId: Int,
     ) {
         val u0 = 0f
         val u1 = 1f
@@ -658,7 +675,7 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         GLES20.glUseProgram(program)
         GLES20.glUniform2f(uViewportLoc, viewportW.toFloat(), viewportH.toFloat())
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
         GLES20.glUniform1i(uTextureLoc, 0)
 
         val stride = 4 * 4
@@ -678,6 +695,46 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
     }
 
+    /** Ensure a 1×1 yellow RGB_565 texture exists for the cursor overlay. */
+    private fun ensureCursorTextureLocked(): Boolean {
+        if (cursorTextureId != 0)
+            return true
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        cursorTextureId = ids[0]
+        if (cursorTextureId == 0)
+            return false
+        val pixel = ByteBuffer.allocateDirect(2).order(ByteOrder.nativeOrder())
+        pixel.putShort(CURSOR_RGB565)
+        pixel.position(0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, cursorTextureId)
+        GLES20.glTexParameteri(
+            GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST
+        )
+        GLES20.glTexParameteri(
+            GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST
+        )
+        GLES20.glTexParameteri(
+            GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE
+        )
+        GLES20.glTexParameteri(
+            GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE
+        )
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 2)
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D,
+            0,
+            GLES20.GL_RGB,
+            1,
+            1,
+            0,
+            GLES20.GL_RGB,
+            GLES20.GL_UNSIGNED_SHORT_5_6_5,
+            pixel,
+        )
+        return GLES20.glGetError() == GLES20.GL_NO_ERROR
+    }
+
     private fun releaseEglLocked() {
         if (eglDisplay == EGL14.EGL_NO_DISPLAY)
             return
@@ -691,6 +748,10 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
             if (textureId != 0) {
                 GLES20.glDeleteTextures(1, intArrayOf(textureId), 0)
                 textureId = 0
+            }
+            if (cursorTextureId != 0) {
+                GLES20.glDeleteTextures(1, intArrayOf(cursorTextureId), 0)
+                cursorTextureId = 0
             }
             if (vboId != 0) {
                 GLES20.glDeleteBuffers(1, intArrayOf(vboId), 0)
@@ -713,6 +774,7 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
             )
         } else {
             textureId = 0
+            cursorTextureId = 0
             vboId = 0
             program = 0
             textureWidth = 0
@@ -761,6 +823,10 @@ class GlesSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         private const val GLES_MAJOR_VERSION = 2
 
         private const val QUAD_FLOATS = 4 * 4 // 4 verts × (x,y,u,v)
+
+        private const val CURSOR_WIDTH_PX = 2
+        /** RGB_565 yellow (#FFFF00). */
+        private const val CURSOR_RGB565: Short = 0xFFE0.toShort()
 
         // No leading blank line — some drivers are strict about #version placement.
         private const val VERTEX_SHADER =
