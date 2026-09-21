@@ -26,12 +26,13 @@ import android.graphics.Bitmap
 import android.graphics.Paint
 import android.graphics.Rect
 import android.view.SurfaceHolder
+import org.batgizmo.app.HORange
 
 /**
  * Last-mile spectrogram blit: full [Bitmap] + windowing rects → [SurfaceHolder].
  *
  * [CanvasSurfaceBitmapPresenter] is the existing hardware-canvas path.
- * [GlesSurfaceBitmapPresenter] is the parallel GLES path (fill in later).
+ * [GlesSurfaceBitmapPresenter] uploads the bitmap as a GLES texture and draws a quad.
  *
  * Flip [SpectrogramSurfacePresenters.USE_GLES] to select the implementation.
  * Do not mix canvas lock and EGL on the same surface in one session — the
@@ -44,12 +45,16 @@ interface SurfaceBitmapPresenter {
 
     /**
      * Called on the spectrogram [DrawThread] while the caller holds the
-     * bitmap-holder lock.
+     * bitmap-holder lock (and usually the [Bitmap] lock).
      *
-     * @param bitmap null clears the surface to black; [src]/[dst] ignored
+     * @param bitmap null clears the surface to black; [src]/[dst]/[dirtyColumns] ignored
      * @param src window into [bitmap] (from [DrawThread.calculateImageMapping])
      * @param dst destination in surface pixels (may extend past the surface;
      *   the presenter clips)
+     * @param dirtyColumns time-bucket columns that changed since the last present
+     *   (from [org.batgizmo.app.BitmapHolder.takeDirtyColumns]); null means no
+     *   pixel changes. GLES uploads `dirty ∩ src` when [src] is unchanged, or
+     *   rebuilds the visible-window texture when [src] changes. Canvas ignores this.
      */
     fun present(
         holder: SurfaceHolder,
@@ -57,6 +62,7 @@ interface SurfaceBitmapPresenter {
         src: Rect,
         dst: Rect,
         paint: Paint,
+        dirtyColumns: HORange? = null,
     )
 }
 
@@ -64,9 +70,17 @@ interface SurfaceBitmapPresenter {
 object SpectrogramSurfacePresenters {
     /**
      * When false (default): [CanvasSurfaceBitmapPresenter].
-     * When true: [GlesSurfaceBitmapPresenter] (stub until GLES is filled in).
+     * When true: [GlesSurfaceBitmapPresenter].
      */
-    const val USE_GLES = false
+    const val USE_GLES = true
+
+    /**
+     * Debug: when > 0, [GlesSurfaceBitmapPresenter] treats this as
+     * [GLES20.GL_MAX_TEXTURE_SIZE] (after querying the real limit, takes the min).
+     * Use `2048` (or similar) to exercise the oversized-visible-window downsample path.
+     * Keep `0` for the real GPU limit.
+     */
+    const val DEBUG_MAX_TEXTURE_SIZE_CAP = 1024
 
     fun create(): SurfaceBitmapPresenter =
         if (USE_GLES) GlesSurfaceBitmapPresenter()

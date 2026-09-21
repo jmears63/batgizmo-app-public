@@ -28,6 +28,7 @@ import android.graphics.Rect
 import android.view.SurfaceHolder
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import org.batgizmo.app.HORange
 
 /**
  * Existing spectrogram path: [SurfaceHolder.lockHardwareCanvas] + [Canvas.drawBitmap].
@@ -46,6 +47,7 @@ class CanvasSurfaceBitmapPresenter : SurfaceBitmapPresenter {
         src: Rect,
         dst: Rect,
         paint: Paint,
+        dirtyColumns: HORange?,
     ) {
         var canvas = holder.lockHardwareCanvas() ?: return
         try {

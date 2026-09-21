@@ -44,7 +44,12 @@ class SpectrogramDrawThread(
     private val unusedRect = Rect()
 
     override fun draw(bmPaint: Paint) {
-        // The bitmap is also accessed by the pipeline thread:
+        /*
+         * Lock order (must not invert elsewhere):
+         *   1) spectrogramBitmapHolder
+         *   2) Bitmap (same object ColourMapStep locks for JNI writes)
+         * Never take the holder lock while already holding the Bitmap lock.
+         */
         synchronized(model.spectrogramBitmapHolder) {
             val bitmap = bitmapHolder.bitmap
             if (bitmap == null) {
@@ -58,20 +63,28 @@ class SpectrogramDrawThread(
                 return
             }
             val frame = surfaceHolder.surfaceFrame
-            val (expandedSrcRect, expandedDestRect) = calculateImageMapping(
-                bitmap,
-                frame.width(),
-                frame.height(),
-                model.timeVisibleRangeFlow,
-                model.frequencyVisibleRangeFlow,
-            )
-            presenter.present(
-                surfaceHolder,
-                bitmap,
-                expandedSrcRect,
-                expandedDestRect,
-                bmPaint,
-            )
+            val vw = frame.width()
+            val vh = frame.height()
+            if (vw <= 0 || vh <= 0)
+                return
+            synchronized(bitmap) {
+                val (expandedSrcRect, expandedDestRect) = calculateImageMapping(
+                    bitmap,
+                    vw,
+                    vh,
+                    model.timeVisibleRangeFlow,
+                    model.frequencyVisibleRangeFlow,
+                )
+                val dirtyColumns = bitmapHolder.takeDirtyColumns(bitmap.width)
+                presenter.present(
+                    surfaceHolder,
+                    bitmap,
+                    expandedSrcRect,
+                    expandedDestRect,
+                    bmPaint,
+                    dirtyColumns,
+                )
+            }
         }
     }
 }

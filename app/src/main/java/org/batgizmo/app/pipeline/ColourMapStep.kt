@@ -23,6 +23,7 @@
 package org.batgizmo.app.pipeline
 
 import android.graphics.Bitmap
+import org.batgizmo.app.BitmapHolder
 import org.batgizmo.app.FloatRange
 import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
@@ -30,6 +31,7 @@ import org.batgizmo.app.Settings
 class ColourMapStep(
     private val rangedTransformedDataBuffer: AbstractPipeline.RangedFloatDataBuffer,
     private val bitmap: Bitmap,
+    private val spectrogramBitmapHolder: BitmapHolder,
     private val noiseBaselineHolder: AbstractPipeline.NoiseBaselineHolder,
     private val colourMapSizeProvider: () -> Int?,
     private val settings: Settings
@@ -98,7 +100,9 @@ class ColourMapStep(
          * multiply it by the number of frequency buckets to get the buffer index.
          */
 
-        // The bitmap is also accessed by the rendering thread:
+        // The bitmap is also accessed by the rendering thread.
+        // Lock order: never take spectrogramBitmapHolder while holding this Bitmap
+        // (draw path takes holder first, then Bitmap — see SpectrogramDrawThread).
         synchronized (bitmap) {
 
             // Keep track of the contiguous range of raw data that we have populated:
@@ -115,6 +119,7 @@ class ColourMapStep(
                 offset, multiplier
             )
             require(rc >= 0) { "doColourMapping failed: rc = $rc" }
+            spectrogramBitmapHolder.markDirtyColumns(sliceRange.start, sliceRange.exclusiveEnd)
         }
     }
 

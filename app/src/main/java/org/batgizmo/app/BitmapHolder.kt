@@ -58,6 +58,62 @@ class BitmapHolder {
     var cursorTime: Float? = null
 
     /**
+     * Dirty time-bucket columns for GLES incremental upload.
+     * Synchronized on [dirtyLock] (never take holder/bitmap locks while holding this).
+     */
+    private val dirtyLock = Any()
+    private var dirtyMinX: Int = Int.MAX_VALUE
+    private var dirtyExclusiveMaxX: Int = Int.MIN_VALUE
+    private var allDirty: Boolean = true
+
+    /** Mark time-bucket columns `[start, exclusiveEnd)` as needing a GPU upload. */
+    fun markDirtyColumns(start: Int, exclusiveEnd: Int) {
+        if (start >= exclusiveEnd)
+            return
+        synchronized(dirtyLock) {
+            dirtyMinX = minOf(dirtyMinX, start)
+            dirtyExclusiveMaxX = maxOf(dirtyExclusiveMaxX, exclusiveEnd)
+        }
+    }
+
+    /** Mark the entire bitmap as needing a GPU upload (new buffer, erase, etc.). */
+    fun markAllDirty() {
+        synchronized(dirtyLock) {
+            allDirty = true
+            dirtyMinX = Int.MAX_VALUE
+            dirtyExclusiveMaxX = Int.MIN_VALUE
+        }
+    }
+
+    /**
+     * Consume and clear the pending dirty column range.
+     *
+     * @return merged dirty columns clipped to `[0, bitmapWidth)`, or null if nothing
+     *   is pending (pan/zoom-only redraw can skip texture upload).
+     */
+    fun takeDirtyColumns(bitmapWidth: Int): HORange? {
+        if (bitmapWidth <= 0)
+            return null
+        synchronized(dirtyLock) {
+            if (allDirty) {
+                allDirty = false
+                dirtyMinX = Int.MAX_VALUE
+                dirtyExclusiveMaxX = Int.MIN_VALUE
+                return HORange(0, bitmapWidth)
+            }
+            if (dirtyMinX >= dirtyExclusiveMaxX)
+                return null
+            val start = dirtyMinX.coerceIn(0, bitmapWidth)
+            val end = dirtyExclusiveMaxX.coerceIn(0, bitmapWidth)
+            dirtyMinX = Int.MAX_VALUE
+            dirtyExclusiveMaxX = Int.MIN_VALUE
+            if (start >= end)
+                return null
+            return HORange(start, end)
+        }
+    }
+
+    /**
      * This method is thread safe.
      *
      * This method is called by the code that updates the bitmap to signal to the

@@ -631,6 +631,7 @@ abstract class AbstractPipeline(
 
         synchronized(spectrogramBitmapHolder) {
             spectrogramBitmapHolder.bitmap = null
+            spectrogramBitmapHolder.markAllDirty()
         }
         synchronized(amplitudeBitmapHolder) {
             amplitudeBitmapHolder.bitmap = null
@@ -695,6 +696,7 @@ abstract class AbstractPipeline(
             spectrogramBitmapHolder.bitmap?.apply {
                 eraseColor(Color.BLACK)
             }
+            spectrogramBitmapHolder.markAllDirty()
         }
 
         synchronized(amplitudeBitmapHolder) {
@@ -1088,6 +1090,7 @@ abstract class AbstractPipeline(
                 eraseColor(Color.BLACK)
             }
             spectrogramBitmapHolder.bitmap = spectrogramBitmap
+            spectrogramBitmapHolder.markAllDirty()
 
             val amplitudeBitmap = createBitmap(
                 calcs.transformedTimeBucketCount,
@@ -1111,8 +1114,14 @@ abstract class AbstractPipeline(
 
             // Create a step to map the transformed data (spectral intensities) to colours:
             val colourMapStep =
-                ColourMapStep(transformedDataBuffer, spectrogramBitmap, noiseBaselineHolder,
-                    { model.colourMapSize }, model.settings)
+                ColourMapStep(
+                    transformedDataBuffer,
+                    spectrogramBitmap,
+                    spectrogramBitmapHolder,
+                    noiseBaselineHolder,
+                    { model.colourMapSize },
+                    model.settings
+                )
             // Use the existing BnC range, so this is preserved when a new file is loaded:
             colourMapStep.params =
                 ColourMapStep.Params(calcs = calcs, bnCRangeLogical = model.bnCRangeFlow.value)
