@@ -15,8 +15,8 @@ val keystoreProperties = Properties().apply {
 android {
     signingConfigs {
         create("release") {
-            storeFile = file("/home/jmears/src/gizmokeystore.jks")
-            keyAlias = "key0"
+            storeFile = file(keystoreProperties.getProperty("storeFile"))
+            keyAlias = keystoreProperties.getProperty("keyAlias")
             storePassword = keystoreProperties.getProperty("storePassword")
             keyPassword = keystoreProperties.getProperty("keyPassword")
         }
