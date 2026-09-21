@@ -876,7 +876,7 @@ class SpectrogramUI(
                     verticalAlignment = Alignment.Top
                 ) {
                     if (localAutoId.current) {
-                        // Sparkle only while Auto Id has a session context and the
+                        // Sparkle / results only while Auto Id has a session context and the
                         // client will accept audio at the current sample rate.
                         // Hidden after the viewer is closed (live with acquisition off),
                         // or when the rate is below the model minimum.
@@ -897,12 +897,16 @@ class SpectrogramUI(
                             AutoIdSparkleIcon(active = mlBuffering || mlBusy)
                         }
 
-                        val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
-                        MlResultsPanel(
-                            modifier = Modifier.weight(1f),
-                            summary = mlSummary,
-                            ageColors = appMode.intValue == AppMode.LIVE.value,
-                        )
+                        if (mlWillAcceptAudio) {
+                            val mlSummary by model.mlSummaryFlow.collectAsStateWithLifecycle()
+                            MlResultsPanel(
+                                modifier = Modifier.weight(1f),
+                                summary = mlSummary,
+                                ageColors = appMode.intValue == AppMode.LIVE.value,
+                            )
+                        } else {
+                            Spacer(modifier.weight(1f))
+                        }
                     } else {
                         Spacer(modifier.weight(1f))
                     }

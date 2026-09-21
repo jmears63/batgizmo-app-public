@@ -81,6 +81,7 @@ import org.batgizmo.app.ui.SpectrogramUI
 import org.batgizmo.app.ui.TopLevelUI
 import org.batgizmo.app.ui.TopLevelUI.AppMode
 import timber.log.Timber
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -580,6 +581,12 @@ class UIModel(application: Application,
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClient? = null
     private var mlClientSampleRateHz: Int? = null
+
+    /**
+     * Bumped in [clearMlClientLocked] so in-flight [MlClient] callbacks from a
+     * torn-down client cannot submit results after a model/session change.
+     */
+    private val mlResultGeneration = AtomicInteger(0)
 
     /**
      * Serializes [mlClient] mutate/submit so live [USBSourceStep] (no UIModel mutex) cannot
@@ -1860,6 +1867,7 @@ class UIModel(application: Application,
         mlWillAcceptAudioCollectJob?.cancel()
         mlWillAcceptAudioCollectJob = null
         mutableMlWillAcceptAudioFlow.value = false
+        mlResultGeneration.incrementAndGet()
         mlClient?.shutdown()
         mlClient = null
         mlClientSampleRateHz = null
@@ -1883,6 +1891,12 @@ class UIModel(application: Application,
         mlWillAcceptAudioCollectJob = viewModelScope.launch {
             client.willAcceptAudioFlow.collect { accepts ->
                 mutableMlWillAcceptAudioFlow.value = accepts
+                // Drop on-screen hits when the model cannot use this sample rate
+                // (or after client teardown). Otherwise rows from the previous
+                // model linger after switching to an inapplicable one.
+                if (!accepts) {
+                    mlSummaryAccumulator.clear(mlSummaryModeFlow.value)
+                }
             }
         }
     }
@@ -1921,15 +1935,24 @@ class UIModel(application: Application,
             if (settings.autoIdModelId != descriptor.id) {
                 settings.autoIdModelId = descriptor.id
             }
-            val client = mlClient ?: MlClient(
-                getApplication(),
-                descriptor.id,
-                descriptor,
-            ) { result ->
-                mlSummaryAccumulator.submitResult(result)
-            }.also {
-                mlClient = it
-                attachMlActivityCollectorsLocked(it)
+            val client = mlClient ?: run {
+                val generation = mlResultGeneration.get()
+                MlClient(
+                    getApplication(),
+                    descriptor.id,
+                    descriptor,
+                ) { result ->
+                    // Drop late results from a previous client (model switch /
+                    // teardown) and any results while this rate is rejected.
+                    if (generation == mlResultGeneration.get() &&
+                        mutableMlWillAcceptAudioFlow.value
+                    ) {
+                        mlSummaryAccumulator.submitResult(result)
+                    }
+                }.also {
+                    mlClient = it
+                    attachMlActivityCollectorsLocked(it)
+                }
             }
             client.setOverflowPolicy(overflowPolicy)
             client.setLabelLanguage(settings.autoIdLanguage)
