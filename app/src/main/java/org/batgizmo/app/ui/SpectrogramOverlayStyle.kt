@@ -34,7 +34,7 @@ object SpectrogramOverlayStyle {
     val textColor = Color.Gray
     val textStyle = TextStyle(
         fontSize = textSize,
-        // Tight metrics so N×textSize panel height fits N rows without clipping.
+        // Tight metrics for compact overlay rows (panel wraps to natural text height).
         lineHeight = textSize,
         lineHeightStyle = LineHeightStyle(
             alignment = LineHeightStyle.Alignment.Center,

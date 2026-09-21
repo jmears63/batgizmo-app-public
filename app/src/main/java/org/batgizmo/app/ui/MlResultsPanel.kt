@@ -22,9 +22,9 @@
 
 package org.batgizmo.app.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,23 +36,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import org.batgizmo.app.ml.MlSummaryAccumulator
 import org.batgizmo.app.ml.MlSummaryEntry
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Layout and age-styling knobs for [MlResultsPanel]. Padding is defined once and
- * reused for both the modifier and the reserved panel height.
+ * Layout and age-styling knobs for [MlResultsPanel].
  */
 private object MlResultsPanelStyle {
     val paddingHorizontal: Dp = 4.dp
     val paddingVertical: Dp = 2.dp
+    /** Gap between result rows so glyphs are not cramped. */
+    val rowSpacing: Dp = 2.dp
 
     /** Live: newer than this (seconds) → [freshColor]. */
     const val FRESH_AGE_SEC = 10.0
@@ -62,9 +61,6 @@ private object MlResultsPanelStyle {
     val freshColor = Color.White
     val recentColor: Color get() = SpectrogramOverlayStyle.textColor
     val staleColor = Color(0xFF555555)
-
-    fun panelHeight(rowHeight: Dp): Dp =
-        rowHeight * MlSummaryAccumulator.MAX_SUMMARY_ENTRIES + paddingVertical * 2
 
     fun colorFor(ageColors: Boolean, ageSec: Double): Color {
         if (!ageColors) return freshColor
@@ -83,6 +79,7 @@ private object MlResultsPanelStyle {
  * Spectrogram overlay panel for the running ML summary.
  *
  * [summary] is already ordered and capped by [MlSummaryAccumulator].
+ * Height wraps to the current rows (natural text metrics + [rowSpacing]).
  * When [ageColors] is true (live): under [MlResultsPanelStyle.FRESH_AGE_SEC]
  * white, under [MlResultsPanelStyle.RECENT_AGE_SEC] overlay grey, otherwise
  * darker grey. When false (viewer): all rows use [freshColor] (white) with no
@@ -94,9 +91,6 @@ fun MlResultsPanel(
     summary: List<MlSummaryEntry> = emptyList(),
     ageColors: Boolean = true,
 ) {
-    val rowHeight = with(LocalDensity.current) { SpectrogramOverlayStyle.textSize.toDp() }
-    val panelHeight = MlResultsPanelStyle.panelHeight(rowHeight)
-
     var nowEpochSec by remember {
         mutableDoubleStateOf(System.currentTimeMillis() / 1000.0)
     }
@@ -111,12 +105,12 @@ fun MlResultsPanel(
 
     Column(
         modifier
-            .height(panelHeight)
             .padding(
                 horizontal = MlResultsPanelStyle.paddingHorizontal,
                 vertical = MlResultsPanelStyle.paddingVertical,
             ),
         horizontalAlignment = Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(MlResultsPanelStyle.rowSpacing),
     ) {
         for (entry in summary) {
             val color = MlResultsPanelStyle.colorFor(
@@ -125,9 +119,7 @@ fun MlResultsPanel(
             )
             Text(
                 text = MlResultsPanelStyle.formatEntry(entry),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(rowHeight),
+                modifier = Modifier.fillMaxWidth(),
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
