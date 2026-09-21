@@ -67,7 +67,7 @@ private object MlResultsPanelStyle {
         rowHeight * MlSummaryAccumulator.MAX_SUMMARY_ENTRIES + paddingVertical * 2
 
     fun colorFor(ageColors: Boolean, ageSec: Double): Color {
-        if (!ageColors) return recentColor
+        if (!ageColors) return freshColor
         return when {
             ageSec < FRESH_AGE_SEC -> freshColor
             ageSec < RECENT_AGE_SEC -> recentColor
@@ -85,8 +85,8 @@ private object MlResultsPanelStyle {
  * [summary] is already ordered and capped by [MlSummaryAccumulator].
  * When [ageColors] is true (live): under [MlResultsPanelStyle.FRESH_AGE_SEC]
  * white, under [MlResultsPanelStyle.RECENT_AGE_SEC] overlay grey, otherwise
- * darker grey. When false (viewer): all rows use
- * [SpectrogramOverlayStyle.textColor] with no age variation.
+ * darker grey. When false (viewer): all rows use [freshColor] (white) with no
+ * age variation.
  */
 @Composable
 fun MlResultsPanel(
