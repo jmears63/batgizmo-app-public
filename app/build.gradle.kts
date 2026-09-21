@@ -28,8 +28,8 @@ android {
         applicationId = "uk.org.gimell.batgizmoapp"
         minSdk = 29
         targetSdk = 37
-        versionCode = 46
-        versionName = "3.1.1"
+        versionCode = 55
+        versionName = "feature/GLES"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
