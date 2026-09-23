@@ -24,6 +24,7 @@ package org.batgizmo.app.pipeline
 
 import android.graphics.Paint
 import android.graphics.Rect
+import android.os.SystemClock
 import android.view.SurfaceHolder
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
@@ -33,6 +34,7 @@ import org.batgizmo.app.HORange
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.ui.GraphBase
+import timber.log.Timber
 
 class SpectrogramDrawThread(
     model: UIModel,
@@ -42,6 +44,7 @@ class SpectrogramDrawThread(
 ) : DrawThread(model, surfaceHolder, bitmapHolder) {
 
     private val unusedRect = Rect()
+    private val frameStats = SpectrogramFrameStats()
 
     override fun draw(bmPaint: Paint) {
         /*
@@ -60,6 +63,7 @@ class SpectrogramDrawThread(
                     dst = unusedRect,
                     paint = bmPaint,
                 )
+                frameStats.noteRenderedFrame()
                 return
             }
             val frame = surfaceHolder.surfaceFrame
@@ -84,8 +88,40 @@ class SpectrogramDrawThread(
                     bmPaint,
                     dirtyColumns,
                 )
+                frameStats.noteRenderedFrame()
             }
         }
+    }
+}
+
+/**
+ * Counts spectrogram presents and logs totals about once per 10 seconds.
+ */
+private class SpectrogramFrameStats {
+    private var totalFrames = 0L
+    private var framesThisInterval = 0
+    private var windowStartMs = 0L
+
+    fun noteRenderedFrame() {
+        totalFrames++
+        framesThisInterval++
+        val now = SystemClock.elapsedRealtime()
+        if (windowStartMs == 0L) {
+            windowStartMs = now
+            return
+        }
+        val elapsedMs = now - windowStartMs
+        if (elapsedMs >= LOG_INTERVAL_MS) {
+            Timber.i(
+                "Spectrogram frames: total=$totalFrames last10s=$framesThisInterval"
+            )
+            framesThisInterval = 0
+            windowStartMs = now
+        }
+    }
+
+    companion object {
+        private const val LOG_INTERVAL_MS = 10_000L
     }
 }
 
