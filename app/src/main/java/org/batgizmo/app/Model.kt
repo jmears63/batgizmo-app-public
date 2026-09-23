@@ -1499,67 +1499,70 @@ class UIModel(application: Application,
             Timber.d("startAudio called")
 
             mutex.withLock {
-                val sampleRateHz = requireNotNull(pipeline?.sampleRateHz()) {
-                    "Pipeline sample rate required for live audio"
-                }
-                val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
-                val modeFactor =
-                    if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
-                        Settings.AudioTimeExpansionFactorOptions.coerce(
-                            settings.audioTimeExpansionFactor
-                        )
-                    else
-                        Settings.AudioPitchRatioOptions.coerceForSampleRate(
-                            settings.audioPitchRatio, sampleRateHz
-                        )
-                val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
-                if (isAutoHet)
-                    autoHeterodyne.resetTracker()
-                val heterodyne1kHz =
-                    if (isAutoHet) autoHeterodyne.initialRefkHz()
-                    else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
-                val heterodyne2kHz =
-                    if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
-                        settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
-                    else
-                        null
+                val sampleRateHz = pipeline?.sampleRateHz()
+                if (sampleRateHz == null) {
+                    Timber.w("startLiveAudio: no live pipeline; audio not started")
+                    audioStartResult = LiveAudioStartResult(startedOK = false)
+                } else {
+                    val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
+                    val modeFactor =
+                        if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
+                            Settings.AudioTimeExpansionFactorOptions.coerce(
+                                settings.audioTimeExpansionFactor
+                            )
+                        else
+                            Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                                settings.audioPitchRatio, sampleRateHz
+                            )
+                    val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
+                    if (isAutoHet)
+                        autoHeterodyne.resetTracker()
+                    val heterodyne1kHz =
+                        if (isAutoHet) autoHeterodyne.initialRefkHz()
+                        else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
+                    val heterodyne2kHz =
+                        if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
+                            settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
+                        else
+                            null
 
-                when (effectiveLiveInputSource()) {
-                    Settings.LiveInputSourceOptions.USB.value -> {
-                        usbService.startAudio(
-                            heterodyne1kHz,
-                            heterodyne2kHz,
-                            settings.audioBoostFactor,
-                            playbackMode,
-                            modeFactor,
-                            settings.audioPitchHpfEnabled
-                        )
-                        audioOutputActive = true
-                        if (isAutoHet)
-                            autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
-                        audioStartResult = LiveAudioStartResult(startedOK = true)
-                    }
+                    when (effectiveLiveInputSource()) {
+                        Settings.LiveInputSourceOptions.USB.value -> {
+                            usbService.startAudio(
+                                heterodyne1kHz,
+                                heterodyne2kHz,
+                                settings.audioBoostFactor,
+                                playbackMode,
+                                modeFactor,
+                                settings.audioPitchHpfEnabled
+                            )
+                            audioOutputActive = true
+                            if (isAutoHet)
+                                autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
+                            audioStartResult = LiveAudioStartResult(startedOK = true)
+                        }
 
-                    Settings.LiveInputSourceOptions.PHONE_MIC.value -> {
-                        val started = usbService.startLiveInputAudio(
-                            sampleRateHz,
-                            heterodyne1kHz,
-                            heterodyne2kHz,
-                            settings.audioBoostFactor,
-                            playbackMode,
-                            modeFactor,
-                            settings.audioPitchHpfEnabled
-                        )
-                        micCaptureService.liveAudioMonitorEnabled = started
-                        audioOutputActive = started
-                        if (started && isAutoHet)
-                            autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
-                        audioStartResult = LiveAudioStartResult(startedOK = started)
-                    }
+                        Settings.LiveInputSourceOptions.PHONE_MIC.value -> {
+                            val started = usbService.startLiveInputAudio(
+                                sampleRateHz,
+                                heterodyne1kHz,
+                                heterodyne2kHz,
+                                settings.audioBoostFactor,
+                                playbackMode,
+                                modeFactor,
+                                settings.audioPitchHpfEnabled
+                            )
+                            micCaptureService.liveAudioMonitorEnabled = started
+                            audioOutputActive = started
+                            if (started && isAutoHet)
+                                autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
+                            audioStartResult = LiveAudioStartResult(startedOK = started)
+                        }
 
-                    else -> {
-                        Timber.w("Live audio monitor is not available for this input source")
-                        audioStartResult = LiveAudioStartResult(startedOK = false)
+                        else -> {
+                            Timber.w("Live audio monitor is not available for this input source")
+                            audioStartResult = LiveAudioStartResult(startedOK = false)
+                        }
                     }
                 }
             }
