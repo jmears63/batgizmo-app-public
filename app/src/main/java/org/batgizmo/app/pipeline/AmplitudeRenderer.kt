@@ -51,7 +51,7 @@ class AmplitudeDrawThread(model: UIModel, surfaceHolder: SurfaceHolder, bitmapHo
         try {
             // The bitmap is also accessed by the pipeline thread:
             synchronized(model.amplitudeBitmapHolder) {
-                val canvas = surfaceHolder.lockHardwareCanvas()
+                val canvas = surfaceHolder.lockCanvas()
                 canvas1 = canvas
                 if (canvas != null) {
                     if (bitmap != null) {
