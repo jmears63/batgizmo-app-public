@@ -31,6 +31,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import org.json.JSONObject
 
 /**
+ * Last-used Auto Id variant and language for one classifier family.
+ */
+data class AutoIdFamilyPref(
+    val variantId: String,
+    val language: Int,
+)
+
+/**
  * There are two kinds of settings:
  * * General settings that take effect immediately.
  * * Pipeline related settings that are used when creating a processing pipeline, and are
@@ -105,6 +113,11 @@ data class Settings(
      * `description` array. Out-of-range values are treated as 0.
      */
     var autoIdLanguage: Int = DEFAULT_AUTO_ID_LANGUAGE,
+    /**
+     * Last-used variant and language per Auto Id family (classifier), so
+     * switching away and back restores the previous selection.
+     */
+    var autoIdFamilyPrefs: Map<String, AutoIdFamilyPref> = emptyMap(),
     /**
      * Per-model Auto Id classes to ignore: model id → (label key → ignored when
      * true). Label keys are the first labels JSON text column. Defaults come
@@ -559,6 +572,47 @@ data class Settings(
                 emptyMap()
             }
         }
+
+        /** Serialise [autoIdFamilyPrefs] as `{ familyId: { variant, language } }`. */
+        fun autoIdFamilyPrefsToJson(map: Map<String, AutoIdFamilyPref>): String {
+            val root = JSONObject()
+            for ((familyId, pref) in map) {
+                if (familyId.isBlank() || pref.variantId.isBlank()) continue
+                root.put(
+                    familyId,
+                    JSONObject().apply {
+                        put("variant", pref.variantId)
+                        put("language", pref.language)
+                    },
+                )
+            }
+            return root.toString()
+        }
+
+        /** Parse [autoIdFamilyPrefs] JSON; invalid input yields empty. */
+        fun autoIdFamilyPrefsFromJson(json: String): Map<String, AutoIdFamilyPref> {
+            return try {
+                val root = JSONObject(json)
+                buildMap {
+                    val keys = root.keys()
+                    while (keys.hasNext()) {
+                        val familyId = keys.next()
+                        val obj = root.optJSONObject(familyId) ?: continue
+                        val variant = obj.optString("variant")
+                        if (familyId.isBlank() || variant.isBlank()) continue
+                        put(
+                            familyId,
+                            AutoIdFamilyPref(
+                                variantId = variant,
+                                language = obj.optInt("language", DEFAULT_AUTO_ID_LANGUAGE),
+                            ),
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
     }
 
     /** True when Auto Id is on. */
@@ -567,6 +621,25 @@ data class Settings(
     /** Suppressions for [modelId], or empty if none stored. */
     fun suppressionsFor(modelId: String): Map<String, Boolean> =
         autoIdSuppressions[modelId] ?: emptyMap()
+
+    /**
+     * Set the current Auto Id model/language and remember them for [familyId].
+     * [alsoRemember] is merged first (e.g. the family being left).
+     */
+    fun withAutoIdFamilySelection(
+        familyId: String,
+        modelId: String,
+        language: Int,
+        alsoRemember: Map<String, AutoIdFamilyPref> = emptyMap(),
+    ): Settings {
+        val remembered = autoIdFamilyPrefs + alsoRemember +
+            (familyId to AutoIdFamilyPref(modelId, language))
+        return copy(
+            autoIdModelId = modelId,
+            autoIdLanguage = language,
+            autoIdFamilyPrefs = remembered,
+        )
+    }
 
     /**
      * Ensure every key in [defaults] exists for [modelId], filling missing
@@ -638,6 +711,7 @@ data class Settings(
     private val keyAutoId = booleanPreferencesKey("autoId")
     private val keyMlModelId = stringPreferencesKey("autoIdModelId")
     private val keyAutoIdLanguage = intPreferencesKey("autoIdLanguageIndex")
+    private val keyAutoIdFamilyPrefs = stringPreferencesKey("autoIdFamilyPrefs")
     private val keyAutoIdSuppressions = stringPreferencesKey("autoIdSuppressions")
     /** Legacy flat suppressions key; read for migration only. */
     private val keyBbnSuppresions = stringPreferencesKey("bbnSuppresions")
@@ -699,6 +773,7 @@ data class Settings(
         prefs[keyAutoId] = autoIdEnabled
         prefs[keyMlModelId] = autoIdModelId
         prefs[keyAutoIdLanguage] = autoIdLanguage
+        prefs[keyAutoIdFamilyPrefs] = autoIdFamilyPrefsToJson(autoIdFamilyPrefs)
         prefs[keyAutoIdSuppressions] = autoIdSuppressionsToJson(autoIdSuppressions)
     }
 
@@ -820,6 +895,10 @@ data class Settings(
         }
         if (prefs[keyAutoIdLanguage] != null)
             autoIdLanguage = requireNotNull(prefs[keyAutoIdLanguage])
+        if (prefs[keyAutoIdFamilyPrefs] != null) {
+            autoIdFamilyPrefs =
+                autoIdFamilyPrefsFromJson(requireNotNull(prefs[keyAutoIdFamilyPrefs]))
+        }
         when {
             prefs[keyAutoIdSuppressions] != null ->
                 autoIdSuppressions =

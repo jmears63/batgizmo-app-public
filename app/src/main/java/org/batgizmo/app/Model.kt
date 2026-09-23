@@ -1068,7 +1068,13 @@ class UIModel(application: Application,
         val defaults = installed.labelCatalog
             .filter { !it.discard }
             .associate { it.key to it.disableByDefault }
-        val updated = settings.copy(autoIdModelId = installed.id)
+        val language = settings.autoIdFamilyPrefs[installed.familyId]?.language
+            ?: settings.autoIdLanguage
+        val updated = settings.withAutoIdFamilySelection(
+            familyId = installed.familyId,
+            modelId = installed.id,
+            language = language,
+        )
         updated.mergeAutoIdSuppressionDefaults(installed.id, defaults)
         updateStoredSettings(updated)
         // Same-id overwrite does not flip autoIdModelChanged; always remmap.
@@ -1096,9 +1102,22 @@ class UIModel(application: Application,
         }
         if (!removed) return false
         val nested = settings.autoIdSuppressions.filterKeys { it !in removedModelIds }
+        val prefsWithout = settings.autoIdFamilyPrefs - familyId
         val fallback = MlCatalog.resolveDescriptor(assets, null)
+        val remaining = MlCatalog.listDescriptors(assets)
+        val remembered = prefsWithout[fallback.familyId]
+        val modelId = remembered?.variantId
+            ?.takeIf { id -> remaining.any { it.id == id } }
+            ?: fallback.id
+        val chosen = remaining.firstOrNull { it.id == modelId } ?: fallback
+        val language = remembered?.language
+            ?.takeIf { chosen.languages.isEmpty() || it in chosen.languages.indices }
+            ?: settings.autoIdLanguage
         val updated = settings.copy(
-            autoIdModelId = fallback.id,
+            autoIdModelId = chosen.id,
+            autoIdLanguage = language,
+            autoIdFamilyPrefs = prefsWithout +
+                (chosen.familyId to AutoIdFamilyPref(chosen.id, language)),
             autoIdSuppressions = nested,
         )
         val defaults = fallback.labelCatalog

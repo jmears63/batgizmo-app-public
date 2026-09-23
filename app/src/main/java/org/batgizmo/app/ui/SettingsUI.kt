@@ -88,6 +88,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.batgizmo.app.AutoIdFamilyPref
 import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.diagnosticLogger
@@ -712,19 +713,42 @@ class SettingsUI(private val model: UIModel) {
                     fun versionLabel(version: String?): String =
                         version?.takeIf { it.isNotBlank() } ?: "unknown"
 
-                    fun persistModelId(modelId: String) {
+                    var autoIdLanguage by rememberSaveable {
+                        mutableStateOf(model.settings.autoIdLanguage)
+                    }
+
+                    fun persistSelection(
+                        modelId: String,
+                        language: Int = autoIdLanguage,
+                        alsoRemember: Map<String, AutoIdFamilyPref> = emptyMap(),
+                    ) {
                         if (modelId.isBlank()) return
                         autoIdModelId = modelId
+                        autoIdLanguage = language
                         // ViewModel scope: survives file-picker / composition pauses.
                         model.viewModelScope.launch {
                             val desc = MlCatalog.resolveDescriptor(context.assets, modelId)
+                            val lang = language.coerceIn(
+                                0,
+                                (desc.languages.size - 1).coerceAtLeast(0),
+                            )
+                            autoIdLanguage = lang
                             val defaults = desc.labelCatalog
                                 .filter { !it.discard }
                                 .associate { it.key to it.disableByDefault }
-                            val updated = model.settings.copy(autoIdModelId = desc.id)
+                            val updated = model.settings.withAutoIdFamilySelection(
+                                familyId = desc.familyId,
+                                modelId = desc.id,
+                                language = lang,
+                                alsoRemember = alsoRemember,
+                            )
                             updated.mergeAutoIdSuppressionDefaults(desc.id, defaults)
                             model.updateStoredSettings(updated)
                         }
+                    }
+
+                    fun persistModelId(modelId: String) {
+                        persistSelection(modelId)
                     }
 
                     val appContext = context.applicationContext
@@ -740,6 +764,7 @@ class SettingsUI(private val model: UIModel) {
                                 )
                                 catalogRevision++
                                 autoIdModelId = installed.id
+                                autoIdLanguage = model.settings.autoIdLanguage
                             } catch (e: Exception) {
                                 Timber.e(e, "BYOM import failed")
                                 importError = when (e) {
@@ -786,6 +811,7 @@ class SettingsUI(private val model: UIModel) {
                                     )
                                     catalogRevision++
                                     autoIdModelId = installed.id
+                                    autoIdLanguage = model.settings.autoIdLanguage
                                     importBusy = false
                                 }
                             } catch (e: Exception) {
@@ -818,14 +844,42 @@ class SettingsUI(private val model: UIModel) {
                             ?.variants
                             .orEmpty()
                         if (variants.isNotEmpty()) {
-                            // Keep current variant when staying in-family; else pick the first.
-                            val nextId =
-                                if (selectedDescriptor?.familyId == familyId) {
-                                    selectedDescriptor.id
+                            if (selectedDescriptor?.familyId == familyId) {
+                                persistModelId(selectedDescriptor.id)
+                            } else {
+                                val leaving = if (selectedFamilyId.isNotBlank() &&
+                                    autoIdModelId.isNotBlank()
+                                ) {
+                                    mapOf(
+                                        selectedFamilyId to AutoIdFamilyPref(
+                                            variantId = autoIdModelId,
+                                            language = autoIdLanguage,
+                                        )
+                                    )
                                 } else {
-                                    variants.first().id
+                                    emptyMap()
                                 }
-                            persistModelId(nextId)
+                                val remembered =
+                                    (model.settings.autoIdFamilyPrefs + leaving)[familyId]
+                                val nextId = remembered?.variantId
+                                    ?.takeIf { id -> variants.any { it.id == id } }
+                                    ?: variants.first().id
+                                val nextLanguages =
+                                    variants.first { it.id == nextId }.languages
+                                val nextLanguage = remembered?.language
+                                    ?.takeIf {
+                                        nextLanguages.isEmpty() || it in nextLanguages.indices
+                                    }
+                                    ?: Settings.DEFAULT_AUTO_ID_LANGUAGE.let { default ->
+                                        if (nextLanguages.isEmpty()) default
+                                        else default.coerceIn(0, nextLanguages.lastIndex)
+                                    }
+                                persistSelection(
+                                    nextId,
+                                    nextLanguage,
+                                    alsoRemember = leaving,
+                                )
+                            }
                         }
                     }
 
@@ -890,9 +944,6 @@ class SettingsUI(private val model: UIModel) {
                     val languageOptions = remember(languages) {
                         languages.mapIndexed { index, name -> index.toString() to name }
                     }
-                    var autoIdLanguage by rememberSaveable {
-                        mutableStateOf(model.settings.autoIdLanguage)
-                    }
                     if (languages.isNotEmpty()) {
                         val selectedIndex =
                             if (autoIdLanguage in languages.indices) autoIdLanguage else 0
@@ -905,12 +956,7 @@ class SettingsUI(private val model: UIModel) {
                             ) { value: String ->
                                 val index =
                                     value.toIntOrNull()?.takeIf { it in languages.indices } ?: 0
-                                autoIdLanguage = index
-                                scope.launch {
-                                    model.updateStoredSettings(
-                                        model.settings.copy(autoIdLanguage = index)
-                                    )
-                                }
+                                persistSelection(autoIdModelId, index)
                             }
                         }
                     }
@@ -1054,6 +1100,7 @@ class SettingsUI(private val model: UIModel) {
                                             }
                                             catalogRevision++
                                             autoIdModelId = model.settings.autoIdModelId
+                                            autoIdLanguage = model.settings.autoIdLanguage
                                         }
                                     }
                                 ) {
