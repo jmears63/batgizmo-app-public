@@ -61,7 +61,7 @@ class SpectrogramDrawThread(
         try {
             // The bitmap is also accessed by the pipeline thread:
             synchronized(model.spectrogramBitmapHolder) {
-                val canvas = surfaceHolder.lockCanvas()
+                val canvas = surfaceHolder.lockHardwareCanvas()
                 canvas1 = canvas
                 if (canvas != null) {
                     if (bitmap == null) {
