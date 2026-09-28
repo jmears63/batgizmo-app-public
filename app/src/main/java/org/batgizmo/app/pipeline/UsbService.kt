@@ -39,6 +39,8 @@ import android.os.Parcelable
 import android.util.Base64
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
+import com.android.server.usb.descriptors.Usb10ACInputTerminal
+import com.android.server.usb.descriptors.Usb10ACOutputTerminal
 import com.android.server.usb.descriptors.Usb10ASFormatI
 import com.android.server.usb.descriptors.Usb10ASGeneral
 import com.android.server.usb.descriptors.Usb20ASFormatI
@@ -46,7 +48,9 @@ import com.android.server.usb.descriptors.Usb20ASGeneral
 import com.android.server.usb.descriptors.UsbACAudioStreamEndpoint
 import com.android.server.usb.descriptors.UsbACFeatureUnit
 import com.android.server.usb.descriptors.UsbACInterfaceUnparsed
+import com.android.server.usb.descriptors.UsbACSelectorUnit
 import com.android.server.usb.descriptors.UsbConfigDescriptor
+import com.android.server.usb.descriptors.UsbDescriptor
 import com.android.server.usb.descriptors.UsbDescriptorParser
 import com.android.server.usb.descriptors.UsbEndpointDescriptor
 import com.android.server.usb.descriptors.UsbInterfaceDescriptor
@@ -604,6 +608,7 @@ class UsbService(private val context: Context,
     }
 
     private val VOLUME_CONTROL = 0x02
+    private val MUTE_CONTROL = 0x01
     private val DEVICE_TO_HOST_CLASS_INTERFACE = 0xA1
     private val HOST_TO_DEVICE_CLASS_INTERFACE = 0x21
 
@@ -726,6 +731,30 @@ class UsbService(private val context: Context,
         }
     }
 
+    private fun setMuteValue(
+        connection: UsbDeviceConnection,
+        featureUnitId: Int,
+        interfaceNumber: Int,
+        muted: Boolean,
+        channel: Int
+    ) {
+        val buffer = byteArrayOf(if (muted) 1 else 0)
+        val wValue = (MUTE_CONTROL shl 8) or channel
+        val wIndex = (featureUnitId shl 8) or interfaceNumber
+        val sent = connection.controlTransfer(
+            HOST_TO_DEVICE_CLASS_INTERFACE,
+            UsbAudioRequest.SET_CUR.code,
+            wValue,
+            wIndex,
+            buffer,
+            buffer.size,
+            1000
+        )
+        if (sent != 1) {
+            throw IllegalStateException("Failed to set mute control")
+        }
+    }
+
     /**
      * Find the UsbInterface class relating to the endpoint we intend to use.
      */
@@ -759,10 +788,16 @@ class UsbService(private val context: Context,
         // val interfacesToClaim: List<Int>,
         val packetSize: Int = 0,
         val sampleRateSettable: Boolean,
-        val volumeSettable: Boolean,
         val featureUnitId: Int?,
-        val audioControlInterfaceNumber: Int?
+        val audioControlInterfaceNumber: Int?,
+        val volumeChannels: IntArray = intArrayOf(),
+        val unmuteChannels: IntArray = intArrayOf(),
     ) : Comparable<EndpointData>, Parcelable {
+
+        val volumeSettable: Boolean
+            get() = featureUnitId != null &&
+                audioControlInterfaceNumber != null &&
+                volumeChannels.isNotEmpty()
 
         override fun compareTo(other: EndpointData): Int = compareValuesBy(this, other,
             { it.usbDevice.deviceId },
@@ -932,21 +967,22 @@ class UsbService(private val context: Context,
         var endpointAddress: Int = 0
         var packetSize: Int = 0
         var uac2ClockId: Int? = null
-        // var interfacesToClaim = mutableListOf<Int>()
         var currentlyParsingInterface: Int? = null
-        var volumeSettable = false
-        var featureUnitId: Int? = null
-        var audioControlInterfaceNumber: Int? = null
-
+        var asTerminalLink: Int? = null
+        val topology = UsbAcTopology()
 
         for (desc in parser.descriptors) {
 
             // Restart any time we see a new config descriptor:
             if (desc is UsbConfigDescriptor) {
                 state = DescriptorParserState.EXPECTING_CONFIG
-                // XXX Really we should also result many of the variables declared above.
+                topology.clear()
+                asTerminalLink = null
+                // XXX Really we should also reset many of the variables declared above.
                 //  But who has more than one configuration in their device?
             }
+
+            ingestAcTopology(desc, topology)
 
             do {
                 var consumed = true
@@ -978,29 +1014,6 @@ class UsbService(private val context: Context,
                             val d = desc as UsbInterfaceDescriptor
                             if (d.type == 4.toByte()) {
                                 currentlyParsingInterface = d.interfaceNumber
-                            }
-                        }
-                        catch (e: ClassCastException) {
-                        }
-
-                        // See if there is a feature unit with volume control:
-                        try {
-                            val d = desc as UsbACFeatureUnit    // Throws if not a feature unit.
-
-                            val rawData = d.rawData
-                            val bUnitId = rawData[0]
-                            val bSourceId = rawData[1]
-                            val bControlSize = rawData[2]
-                            if (bControlSize > 0) {
-                                val bmaControls0 = rawData[3]
-                                if (bmaControls0.toInt() and 2 != 0) {
-                                    volumeSettable = true
-                                    featureUnitId = bUnitId.toInt()
-                                    audioControlInterfaceNumber = currentlyParsingInterface
-                                }
-                                Timber.d("descriptor: UsbACFeatureUnit found: volumeControlSupported = $volumeSettable, " +
-                                        "currentlyParsingInterface = $currentlyParsingInterface" +
-                                        "featureUnitId = $featureUnitId")
                             }
                         }
                         catch (e: ClassCastException) {
@@ -1049,9 +1062,10 @@ class UsbService(private val context: Context,
                         if (desc is Usb10ASGeneral) {
                             var d = desc as Usb10ASGeneral
                             if (d.formatTag == 1) {  // PCM
+                                asTerminalLink = d.terminalLink.toInt() and 0xFF
                                 state = DescriptorParserState.EXPECTING_AS10FORMATI;
                                 consumed = true
-                                Timber.d("descriptor: found Usb10ASGeneral format ${d.formatTag}")
+                                Timber.d("descriptor: found Usb10ASGeneral format ${d.formatTag} terminalLink=$asTerminalLink")
                             }
                         }
                         else if (desc is Usb20ASGeneral) {
@@ -1151,7 +1165,17 @@ class UsbService(private val context: Context,
                             val bmAttributesSampleFrequencyBit = 1
                             val sampleRateSettable: Boolean = (d.attributes and bmAttributesSampleFrequencyBit) != 0
 
-                            // currentlyParsingInterface?.let { interfacesToClaim.add(it) }
+                            val captureVolume = asTerminalLink?.let { link ->
+                                UsbCaptureVolumeResolver.resolve(link, topology)
+                            }
+                            if (captureVolume != null) {
+                                Timber.d(
+                                    "descriptor: capture volume FU=${captureVolume.featureUnitId} " +
+                                        "acIf=${captureVolume.audioControlInterfaceNumber} " +
+                                        "volCh=${captureVolume.volumeChannels.contentToString()} " +
+                                        "unmuteCh=${captureVolume.unmuteChannels.contentToString()}"
+                                )
+                            }
 
                             // Success - we have found a suitable audio streaming endpoint:
                             val details = EndpointData(
@@ -1167,9 +1191,10 @@ class UsbService(private val context: Context,
                                 bitResolution,
                                 packetSize,
                                 sampleRateSettable,
-                                volumeSettable,
-                                featureUnitId,
-                                audioControlInterfaceNumber
+                                captureVolume?.featureUnitId,
+                                captureVolume?.audioControlInterfaceNumber,
+                                captureVolume?.volumeChannels ?: intArrayOf(),
+                                captureVolume?.unmuteChannels ?: intArrayOf(),
                             )
 
                             candidateEndpoints.add(details)
@@ -1185,6 +1210,45 @@ class UsbService(private val context: Context,
         }
 
         return candidateEndpoints
+    }
+
+    private fun ingestAcTopology(desc: UsbDescriptor, topology: UsbAcTopology) {
+        when (desc) {
+            is UsbInterfaceDescriptor -> {
+                if (desc.usbClass == 1 &&
+                    desc.usbSubclass == UsbDescriptor.AUDIO_AUDIOCONTROL
+                ) {
+                    topology.audioControlInterfaceNumber = desc.interfaceNumber
+                }
+            }
+            is Usb10ACInputTerminal -> {
+                val id = desc.terminalID.toInt() and 0xFF
+                topology.inputs[id] = UsbAcInputTerminal(id, desc.terminalType)
+            }
+            is Usb10ACOutputTerminal -> {
+                val id = desc.terminalID.toInt() and 0xFF
+                topology.outputs[id] = UsbAcOutputTerminal(
+                    id,
+                    desc.terminalType,
+                    desc.sourceID.toInt() and 0xFF
+                )
+            }
+            is UsbACFeatureUnit -> {
+                UsbCaptureVolumeResolver.parseFeatureUnit(desc.rawData)?.let { unit ->
+                    topology.features[unit.id] = unit
+                    Timber.d(
+                        "descriptor: Feature Unit ${unit.id} source=${unit.sourceId} " +
+                            "controls=${unit.channelControls.contentToString()}"
+                    )
+                }
+            }
+            is UsbACSelectorUnit -> {
+                val id = desc.unitID.toInt() and 0xFF
+                val sources = desc.sourceIDs?.map { it.toInt() and 0xFF }?.toIntArray()
+                    ?: intArrayOf()
+                topology.selectors[id] = UsbAcSelectorUnit(id, sources)
+            }
+        }
     }
 
     private fun selectSampleRate(sampleRates: IntArray?): Int {
@@ -1245,26 +1309,30 @@ class UsbService(private val context: Context,
                     actualSampleRate = getUac2SampleRate(conn, endpointData.uac2ClockId)
                 }
 
-                if (endpointData.volumeSettable &&
-                    endpointData.audioControlInterfaceNumber != null &&
-                    endpointData.featureUnitId != null) {
-                    // Read the allowable volume range from the device:
-                    val unitId = endpointData.featureUnitId
-                    val ifNumber = endpointData.audioControlInterfaceNumber
+                if (endpointData.volumeSettable) {
+                    val unitId = requireNotNull(endpointData.featureUnitId)
+                    val ifNumber = requireNotNull(endpointData.audioControlInterfaceNumber)
+                    val volumeChannel = endpointData.volumeChannels[0]
 
                     try {
                         val cur =
-                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_CUR)
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_CUR, volumeChannel)
                         val min =
-                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_MIN)
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_MIN, volumeChannel)
                         val max =
-                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_MAX)
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_MAX, volumeChannel)
                         val res =
-                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_RES)
-                        Timber.d("Settable volume discovered in the USB descriptor.")
+                            getVolumeValue(conn, unitId, ifNumber, UsbAudioRequest.GET_RES, volumeChannel)
+                        Timber.d("Capture volume on FU $unitId channel $volumeChannel")
 
                         if (min <= max && res > 0) {
-                            // Notify those who would like to know:
+                            for (ch in endpointData.unmuteChannels) {
+                                try {
+                                    setMuteValue(conn, unitId, ifNumber, muted = false, channel = ch)
+                                } catch (e: IllegalStateException) {
+                                    Timber.e("Unable to unmute microphone channel $ch: $e")
+                                }
+                            }
                             Timber.d("onFeatureUnitDiscovered invoked: $min $max $res $cur")
                             onFeatureUnitDiscovered(min / 256f, max / 256f, res / 256f, cur / 256f)
                         }
@@ -1622,27 +1690,24 @@ class UsbService(private val context: Context,
     }
 
     suspend fun setVolume(volumeDB: Float): Boolean {
-        mutex.withLock {
-            usbConnection?.let { conn ->
-                endpointData?.let { e ->
-                    val v = (volumeDB * 256).toInt()
-                    if (e.featureUnitId != null && e.audioControlInterfaceNumber != null) {
-                        try {
-                            setVolumeValue(
-                                conn,
-                                e.featureUnitId, e.audioControlInterfaceNumber, v
-                            )
-                            return true
-                        }
-                        catch (e: IllegalStateException) {
-                            Timber.e("Unable to set microphone volume: $e")
-                        }
-                    }
+        return mutex.withLock {
+            val conn = usbConnection ?: return@withLock false
+            val e = endpointData ?: return@withLock false
+            val unitId = e.featureUnitId ?: return@withLock false
+            val ifNumber = e.audioControlInterfaceNumber ?: return@withLock false
+            if (e.volumeChannels.isEmpty())
+                return@withLock false
+            val v = (volumeDB * 256).toInt()
+            try {
+                for (ch in e.volumeChannels) {
+                    setVolumeValue(conn, unitId, ifNumber, v, ch)
                 }
+                return@withLock true
+            } catch (ex: IllegalStateException) {
+                Timber.e("Unable to set microphone volume: $ex")
             }
+            false
         }
-
-        return false
     }
 
     suspend fun resume() {
