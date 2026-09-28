@@ -313,7 +313,8 @@ fun MyLamp(dp: Dp, colour: Color) {
 }
 
 @Composable
-fun MyLamp2(dp: Dp, colour: Color) {
+fun MyLamp2(dp: Dp, colour: Color, enabled: Boolean = true) {
+    val displayColour = if (enabled) colour else colour.copy(alpha = 0.25f)
     Box(
         modifier = Modifier.size(dp * 2), // room for glow
         contentAlignment = Alignment.Center
@@ -324,7 +325,7 @@ fun MyLamp2(dp: Dp, colour: Color) {
                 .size(dp * 1.6f)
                 .background(
                     brush = Brush.radialGradient(
-                        colors = listOf(colour.copy(alpha = 0.35f), Color.Transparent)
+                        colors = listOf(displayColour.copy(alpha = 0.35f), Color.Transparent)
                     ),
                     shape = CircleShape
                 )
@@ -334,16 +335,17 @@ fun MyLamp2(dp: Dp, colour: Color) {
         Box(
             modifier = Modifier
                 .size(dp)
-                .shadow(8.dp, CircleShape, clip = false)
+                .shadow(if (enabled) 8.dp else 0.dp, CircleShape, clip = false)
                 .clip(CircleShape)
                 .background(
                     brush = Brush.radialGradient(
-                        colors = listOf(colour, colour.copy(alpha = 0.6f))
+                        colors = listOf(displayColour, displayColour.copy(alpha = 0.6f))
                     )
                 )
         )
     }
 }
+
 @Composable
 fun MyCheckbox(label: String, initialValue: Boolean, onChange: (Boolean) -> Job) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -475,16 +477,25 @@ fun MyLatchingButton(
 }
 
 @Composable
-fun MyFloatSlider(label: String, format: String, initialValue: Float,
-                  range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Job)
-{
+fun MyFloatSlider(
+    label: String,
+    format: String,
+    initialValue: Float,
+    range: ClosedFloatingPointRange<Float>,
+    enabled: Boolean = true,
+    onChange: (Float) -> Job,
+) {
     var sliderValue by remember { mutableFloatStateOf(initialValue) } // Initial value
+    val labelColor = if (enabled)
+        MaterialTheme.colorScheme.onSurface
+    else
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
 
     Column(
         modifier = Modifier.padding(16.dp)
     ) {
         val s = "$label: ${format.format(sliderValue)}"
-        Text(text = s)
+        Text(text = s, color = labelColor)
 
         Slider(
             value = sliderValue,
@@ -494,7 +505,8 @@ fun MyFloatSlider(label: String, format: String, initialValue: Float,
             onValueChangeFinished = {
                 onChange(sliderValue)
             },
-            valueRange = range
+            valueRange = range,
+            enabled = enabled,
         )
     }
 }
@@ -506,14 +518,20 @@ fun MyFloatRangeSlider(
     initialRangeStart: Float,
     initialRangeEnd: Float,
     valueRange: ClosedFloatingPointRange<Float>,
-    onChange: (ClosedFloatingPointRange<Float>) -> Job
+    enabled: Boolean = true,
+    onChange: (ClosedFloatingPointRange<Float>) -> Job,
 ) {
     var sliderValues by remember { mutableStateOf<ClosedFloatingPointRange<Float>>(
         initialRangeStart..initialRangeEnd) }
+    val labelColor = if (enabled)
+        MaterialTheme.colorScheme.onSurface
+    else
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
 
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
-            text = "$label: ${format.format(sliderValues.start)} - ${format.format(sliderValues.endInclusive)}"
+            text = "$label: ${format.format(sliderValues.start)} - ${format.format(sliderValues.endInclusive)}",
+            color = labelColor,
         )
 
         RangeSlider(
@@ -524,7 +542,8 @@ fun MyFloatRangeSlider(
             onValueChangeFinished = {
                 onChange(sliderValues)
             },
-            valueRange = valueRange
+            valueRange = valueRange,
+            enabled = enabled,
         )
     }
 }

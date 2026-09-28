@@ -238,7 +238,8 @@ class USBSourceStep(
                 model.maybeSubmitLiveAudioToMl(
                     bufferDescriptor.data,
                     bufferDescriptor.offset,
-                    bufferDescriptor.samples
+                    bufferDescriptor.samples,
+                    observedAtEpochSec = bufferDescriptor.observedAtEpochSec,
                 )
 
             is LiveDataBridge.BufferDescriptor.Native -> {
@@ -250,7 +251,12 @@ class USBSourceStep(
                     scratch,
                     nativeUSB
                 )
-                model.maybeSubmitLiveAudioToMl(scratch, 0, copied)
+                model.maybeSubmitLiveAudioToMl(
+                    scratch,
+                    0,
+                    copied,
+                    observedAtEpochSec = bufferDescriptor.observedAtEpochSec,
+                )
             }
         }
     }

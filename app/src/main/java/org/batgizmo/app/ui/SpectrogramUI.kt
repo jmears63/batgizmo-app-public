@@ -151,6 +151,27 @@ class SpectrogramUI(
     val localAutoId = compositionLocalOf<Boolean> { false }
 
     /**
+     * If classifier-auto is armed but Auto Id is off, uncheck the button and
+     * stop the writer. Returns true when it disarmed.
+     */
+    private fun disarmTriggeredRecordingIfClassifierNotReady(
+        classifierTrigger: Boolean,
+        autoIdEnabled: Boolean,
+    ): Boolean {
+        if (!classifierTrigger ||
+            !buttonState.triggeredRecordingChecked.value ||
+            autoIdEnabled
+        ) {
+            return false
+        }
+        buttonState.triggeredRecordingChecked.value = false
+        model.fileWriter?.configureTrigger(
+            FileWriter.TriggerConfig(triggerType = TriggerType.OFF)
+        )
+        return true
+    }
+
+    /**
      * Possible UI states relating to audio mode.
      * Note that these are just UI states, not underlying audio processing.
      */
@@ -230,7 +251,9 @@ class SpectrogramUI(
         val samplingRateHz: MutableState<Int?> = mutableStateOf(null),
         val dataPresent: MutableState<Boolean> = mutableStateOf(false),
         /** Bumped when auto-het axis highlight inputs change. */
-        val autoHetAxisHighlightKey: MutableIntState = mutableIntStateOf(0)
+        val autoHetAxisHighlightKey: MutableIntState = mutableIntStateOf(0),
+        val autoTriggerMode: MutableIntState =
+            mutableIntStateOf(Settings.AutoTriggerModeOptions.ENERGY.value),
     ) {
         fun isAudioPlaybackOn(): Boolean = audioMode.intValue == AudioMode.ON.value
 
@@ -1520,6 +1543,11 @@ class SpectrogramUI(
 
         val manualRecordingChecked by buttonState.manualRecordingChecked
         val triggeredRecordingChecked by buttonState.triggeredRecordingChecked
+        val autoTriggerMode by uiState.autoTriggerMode
+        val classifierTrigger =
+            autoTriggerMode == Settings.AutoTriggerModeOptions.CLASSIFIER.value
+        // model.settings is not Compose state; localAutoId updates when Settings closes.
+        val classifierReady = localAutoId.current
         val liveRecordingAvailable =
             appMode.intValue == AppMode.LIVE.value &&
                 liveMode.intValue == LiveMode.STREAMING.value
@@ -1527,7 +1555,16 @@ class SpectrogramUI(
         val manualRecordingButtonEnabled =
             liveRecordingAvailable && (!triggeredRecordingChecked || manualRecordingChecked)
         val triggeredRecordingButtonEnabled =
-            liveRecordingAvailable && (!manualRecordingChecked || triggeredRecordingChecked)
+            liveRecordingAvailable &&
+                (!manualRecordingChecked || triggeredRecordingChecked) &&
+                (!classifierTrigger || classifierReady || triggeredRecordingChecked)
+
+        LaunchedEffect(classifierTrigger, classifierReady, triggeredRecordingChecked) {
+            disarmTriggeredRecordingIfClassifierNotReady(
+                classifierTrigger,
+                classifierReady,
+            )
+        }
         val isViewer = appMode.intValue == AppMode.VIEWER.value
         val audioChecked by buttonState.audioChecked
         // Keep Play while the first-run audio modal is open; switch to Pause only after Start
@@ -1631,7 +1668,11 @@ class SpectrogramUI(
                         true -> {
                             // Mutually exclusive trigger modes:
                             buttonState.manualRecordingChecked.value = false
-                            model.fileWriter?.configureTrigger(FileWriter.TriggerConfig(triggerType = TriggerType.AUTO))
+                            model.fileWriter?.configureTrigger(
+                                FileWriter.TriggerConfig(
+                                    triggerType = FileWriter.autoTriggerType(model.settings)
+                                )
+                            )
                         }
 
                         false -> {
@@ -1790,6 +1831,26 @@ class SpectrogramUI(
             uiState.pagingState.value?.reset(newSettings)
         }
 
+        uiState.autoTriggerMode.intValue = newSettings.autoTriggerMode
+
+        if (buttonState.triggeredRecordingChecked.value) {
+            val classifier = newSettings.isClassifierAutoTrigger()
+            val autoIdEnabled = newSettings.isAutoIdEnabled()
+            if (!disarmTriggeredRecordingIfClassifierNotReady(classifier, autoIdEnabled)) {
+                val triggerModeChanged = previousSettings == null ||
+                    previousSettings.isClassifierAutoTrigger() != classifier
+                val autoIdChanged = previousSettings == null ||
+                    previousSettings.isAutoIdEnabled() != autoIdEnabled
+                if (triggerModeChanged || autoIdChanged) {
+                    model.fileWriter?.configureTrigger(
+                        FileWriter.TriggerConfig(
+                            triggerType = FileWriter.autoTriggerType(newSettings)
+                        )
+                    )
+                }
+            }
+        }
+
         previousSettings?.let { prev ->
             if (newSettings.liveInputSource != prev.liveInputSource &&
                 uiState.liveMode.intValue in setOf(LiveMode.STREAMING.value, LiveMode.PAUSED.value)
@@ -1800,7 +1861,8 @@ class SpectrogramUI(
                 newSettings.autoHeterodyneLoMaxKhz != prev.autoHeterodyneLoMaxKhz ||
                 newSettings.audioPlaybackMode != prev.audioPlaybackMode ||
                 newSettings.autoTriggerRangeMinkHz != prev.autoTriggerRangeMinkHz ||
-                newSettings.autoTriggerRangeMaxkHz != prev.autoTriggerRangeMaxkHz
+                newSettings.autoTriggerRangeMaxkHz != prev.autoTriggerRangeMaxkHz ||
+                newSettings.autoTriggerMode != prev.autoTriggerMode
             ) {
                 uiState.autoHetAxisHighlightKey.intValue++
             }

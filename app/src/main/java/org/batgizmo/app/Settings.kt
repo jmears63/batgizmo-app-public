@@ -29,6 +29,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import org.json.JSONObject
+import kotlin.math.ceil
 
 /**
  * Last-used Auto Id variant and language for one classifier family.
@@ -36,6 +37,14 @@ import org.json.JSONObject
 data class AutoIdFamilyPref(
     val variantId: String,
     val language: Int,
+)
+
+/**
+ * Post-trigger duration after ceiling to a whole number of Auto Id windows.
+ */
+data class ClassifierPostTrigger(
+    val durationSec: Float,
+    val windowCount: Int,
 )
 
 /**
@@ -98,6 +107,11 @@ data class Settings(
     var autoTriggerThresholdDb: Float = 40f,
     var autoTriggerRangeMinkHz: Float = 16f,
     var autoTriggerRangeMaxkHz: Float = 120f,
+    /**
+     * Detector used when triggered recording is armed: FFT energy in a
+     * frequency band, or Auto Id classifier match.
+     */
+    var autoTriggerMode: Int = AutoTriggerModeOptions.ENERGY.value,
     /**
      * Master switch for Auto Id. When false, Auto Id is off but [autoIdModelId]
      * is retained so re-enabling restores the last model.
@@ -456,6 +470,21 @@ data class Settings(
         override fun theLabel(): String = label
     }
 
+    /** Auto-record detector when triggered recording is armed. */
+    enum class AutoTriggerModeOptions(val value: Int, val label: String) : EnumHelper {
+        ENERGY(0, "Energy threshold"),
+        CLASSIFIER(1, "Classifier match");
+
+        override fun theValue(): Int = value
+        override fun theLabel(): String = label
+
+        companion object {
+            val DEFAULT = ENERGY
+            fun coerce(mode: Int): Int =
+                entries.firstOrNull { it.value == mode }?.value ?: DEFAULT.value
+        }
+    }
+
     enum class MaxFileTimeOptions(val value: Int, val label: String) : EnumHelper {
         MAX_FILE_TIME_500MS(500, "0.5s"),
         MAX_FILE_TIME_1000MS(1000, "1s"),
@@ -507,6 +536,39 @@ data class Settings(
 
         fun isAutoHeterodyneSampleRateApplicable(sampleRateHz: Int): Boolean =
             sampleRateHz >= AUTO_HET_MIN_SAMPLE_RATE_HZ
+
+        /**
+         * BattyBirdNET window (144000 samples at 256 kHz). Used when the
+         * Auto Id model cannot be resolved.
+         */
+        const val CLASSIFIER_WINDOW_FALLBACK_SEC = 0.5625f
+
+        /**
+         * Analysed Auto Id window length in seconds, or null if the geometry is invalid.
+         */
+        fun classifierWindowDurationSec(windowSamples: Int, sampleRateHz: Int): Float? {
+            if (windowSamples <= 0 || sampleRateHz <= 0) return null
+            return windowSamples.toFloat() / sampleRateHz.toFloat()
+        }
+
+        /**
+         * Ceil [postTriggerTimeMs] to a whole number of classifier windows, at least one.
+         */
+        fun ceiledClassifierPostTrigger(
+            postTriggerTimeMs: Int,
+            windowDurationSec: Float,
+        ): ClassifierPostTrigger {
+            require(windowDurationSec > 0f) { "windowDurationSec must be > 0" }
+            val requestedSec = maxOf(postTriggerTimeMs, 0) / 1000f
+            val n = ceil((requestedSec / windowDurationSec).toDouble()).toInt().coerceAtLeast(1)
+            return ClassifierPostTrigger(n * windowDurationSec, n)
+        }
+
+        /** Compact seconds label, e.g. `1.125s`. */
+        fun prettySeconds(seconds: Float): String {
+            val s = "%.4f".format(seconds).trimEnd('0').trimEnd('.')
+            return "${s}s"
+        }
 
         /** Serialise a flat label-key → suppressed map. */
         fun labelSuppressionsToJson(map: Map<String, Boolean>): String {
@@ -618,6 +680,16 @@ data class Settings(
     /** True when Auto Id is on. */
     fun isAutoIdEnabled(): Boolean = autoIdEnabled
 
+    /** True when triggered recording uses the FFT energy detector. */
+    fun isEnergyAutoTrigger(): Boolean =
+        AutoTriggerModeOptions.coerce(autoTriggerMode) ==
+            AutoTriggerModeOptions.ENERGY.value
+
+    /** True when triggered recording uses Auto Id classifier matches. */
+    fun isClassifierAutoTrigger(): Boolean =
+        AutoTriggerModeOptions.coerce(autoTriggerMode) ==
+            AutoTriggerModeOptions.CLASSIFIER.value
+
     /** Suppressions for [modelId], or empty if none stored. */
     fun suppressionsFor(modelId: String): Map<String, Boolean> =
         autoIdSuppressions[modelId] ?: emptyMap()
@@ -700,6 +772,7 @@ data class Settings(
     private val keyAutoTriggerThresholdDb = floatPreferencesKey("autoTriggerThresholdDb")
     private val keyAutoTriggerRangeStartkHz = floatPreferencesKey("autoTriggerRangeStartkHz")
     private val keyAutoTriggerRangeEndkHz = floatPreferencesKey("autoTriggerRangeEndkHz")
+    private val keyAutoTriggerMode = intPreferencesKey("autoTriggerMode")
     private val keyLoopedAudioPlayback = booleanPreferencesKey("loopedAudioPlayback")
     private val keyAudioOutputDeviceId = stringPreferencesKey("audioOutputDeviceId")
     private val keySuppressAudioFeedbackWarning = booleanPreferencesKey("suppressAudioFeedbackWarning")
@@ -759,6 +832,7 @@ data class Settings(
         prefs[keyAutoTriggerThresholdDb] = autoTriggerThresholdDb
         prefs[keyAutoTriggerRangeStartkHz] = autoTriggerRangeMinkHz
         prefs[keyAutoTriggerRangeEndkHz] = autoTriggerRangeMaxkHz
+        prefs[keyAutoTriggerMode] = AutoTriggerModeOptions.coerce(autoTriggerMode)
         prefs[keyLoopedAudioPlayback] = loopedAudioPlayback
         prefs[keyAudioOutputDeviceId] = audioOutputDeviceId
         prefs[keySuppressAudioFeedbackWarning] = suppressAudioFeedbackWarning
@@ -864,6 +938,9 @@ data class Settings(
             autoTriggerRangeMinkHz = requireNotNull(prefs[keyAutoTriggerRangeStartkHz])
         if (prefs[keyAutoTriggerRangeEndkHz] != null)
             autoTriggerRangeMaxkHz = requireNotNull(prefs[keyAutoTriggerRangeEndkHz])
+        if (prefs[keyAutoTriggerMode] != null)
+            autoTriggerMode =
+                AutoTriggerModeOptions.coerce(requireNotNull(prefs[keyAutoTriggerMode]))
         if (prefs[keyLoopedAudioPlayback] != null)
             loopedAudioPlayback = requireNotNull(prefs[keyLoopedAudioPlayback])
         if (prefs[keyAudioOutputDeviceId] != null)

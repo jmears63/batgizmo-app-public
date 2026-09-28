@@ -42,6 +42,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.pipeline.LiveConnectResult
 import org.batgizmo.app.pipeline.NativeUSB
 import timber.log.Timber
@@ -56,6 +57,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.round
+import kotlin.math.roundToInt
 
 class FileWriter(
     private val scope: CoroutineScope,
@@ -75,18 +77,30 @@ class FileWriter(
         public fun prettyFloat3Dps(value: Float) : String {
             return "%.3f".format(value).trimEnd('0').trimEnd('.')
         }
+
+        fun autoTriggerType(settings: Settings): TriggerType =
+            if (settings.isClassifierAutoTrigger()) TriggerType.AUTO_CLASSIFIER
+            else TriggerType.AUTO_ENERGY
     }
 
     enum class TriggerType(val value: Int, val str: String) {
         OFF(0, "OFF"),
-        AUTO(1, "Auto"),
+        AUTO_ENERGY(1, "AutoEnergy"),
         MANUAL(2, "Manual"),
-        CONTINUATION(100, "Continuation")
+        AUTO_CLASSIFIER(3, "AutoClassifier"),
+        CONTINUATION(100, "Continuation");
+
+        fun isAutoLike(): Boolean = this == AUTO_ENERGY || this == AUTO_CLASSIFIER
     }
 
     data class TriggerConfig(
         val triggerType: TriggerType = TriggerType.OFF
     )
+
+    private sealed class TriggerEvent {
+        data object Energy : TriggerEvent()
+        data class Classifier(val windowStartEpochSec: Double) : TriggerEvent()
+    }
 
     private enum class State(val value: Int) {
         START_STATE(0),
@@ -145,23 +159,113 @@ class FileWriter(
     private val bufferPaddingTimeMs = 1000
 
     /**
-     * Compute the ring buffer size needed to hold the given pre-trigger duration plus padding.
-     * The padding gives time to open the file after a trigger without losing data, and also acts
-     * as a floor so the buffer is never pathologically small when little or no pre-trigger is set.
+     * Extra ring capacity after the analysed window so queueing and inference
+     * can finish while the window start is still in the buffer. Leftover slack
+     * also covers opening the file; classifier mode does not add
+     * [bufferPaddingTimeMs] on top.
+     */
+    private val classifierInferSlackMs = 2000
+
+    /**
+     * Compute the ring buffer size needed to hold [totalTimeMs] of samples.
      *
      * The multiplication is done in Long to avoid Int overflow: at high sample rates (e.g. 384 kHz)
      * and longer pre-trigger times, sampleRate * totalMs exceeds Int.MAX_VALUE even though the final
      * entry count (after dividing by 1000) comfortably fits in an Int.
      */
-    private fun computeBufferSizeEntries(preTriggerTimeMs: Int): Int =
-        (sampleRate.toLong() * (maxOf(preTriggerTimeMs, 0) + bufferPaddingTimeMs) / 1000).toInt()
+    private fun computeBufferSizeEntries(totalTimeMs: Int): Int =
+        (sampleRate.toLong() * maxOf(totalTimeMs, 0) / 1000).toInt().coerceAtLeast(1)
+
+    private data class ClassifierWindowCache(
+        val modelId: String,
+        val durationSec: Float?,
+    )
+
+    /** Published atomically; do not take [mutex] while holding [classifierWindowResolveLock]. */
+    private val classifierWindowResolveLock = Any()
+    @Volatile
+    private var classifierWindowCache: ClassifierWindowCache? = null
 
     /**
-     * The ring buffer holding recent live data, sized for the currently configured pre-trigger
-     * time. It is reallocated by the data-reading coroutine (the only writer of buffer contents)
-     * when that setting changes, while no file is being written. See [maybeResizeBuffer].
+     * May resolve [MlCatalog]; call only when [mutex] is not held.
      */
-    private var bufferSizeEntries = computeBufferSizeEntries(model.settings.preTriggerTimeMs)
+    private fun classifierWindowDurationSec(): Float? {
+        val modelId = model.settings.autoIdModelId
+        classifierWindowCache?.let { cached ->
+            if (cached.modelId == modelId) return cached.durationSec
+        }
+        return resolveClassifierWindowCache(modelId).durationSec
+    }
+
+    private fun resolveClassifierWindowCache(modelId: String): ClassifierWindowCache {
+        classifierWindowCache?.let { cached ->
+            if (cached.modelId == modelId) return cached
+        }
+        synchronized(classifierWindowResolveLock) {
+            classifierWindowCache?.let { cached ->
+                if (cached.modelId == modelId) return cached
+            }
+            val resolved = try {
+                MlCatalog.ensureInitialized(context)
+                val desc = MlCatalog.resolveDescriptor(context.assets, modelId)
+                val durationSec = Settings.classifierWindowDurationSec(
+                    desc.windowSamples,
+                    desc.sampleRateHz,
+                )
+                ClassifierWindowCache(modelId, durationSec)
+            } catch (e: Exception) {
+                Timber.w(e, "Could not resolve classifier window duration")
+                ClassifierWindowCache(modelId, null)
+            }
+            classifierWindowCache = resolved
+            return resolved
+        }
+    }
+
+    /** Reads the published cache only; safe under [mutex]. */
+    private fun classifierWindowDurationSecOrFallback(): Float {
+        val cached = cachedClassifierGeometry()
+        return cached?.durationSec ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
+    }
+
+    private fun cachedClassifierGeometry(): ClassifierWindowCache? {
+        val modelId = model.settings.autoIdModelId
+        val cached = classifierWindowCache
+        return if (cached != null && cached.modelId == modelId) cached else null
+    }
+
+    /**
+     * Exclusive end time for a classifier sequence. Post-trigger is at least the
+     * ceiled duration after the analysed window start, and also after the write
+     * cursor: inference often finishes after window-relative post has already
+     * elapsed, and without a live tail the file is dumped from the ring in a
+     * few milliseconds (red recording frame flashes then drops).
+     */
+    private fun classifierSequenceEndEpochSec(
+        windowStartEpochSec: Double,
+        cursorEpochSec: Double = writeCursorEpochSec,
+    ): Double {
+        val windowRelativeEnd = windowStartEpochSec + classifierPostTriggerSec
+        val livePostEnd = cursorEpochSec + classifierPostTriggerSec
+        return maxOf(windowRelativeEnd, livePostEnd)
+    }
+
+    private fun requiredBufferTimeMs(): Int {
+        val pre = maxOf(model.settings.preTriggerTimeMs, 0)
+        if (!model.settings.isClassifierAutoTrigger())
+            return pre + bufferPaddingTimeMs
+        val windowMs = ((classifierWindowDurationSec()
+            ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC) * 1000f).roundToInt()
+        return pre + windowMs + classifierInferSlackMs
+    }
+
+    /**
+     * The ring buffer holding recent live data, sized for pre-trigger (and, in
+     * classifier mode, the analysed window plus inference slack). It is reallocated
+     * by the data-reading coroutine (the only writer of buffer contents) when that
+     * requirement changes, while no file is being written. See [maybeResizeBuffer].
+     */
+    private var bufferSizeEntries = computeBufferSizeEntries(requiredBufferTimeMs())
     private var buffer = ShortArray(bufferSizeEntries)
 
     /**
@@ -203,6 +307,21 @@ class FileWriter(
      */
     private var nextReadIndex = 0
 
+    /** Unix-epoch seconds of the sample at [nextWriteIndex] (just after the last stored sample). */
+    private var writeCursorEpochSec: Double = 0.0
+
+    /** First sample of the current classifier file sequence, Unix-epoch seconds. */
+    private var sequenceStartEpochSec: Double = 0.0
+
+    /** Exclusive end of the current classifier file sequence, Unix-epoch seconds. */
+    private var sequenceEndEpochSec: Double = 0.0
+
+    /** Ceiled classifier post-trigger duration snapshot for the current write. */
+    private var classifierPostTriggerSec: Float = 0f
+
+    /** Trigger type of the file sequence currently being written, if any. */
+    private var activeSequenceTriggerType: TriggerType? = null
+
     private var guanoDataTime: String? = null
     private var triggerHandlerJob: Job? = null
 
@@ -211,7 +330,7 @@ class FileWriter(
     private val triggerConfigChannel = Channel<TriggerConfig>(capacity = 10)
     private var stateJob: Job? = null
     private val cancelled = AtomicBoolean(false)
-    private val triggerEventChannel = Channel<Unit>(Channel.CONFLATED)  // Combine multiple triggers into one.
+    private val triggerEventChannel = Channel<TriggerEvent>(Channel.CONFLATED)
 
     /**
      * True while a file write sequence is in progress. Used to avoid reallocating the ring buffer
@@ -240,7 +359,7 @@ class FileWriter(
     private suspend fun maybeResizeBuffer() {
         if (fileWriteActive)
             return
-        val required = computeBufferSizeEntries(model.settings.preTriggerTimeMs)
+        val required = computeBufferSizeEntries(requiredBufferTimeMs())
         if (required == bufferSizeEntries)
             return
         mutex.withLock {
@@ -254,6 +373,7 @@ class FileWriter(
             nextWriteIndex = 0
             nextReadIndex = 0
             entriesAvailable = 0
+            writeCursorEpochSec = 0.0
         }
     }
 
@@ -332,6 +452,9 @@ class FileWriter(
                         // Can't be any more than the buffer size:
                         entriesAvailable = minOf(entriesAvailable + copiedCount, bufferSizeEntries)
                         /// Timber.d("asdf: entriesAvailable += copiedCount ($copiedCount) = $entriesAvailable")
+                        writeCursorEpochSec =
+                            bufferDescriptor.observedAtEpochSec +
+                                copiedCount.toDouble() / sampleRate
 
                         // Timber.d("New raw data received: copiedCount = $copiedCount")
                         require(entriesAvailable in 0..bufferSizeEntries) {
@@ -426,11 +549,19 @@ class FileWriter(
     }
 
     /**
-     * Call this method to trigger or retrigger in auto mode.
+     * Call this method to trigger or retrigger energy-auto.
      */
     fun trigger() {
         Timber.d("trigger() called")
-        triggerEventChannel.trySend(Unit)
+        triggerEventChannel.trySend(TriggerEvent.Energy)
+    }
+
+    /**
+     * Call this method to trigger or retrigger classifier-auto at [windowStartEpochSec].
+     */
+    fun triggerClassifier(windowStartEpochSec: Double) {
+        Timber.d("triggerClassifier() called windowStart=$windowStartEpochSec")
+        triggerEventChannel.trySend(TriggerEvent.Classifier(windowStartEpochSec))
     }
 
     private suspend fun test() {
@@ -497,7 +628,7 @@ class FileWriter(
                             transitionStartManualTriggered(config)
                             state = State.MANUAL_TRIGGER_STATE
                         }
-                        else if (config.triggerType == TriggerType.AUTO) {
+                        else if (config.triggerType.isAutoLike()) {
                             transitionStartAutoTriggered(config)
                             state = State.AUTO_TRIGGER_STATE
                         }
@@ -514,6 +645,12 @@ class FileWriter(
                             transitionStartManualTriggered(config)
                             state = State.MANUAL_TRIGGER_STATE
                         }
+                        else if (config.triggerType.isAutoLike() &&
+                            config.triggerType != triggerConfig?.triggerType
+                        ) {
+                            transitionStopAutoTriggered(config)
+                            transitionStartAutoTriggered(config)
+                        }
                     }
 
                     State.MANUAL_TRIGGER_STATE -> {
@@ -522,7 +659,7 @@ class FileWriter(
                             transitionStopManualTriggered(config)
                             state = State.START_STATE
                         }
-                        else if (config.triggerType == TriggerType.AUTO) {
+                        else if (config.triggerType.isAutoLike()) {
                             transitionStopManualTriggered(config)
                             transitionStartAutoTriggered(config)
                             state = State.AUTO_TRIGGER_STATE
@@ -555,6 +692,10 @@ class FileWriter(
         nextReadIndex = 0
         nextWriteIndex = 0
         entriesAvailable = 0
+        writeCursorEpochSec = 0.0
+        sequenceStartEpochSec = 0.0
+        sequenceEndEpochSec = 0.0
+        activeSequenceTriggerType = null
     }
 
     private suspend fun transitionStartManualTriggered(config: TriggerConfig) {
@@ -600,12 +741,29 @@ class FileWriter(
         triggerHandlerJob = scope.launch(context = Dispatchers.IO) {
             Timber.d("transitionStartAutoTriggered coroutine started")
             try {
-                for (dummy in triggerEventChannel) {
+                for (event in triggerEventChannel) {
+                    val armedType = mutex.withLock { triggerConfig?.triggerType }
+                    val windowStart: Double?
+                    if (armedType == TriggerType.AUTO_ENERGY && event is TriggerEvent.Energy) {
+                        windowStart = null
+                    } else if (
+                        armedType == TriggerType.AUTO_CLASSIFIER &&
+                        event is TriggerEvent.Classifier
+                    ) {
+                        windowStart = event.windowStartEpochSec
+                    } else {
+                        continue
+                    }
                     mutex.withLock {
                         // This is a new trigger.
                         // Spawn a coroutine that writes a file:
                         fileWriterJob = scope.launch(context = Dispatchers.IO) {
-                            writeFileSequence(this, true, TriggerType.AUTO)
+                            writeFileSequence(
+                                this,
+                                true,
+                                armedType ?: TriggerType.AUTO_ENERGY,
+                                windowStart,
+                            )
                         }
                     }
 
@@ -640,25 +798,37 @@ class FileWriter(
 
     private suspend fun writeFileSequence(scope: CoroutineScope,
                                           isTriggered: Boolean,
-                                          triggerType: TriggerType
+                                          triggerType: TriggerType,
+                                          classifierWindowStartEpochSec: Double? = null
                                           ) {
-        Timber.i("writeFileSequence called")
+        Timber.i("writeFileSequence called triggerType=$triggerType")
 
         val s = model.settings      // For brevity. Note that model.settings is a var not a val.
+
+        // Resolve catalog before taking [mutex] (lock order: catalog cache, then mutex).
+        classifierWindowDurationSec()
+        mutex.withLock {
+            activeSequenceTriggerType = triggerType
+            getSettingsSnapshot()
+        }
 
         var initialFileFields = linkedMapOf<String, String>()
 
         initialFileFields.apply {
             put("$batgizmoNamespace|TriggerType", triggerType.str)
             put("$batgizmoNamespace|PretriggerS", prettyFloat3Dps(s.preTriggerTimeMs / 1000f))
-            put("$batgizmoNamespace|PosttriggerS", prettyFloat3Dps(s.postTriggerTimeMs / 1000f))
+            val postSec = if (triggerType == TriggerType.AUTO_CLASSIFIER)
+                classifierPostTriggerSec
+            else
+                s.postTriggerTimeMs / 1000f
+            put("$batgizmoNamespace|PosttriggerS", prettyFloat3Dps(postSec))
             if (s.unlimitedFileLength)
                 put("$batgizmoNamespace|MaxFileTimeS", "unlimited")
             else
                 put("$batgizmoNamespace|MaxFileTimeS", prettyFloat3Dps(s.maxFileTimeMs / 1000f))
         }
 
-        if (triggerType == TriggerType.AUTO) {
+        if (triggerType == TriggerType.AUTO_ENERGY) {
             initialFileFields.apply() {
                 put(
                     "$batgizmoNamespace|AutoTriggerThresholddB",
@@ -666,6 +836,15 @@ class FileWriter(
                 )
                 put("$batgizmoNamespace|AutoTriggerMinkHz", prettyFloat3Dps(s.autoTriggerRangeMinkHz))
                 put("$batgizmoNamespace|AutoTriggerMaxkHz", prettyFloat3Dps(s.autoTriggerRangeMaxkHz))
+            }
+        }
+
+        if (triggerType == TriggerType.AUTO_CLASSIFIER) {
+            val windowSec = classifierWindowDurationSec()
+            initialFileFields.apply {
+                put("$batgizmoNamespace|AutoIdModel", s.autoIdModelId)
+                if (windowSec != null)
+                    put("$batgizmoNamespace|ClassifierWindowS", prettyFloat3Dps(windowSec))
             }
         }
 
@@ -686,7 +865,7 @@ class FileWriter(
                     // Open the temp file to write to. The first time around we reset
                     // the read index to current - pretrigger, as the starting
                     // point to write to file from.
-                    startFile(resetIndexes, isTriggered)
+                    startFile(resetIndexes, isTriggered, classifierWindowStartEpochSec)
                 }
                 resetIndexes = false
 
@@ -716,11 +895,16 @@ class FileWriter(
         finally {
             Timber.d("Finally executed")
             fileWriteActive = false
+            activeSequenceTriggerType = null
             signalCurrentlyWriting(false)
         }
     }
 
-    private suspend fun startFile(resetIndexes: Boolean, isTriggered: Boolean): FileOutputStream {
+    private suspend fun startFile(
+        resetIndexes: Boolean,
+        isTriggered: Boolean,
+        classifierWindowStartEpochSec: Double? = null,
+    ): FileOutputStream {
 
         getSettingsSnapshot()
 
@@ -754,35 +938,79 @@ class FileWriter(
             // with each other:
             val nowIndex = nextWriteIndex
 
-            /*
-             * Figure out where to start writing to file from in the buffer. That can be in past if pretrigger
-             * is configured. The data writing loop will catch up from that point, as long as the data
-             * hasn't been overwritten in the buffer.
-             * Don't try to read more pretrigger data than is available.
-             */
-            val preTriggerEntriesAvailable = minOf(preTriggerEntries, entriesAvailable)
-            require(preTriggerEntriesAvailable in 0..preTriggerEntries) {
-                "preTriggerEntriesAvailable = $preTriggerEntriesAvailable, preTriggerEntries = $preTriggerEntries"
-            }
-            // Limit entriesAvailable to the data we intend to write to file, in effect discarding any older data
-            // and avoiding reads from overtaking writes to the buffer:
-            entriesAvailable = preTriggerEntriesAvailable
-            nextReadIndex =
-                subtractAndWrap(nowIndex, preTriggerEntriesAvailable, bufferSizeEntries)
-            require(nextReadIndex in 0 until bufferSizeEntries) {
-                "nextReadIndex = $nextReadIndex, bufferSizeEntries = $bufferSizeEntries"
-            }
-            /// Timber.d("asdf: preTriggerEntriesAvailable = $preTriggerEntriesAvailable, nextReadIndex = $nextReadIndex, " +
-            ///        "nowIndex = $nowIndex, entriesAvailable = $entriesAvailable")
-
-            // Note some values to be used when retriggering during a recording:
-            preTriggerEntriesToBeWrittenToFile = preTriggerEntriesAvailable
-            entriesToWriteToFileSequence = if (isTriggered) {
-                // Calculate an end index based on the same reference point as the read index:
-                preTriggerEntriesAvailable + postTriggerEntries
+            if (isTriggered && classifierWindowStartEpochSec != null) {
+                val cursorEpochSec = if (writeCursorEpochSec > 0.0)
+                    writeCursorEpochSec
+                else
+                    System.currentTimeMillis() / 1000.0
+                val samplesAfterWindowStart = round(
+                    (cursorEpochSec - classifierWindowStartEpochSec) * sampleRate
+                ).toInt().coerceAtLeast(0)
+                val originRequested = samplesAfterWindowStart
+                // Keep pre-trigger even if the window start is only partly in the ring.
+                val preLookback = minOf(preTriggerEntries, entriesAvailable)
+                val originLookback = minOf(
+                    originRequested,
+                    entriesAvailable - preLookback
+                )
+                if (originLookback < originRequested) {
+                    Timber.w(
+                        "Classifier window start not fully in ring: " +
+                            "needed $originRequested samples, have $originLookback after pre-trigger"
+                    )
+                }
+                val startLookback = originLookback + preLookback
+                entriesAvailable = startLookback
+                nextReadIndex =
+                    subtractAndWrap(nowIndex, startLookback, bufferSizeEntries)
+                require(nextReadIndex in 0 until bufferSizeEntries) {
+                    "nextReadIndex = $nextReadIndex, bufferSizeEntries = $bufferSizeEntries"
+                }
+                preTriggerEntriesToBeWrittenToFile = preLookback
+                sequenceStartEpochSec =
+                    cursorEpochSec - startLookback.toDouble() / sampleRate
+                // End is max(windowStart, writeCursor) + ceiled post, so a late
+                // inference still records a live tail (and the red frame lasts).
+                sequenceEndEpochSec =
+                    classifierSequenceEndEpochSec(
+                        classifierWindowStartEpochSec,
+                        cursorEpochSec,
+                    )
+                val planned = round(
+                    (sequenceEndEpochSec - sequenceStartEpochSec) * sampleRate
+                ).toInt()
+                entriesToWriteToFileSequence = maxOf(planned, startLookback)
             } else {
-                // Indefinite:
-                null
+                /*
+                 * Figure out where to start writing to file from in the buffer. That can be in past if pretrigger
+                 * is configured. The data writing loop will catch up from that point, as long as the data
+                 * hasn't been overwritten in the buffer.
+                 * Don't try to read more pretrigger data than is available.
+                 */
+                val preTriggerEntriesAvailable = minOf(preTriggerEntries, entriesAvailable)
+                require(preTriggerEntriesAvailable in 0..preTriggerEntries) {
+                    "preTriggerEntriesAvailable = $preTriggerEntriesAvailable, preTriggerEntries = $preTriggerEntries"
+                }
+                // Limit entriesAvailable to the data we intend to write to file, in effect discarding any older data
+                // and avoiding reads from overtaking writes to the buffer:
+                entriesAvailable = preTriggerEntriesAvailable
+                nextReadIndex =
+                    subtractAndWrap(nowIndex, preTriggerEntriesAvailable, bufferSizeEntries)
+                require(nextReadIndex in 0 until bufferSizeEntries) {
+                    "nextReadIndex = $nextReadIndex, bufferSizeEntries = $bufferSizeEntries"
+                }
+
+                // Note some values to be used when retriggering during a recording:
+                preTriggerEntriesToBeWrittenToFile = preTriggerEntriesAvailable
+                entriesToWriteToFileSequence = if (isTriggered) {
+                    // Calculate an end index based on the same reference point as the read index:
+                    preTriggerEntriesAvailable + postTriggerEntries
+                } else {
+                    // Indefinite:
+                    null
+                }
+                sequenceStartEpochSec = 0.0
+                sequenceEndEpochSec = 0.0
             }
         }
 
@@ -796,7 +1024,20 @@ class FileWriter(
         // Using float to avoid integer overflows:
         maxFileEntries = round(sampleRate.toFloat() * model.settings.maxFileTimeMs / 1000).toInt()
         preTriggerEntries = round(sampleRate.toFloat() * model.settings.preTriggerTimeMs / 1000).toInt()
-        postTriggerEntries = round(sampleRate.toFloat() * model.settings.postTriggerTimeMs / 1000).toInt()
+        if (activeSequenceTriggerType == TriggerType.AUTO_CLASSIFIER) {
+            val windowSec = classifierWindowDurationSecOrFallback()
+            val ceiled = Settings.ceiledClassifierPostTrigger(
+                model.settings.postTriggerTimeMs,
+                windowSec,
+            )
+            classifierPostTriggerSec = ceiled.durationSec
+            postTriggerEntries =
+                round(sampleRate.toFloat() * ceiled.durationSec).toInt()
+        } else {
+            classifierPostTriggerSec = 0f
+            postTriggerEntries =
+                round(sampleRate.toFloat() * model.settings.postTriggerTimeMs / 1000).toInt()
+        }
         unlimitedFileLength = model.settings.unlimitedFileLength
 
         // Make sure the maximum is long enough to accommodate the pre trigger. Multiple
@@ -864,20 +1105,45 @@ class FileWriter(
                 entriesToWriteToFileSequence?.let { it ->
                     val result = triggerEventChannel.tryReceive()
                     if (result.isSuccess) {
-                        // I don't *think* this is necessary, but just in case we need it to consume the event:
-                        val dummy = result.getOrNull()
+                        val event = result.getOrNull()
+                        when {
+                            activeSequenceTriggerType == TriggerType.AUTO_CLASSIFIER &&
+                                event is TriggerEvent.Classifier -> {
+                                val newEnd =
+                                    classifierSequenceEndEpochSec(event.windowStartEpochSec)
+                                if (newEnd > sequenceEndEpochSec) {
+                                    sequenceEndEpochSec = newEnd
+                                    val newCount = round(
+                                        (sequenceEndEpochSec - sequenceStartEpochSec) * sampleRate
+                                    ).toInt()
+                                    entriesToWriteToFileSequence = maxOf(it, newCount)
+                                    Timber.d(
+                                        "Handling classifier retrigger: entriesToWriteToFileSequence " +
+                                            "updated from $it to $entriesToWriteToFileSequence"
+                                    )
+                                }
+                            }
+                            activeSequenceTriggerType == TriggerType.AUTO_ENERGY &&
+                                event is TriggerEvent.Energy -> {
+                                val remainingPretriggerEntries = maxOf(
+                                    0,
+                                    preTriggerEntriesToBeWrittenToFile -
+                                        entriesActuallyWrittenToFileSequence
+                                )
+                                entriesToWriteToFileSequence =
+                                    entriesActuallyWrittenToFileSequence +
+                                        remainingPretriggerEntries + postTriggerEntries
 
-                        val remainingPretriggerEntries = maxOf(0, preTriggerEntriesToBeWrittenToFile - entriesActuallyWrittenToFileSequence)
-                        entriesToWriteToFileSequence = entriesActuallyWrittenToFileSequence + remainingPretriggerEntries + postTriggerEntries
+                                require(entriesToWriteToFileSequence!! >= 0) {
+                                    "entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile, " +
+                                    "entriesToBeWrittenToFileSequence = $entriesToWriteToFileSequence, " +
+                                    "it = $it, entriesActuallyWrittenToFilesInSequence = $it"
+                                }
 
-                        require(entriesToWriteToFileSequence!! >= 0) {
-                            "entriesActuallyWrittenToCurrentFile = $entriesActuallyWrittenToCurrentFile, " +
-                            "entriesToBeWrittenToFileSequence = $entriesToWriteToFileSequence, " +
-                            "it = $it, entriesActuallyWrittenToFilesInSequence = $it"
+                                Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToWriteToFileSequence; " +
+                                        "entriesActuallyWrittenToFilesInSequence = $entriesActuallyWrittenToFileSequence; remaining pretrigger = $remainingPretriggerEntries")
+                            }
                         }
-
-                        Timber.d("Handling retrigger: entriesToBeWrittenToFile updated from $it to $entriesToWriteToFileSequence; " +
-                                "entriesActuallyWrittenToFilesInSequence = $entriesActuallyWrittenToFileSequence; remaining pretrigger = $remainingPretriggerEntries")
                     }
                 }
 

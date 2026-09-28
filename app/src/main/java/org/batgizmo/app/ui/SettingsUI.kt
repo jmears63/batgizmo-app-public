@@ -65,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -152,10 +153,30 @@ class SettingsUI(private val model: UIModel) {
         var internalMicId by rememberSaveable { mutableStateOf(model.settings.internalMicId) }
         var unlimitedFileLength by rememberSaveable { mutableStateOf(model.settings.unlimitedFileLength) }
         var wavStorageVolume by rememberSaveable { mutableStateOf(model.settings.wavStorageVolume) }
+        var autoTriggerMode by rememberSaveable { mutableStateOf(model.settings.autoTriggerMode) }
+        var postTriggerTimeMs by rememberSaveable { mutableStateOf(model.settings.postTriggerTimeMs) }
+        val energyControlsEnabled =
+            autoTriggerMode == Settings.AutoTriggerModeOptions.ENERGY.value
         // Local so Language / Suppressions / enable react when Auto ID settings change
         // (model.settings is a plain var and does not trigger recomposition on its own):
         var autoIdEnabled by rememberSaveable { mutableStateOf(model.settings.autoIdEnabled) }
         var autoIdModelId by rememberSaveable { mutableStateOf(model.settings.autoIdModelId) }
+
+        var classifierWindowSec by remember { mutableStateOf<Float?>(null) }
+        LaunchedEffect(autoIdModelId) {
+            classifierWindowSec = withContext(Dispatchers.IO) {
+                try {
+                    MlCatalog.ensureInitialized(context.applicationContext)
+                    val desc = MlCatalog.resolveDescriptor(context.assets, autoIdModelId)
+                    Settings.classifierWindowDurationSec(
+                        desc.windowSamples,
+                        desc.sampleRateHz,
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+            }
+        }
 
         // Expand/collapse state for each collapsible section, indexed by SettingsSection.ordinal.
         // Held here (rather than inside the list items) so the LazyColumn can gate which sections'
@@ -516,16 +537,42 @@ class SettingsUI(private val model: UIModel) {
                 }
 
                 item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MyListSelector<Settings.PostTriggerTimeOptions>(
-                            Settings.PostTriggerTimeOptions.entries,
-                            "Post trigger",
-                            model.settings.postTriggerTimeMs
-                        ) { value: Int ->
-                            // Signal the updated settings values:
-                            scope.launch {
-                                model.updateStoredSettings(model.settings.copy(postTriggerTimeMs = value))
+                    val classifierAuto =
+                        autoTriggerMode == Settings.AutoTriggerModeOptions.CLASSIFIER.value
+                    val windowSec = classifierWindowSec
+                    val postHint = if (classifierAuto && windowSec != null) {
+                        val ceiled = Settings.ceiledClassifierPostTrigger(
+                            postTriggerTimeMs,
+                            windowSec,
+                        )
+                        val windowWord =
+                            if (ceiled.windowCount == 1) "window" else "windows"
+                        "Records ${Settings.prettySeconds(ceiled.durationSec)} " +
+                            "(${ceiled.windowCount} $windowWord)"
+                    } else {
+                        null
+                    }
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MyListSelector<Settings.PostTriggerTimeOptions>(
+                                Settings.PostTriggerTimeOptions.entries,
+                                "Post trigger",
+                                postTriggerTimeMs
+                            ) { value: Int ->
+                                postTriggerTimeMs = value
+                                scope.launch {
+                                    model.updateStoredSettings(
+                                        model.settings.copy(postTriggerTimeMs = value)
+                                    )
+                                }
                             }
+                        }
+                        postHint?.let { hint ->
+                            Text(
+                                hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
@@ -582,9 +629,29 @@ class SettingsUI(private val model: UIModel) {
                 item {
                     HorizontalDivider(thickness = 2.dp)
 
-                    // Remember a coroutine scope tied to Compose lifecycle
-                    val scope = rememberCoroutineScope()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyListSelector<Settings.AutoTriggerModeOptions>(
+                            Settings.AutoTriggerModeOptions.entries,
+                            "Trigger type",
+                            autoTriggerMode
+                        ) { value: Int ->
+                            autoTriggerMode = value
+                            if (value == Settings.AutoTriggerModeOptions.CLASSIFIER.value) {
+                                autoIdEnabled = true
+                            }
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(
+                                        autoTriggerMode = value,
+                                        autoIdEnabled = autoIdEnabled,
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
 
+                item {
                     // State to hold the current color
                     var color by remember { mutableStateOf(androidx.compose.ui.graphics.Color.DarkGray) }
 
@@ -606,16 +673,21 @@ class SettingsUI(private val model: UIModel) {
                             }
                         }
                     }
+                    val lampLabelColor = if (energyControlsEnabled)
+                        MaterialTheme.colorScheme.onSurface
+                    else
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Trigger")
-                        MyLamp2(20.dp, color)
+                        Text("Trigger", color = lampLabelColor)
+                        MyLamp2(20.dp, color, enabled = energyControlsEnabled)
                     }
                 }
 
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         MyFloatSlider("Trigger threshold (dB)", "%.1f",
-                            model.settings.autoTriggerThresholdDb, -25f..70f) {
+                            model.settings.autoTriggerThresholdDb, -25f..70f,
+                            enabled = energyControlsEnabled) {
                             value: Float ->
                             scope.launch {
                                 model.updateStoredSettings(model.settings.copy(autoTriggerThresholdDb = value))
@@ -629,7 +701,8 @@ class SettingsUI(private val model: UIModel) {
                         MyFloatRangeSlider("Trigger range (kHz)", "%.1f",
                             model.settings.autoTriggerRangeMinkHz,
                             model.settings.autoTriggerRangeMaxkHz,
-                            10f..120f) {
+                            10f..120f,
+                            enabled = energyControlsEnabled) {
                                 range: ClosedFloatingPointRange<Float> ->
                             scope.launch {
                                 model.updateStoredSettings(model.settings.copy(
@@ -642,14 +715,16 @@ class SettingsUI(private val model: UIModel) {
 
             settingsSection(SettingsSection.AUTO_ID, expandedSections) {
                 item {
-                    MyCheckbox(
-                        "Enable auto classification", autoIdEnabled
-                    ) { value: Boolean ->
-                        autoIdEnabled = value
-                        scope.launch {
-                            model.updateStoredSettings(
-                                model.settings.copy(autoIdEnabled = value)
-                            )
+                    key(autoIdEnabled) {
+                        MyCheckbox(
+                            "Enable auto classification", autoIdEnabled
+                        ) { value: Boolean ->
+                            autoIdEnabled = value
+                            scope.launch {
+                                model.updateStoredSettings(
+                                    model.settings.copy(autoIdEnabled = value)
+                                )
+                            }
                         }
                     }
                 }

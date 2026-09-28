@@ -27,6 +27,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import org.batgizmo.app.HORange
+import org.batgizmo.app.Settings
 import org.batgizmo.app.UIModel
 import org.batgizmo.app.pipeline.SpectrogramRenderer
 
@@ -98,7 +99,9 @@ class SpectrogramGraph(
         overlayComposer: @Composable (Modifier, GraphPadding) -> Unit
     ) {
         val triggeredRecording by model.spectrogramButtonState.triggeredRecordingChecked
-        updateFrequencyAxisHighlights(triggeredRecording)
+        val autoTriggerMode by model.spectrogramUIState.autoTriggerMode
+        updateFrequencyAxisHighlights(triggeredRecording &&
+            autoTriggerMode == Settings.AutoTriggerModeOptions.ENERGY.value)
         titleBorder.setTitle(title)
         ComposeFrame(
             modifier,

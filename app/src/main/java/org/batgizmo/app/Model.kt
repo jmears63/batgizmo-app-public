@@ -107,13 +107,23 @@ object LiveDataBridge {
 
     sealed class BufferDescriptor {
         abstract val samples: Int
+        /** Unix-epoch seconds of the first sample in this buffer. */
+        abstract val observedAtEpochSec: Double
 
         /** Samples in a native URB buffer (USB live path). */
-        data class Native(val nativeAddress: Long, override val samples: Int) : BufferDescriptor()
+        data class Native(
+            val nativeAddress: Long,
+            override val samples: Int,
+            override val observedAtEpochSec: Double,
+        ) : BufferDescriptor()
 
         /** Samples in a Kotlin heap buffer (reserved for non-USB live sources). */
-        data class Heap(val data: ShortArray, val offset: Int, override val samples: Int) :
-            BufferDescriptor()
+        data class Heap(
+            val data: ShortArray,
+            val offset: Int,
+            override val samples: Int,
+            override val observedAtEpochSec: Double,
+        ) : BufferDescriptor()
     }
 
     // Provide finite capacity for buffering and decoupling.
@@ -141,7 +151,13 @@ object LiveDataBridge {
      */
     @JvmStatic
     fun onDataBufferReady(nativeAddress: Long, samples: Int) {
-        trySendToChannels(BufferDescriptor.Native(nativeAddress, samples))
+        trySendToChannels(
+            BufferDescriptor.Native(
+                nativeAddress,
+                samples,
+                System.currentTimeMillis() / 1000.0,
+            )
+        )
     }
 
     /**
@@ -153,7 +169,9 @@ object LiveDataBridge {
             return
         val copy = ShortArray(samples)
         source.copyInto(copy, destinationOffset = 0, startIndex = offset, endIndex = offset + samples)
-        trySendToChannels(BufferDescriptor.Heap(copy, 0, samples))
+        trySendToChannels(
+            BufferDescriptor.Heap(copy, 0, samples, System.currentTimeMillis() / 1000.0)
+        )
     }
 }
 
@@ -347,10 +365,11 @@ class UIModel(application: Application,
                 mutableDetailsTextFlow, result.sampleRate,
                 result.sampleRate * pps.dataPageTimeSpanS
             ) {
-                // This lambda is called if a trigger was detected in the live data.
+                // This lambda is called if an energy trigger was detected in the live data.
 
-                // Trigger a file write:
-                fileWriter?.trigger()
+                if (settings.isEnergyAutoTrigger()) {
+                    fileWriter?.trigger()
+                }
                 // Trigger the monitor lamp in the Settings UI:
                 triggerMonitorChannel.trySend(Unit)
             }
@@ -1970,6 +1989,11 @@ class UIModel(application: Application,
                         mutableMlWillAcceptAudioFlow.value
                     ) {
                         mlSummaryAccumulator.submitResult(result)
+                        if (result.detections.isNotEmpty() &&
+                            settings.isClassifierAutoTrigger()
+                        ) {
+                            fileWriter?.triggerClassifier(result.observedAtEpochSec)
+                        }
                     }
                 }.also {
                     mlClient = it
@@ -2070,9 +2094,13 @@ class UIModel(application: Application,
      * Cheap path from [USBSourceStep]: submit samples to [MlClient] when Auto Id is
      * accepting. Does not take [mutex].
      */
-    fun maybeSubmitLiveAudioToMl(buffer: ShortArray, offset: Int, count: Int) {
+    fun maybeSubmitLiveAudioToMl(
+        buffer: ShortArray,
+        offset: Int,
+        count: Int,
+        observedAtEpochSec: Double = System.currentTimeMillis() / 1000.0,
+    ) {
         if (!shouldSubmitLiveAudioToMl() || count <= 0) return
-        val observedAtEpochSec = System.currentTimeMillis() / 1000.0
         synchronized(mlLock) {
             if (!shouldSubmitLiveAudioToMl()) return
             mlClient?.submit(
