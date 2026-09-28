@@ -281,6 +281,8 @@ data class Settings(
 
     /** Pitch division ratios for TD-OLA playback (value = ÷ factor). */
     enum class AudioPitchRatioOptions(val value: Int, val label: String) : EnumHelper {
+        PITCH_2(2, "2"),
+        PITCH_3(3, "3"),
         PITCH_4(4, "4"),
         PITCH_6(6, "6"),
         PITCH_8(8, "8"),
