@@ -32,8 +32,8 @@ import org.junit.Test
 class UsbCaptureVolumeResolverTest {
 
     @Test
-    fun parseFeatureUnit_perChannelVolumeNoMaster() {
-        // FU 2 from the 48 kHz stereo headset dump: master none, L/R volume.
+    fun parseFeatureUnit_rodeAiPerChannelVolumeNoMaster() {
+        // FU 2: master none, L/R volume.
         val unit = UsbCaptureVolumeResolver.parseFeatureUnit(
             byteArrayOf(0x02, 0x01, 0x01, 0x00, 0x02, 0x02, 0x00)
         )
@@ -46,7 +46,7 @@ class UsbCaptureVolumeResolverTest {
     }
 
     @Test
-    fun parseFeatureUnit_masterMuteAndVolume() {
+    fun parseFeatureUnit_rodeAiHeadphoneMasterMuteAndVolume() {
         // FU 5: master mute+volume, no per-channel controls.
         val unit = UsbCaptureVolumeResolver.parseFeatureUnit(
             byteArrayOf(0x05, 0x04, 0x01, 0x03, 0x00, 0x00, 0x00)
@@ -58,8 +58,8 @@ class UsbCaptureVolumeResolverTest {
     }
 
     @Test
-    fun resolve_usesMicrophoneFeatureUnitNotHeadphones() {
-        val topology = headsetTopology()
+    fun resolve_rodeAiUsesMicrophoneFeatureUnitNotHeadphones() {
+        val topology = rodeAiTopology()
         val volume = UsbCaptureVolumeResolver.resolve(terminalLink = 3, topology)
         assertNotNull(volume)
         assertEquals(2, volume!!.featureUnitId)
@@ -69,11 +69,9 @@ class UsbCaptureVolumeResolverTest {
     }
 
     @Test
-    fun resolve_playbackTerminalLinkIsIgnored() {
-        val topology = headsetTopology()
-        // Streaming playback links to USB IT 4, not a microphone.
+    fun resolve_rodeAiPlaybackTerminalLinkIsIgnored() {
+        val topology = rodeAiTopology()
         assertNull(UsbCaptureVolumeResolver.resolve(terminalLink = 4, topology))
-        // Headphones OT walks to USB streaming input, not a mic.
         assertNull(UsbCaptureVolumeResolver.resolve(terminalLink = 6, topology))
     }
 
@@ -141,7 +139,8 @@ class UsbCaptureVolumeResolverTest {
         assertArrayEquals(intArrayOf(0), volume.unmuteChannels)
     }
 
-    private fun headsetTopology(): UsbAcTopology {
+    /** VID 19F7 / PID 0023: Mic IT1 → FU2 (L/R volume) → USB OT3; playback FU5 is headphones. */
+    private fun rodeAiTopology(): UsbAcTopology {
         return UsbAcTopology().apply {
             audioControlInterfaceNumber = 1
             inputs[1] = UsbAcInputTerminal(1, UsbTerminalTypes.TERMINAL_IN_DESKTOP_MIC)

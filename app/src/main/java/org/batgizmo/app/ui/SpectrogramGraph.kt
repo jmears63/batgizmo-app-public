@@ -109,7 +109,8 @@ class SpectrogramGraph(
             overlayComposer,
             frameGestures = { padding, scope ->
                 gestureHandler.gestureModifier(scope, padding)
-            }
+            },
+            title = title
         )
     }
 

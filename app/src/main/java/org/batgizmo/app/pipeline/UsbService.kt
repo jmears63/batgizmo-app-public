@@ -27,6 +27,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbInterface
@@ -193,6 +194,7 @@ class UsbService(private val context: Context,
     private var usbConnection: UsbDeviceConnection? = null
     private var usbDevice: UsbDevice? = null
     private var endpointData: EndpointData? = null
+    private val utf16NamesByDeviceId = mutableMapOf<Int, Pair<String?, String?>>()
 
     // The thread in use for streaming audio, or nun if nun.
     private var streamingThread: Thread? = null
@@ -386,11 +388,11 @@ class UsbService(private val context: Context,
                 return
             }
 
-            val rawDescriptors = readDeviceDescriptor(device)
-            val endpoints = parseEndpointsFromDescriptor(device, rawDescriptors)
+            val identity = readDeviceDescriptor(device)
+            val endpoints = parseEndpointsFromDescriptor(device, identity.rawDescriptors)
             val endpoint = endpoints.firstOrNull()
             if (endpoint == null) {
-                Timber.i("High-rate probe: no suitable audio endpoint on ${device.productName}")
+                Timber.i("High-rate probe: no suitable audio endpoint on ${identity.productName}")
                 usbProbeChannel.trySend(UsbHighRateMicProbeResult(found = false))
                 return
             }
@@ -398,13 +400,13 @@ class UsbService(private val context: Context,
             val rate = probeEndpointSampleRate(device, endpoint)
             val found = rate != null && rate >= UsbHighRateMicProbeResult.HIGH_RATE_MIN_HZ
             Timber.i(
-                "High-rate probe: product=${sanitizeUsbText(device.productName)} " +
+                "High-rate probe: product=${identity.productName} " +
                     "rate=$rate found=$found"
             )
             usbProbeChannel.trySend(
                 UsbHighRateMicProbeResult(
                     found = found,
-                    productName = sanitizeUsbText(device.productName),
+                    productName = identity.productName,
                     sampleRateHz = rate
                 )
             )
@@ -468,7 +470,8 @@ class UsbService(private val context: Context,
                 throw RuntimeException("This app does not have permission to access the USB device.")
             }
 
-            var rawDescriptors: ByteArray = readDeviceDescriptor(device)
+            val identity = readDeviceDescriptor(device)
+            val rawDescriptors = identity.rawDescriptors
 
             diagnosticLogger.log {
                 String.format("USB descriptor data:\n%s", Base64.encodeToString(rawDescriptors, Base64.DEFAULT))
@@ -489,21 +492,21 @@ class UsbService(private val context: Context,
             val endpoints: List<EndpointData> = parseEndpointsFromDescriptor(device, rawDescriptors)
             endpointToUse = endpoints.firstOrNull()
             if (endpointToUse == null) {
-                throw RuntimeException("Unable find a suitable audio endpoint in USB device ${device.productName}. "
+                throw RuntimeException("Unable find a suitable audio endpoint in USB device ${identity.productName}. "
                         + "The maximum sampling rate currently supported by this app is 384 kHz.")
                 }
 
             val actualSampleRate = connectToEndpoint(endpointToUse, endpoints, onFeatureUnitDiscovered)
             if (actualSampleRate == null)
-                throw RuntimeException("Unable to connect to the endpoint on device ${device.productName}.")
+                throw RuntimeException("Unable to connect to the endpoint on device ${identity.productName}.")
 
             endpointData = endpointToUse
 
             val result = LiveConnectResult(
                 true,
                 deviceName = device.deviceName,
-                manufacturerName = sanitizeUsbText(device.manufacturerName),
-                productName = sanitizeUsbText(device.productName),
+                manufacturerName = identity.manufacturerName,
+                productName = identity.productName,
                 sampleRate = actualSampleRate
             )
 
@@ -524,23 +527,89 @@ class UsbService(private val context: Context,
         }
     }
 
-    private fun readDeviceDescriptor(device: UsbDevice): ByteArray {
+    private data class UsbDeviceIdentity(
+        val rawDescriptors: ByteArray,
+        val manufacturerName: String?,
+        val productName: String?
+    )
+
+    private fun readDeviceDescriptor(device: UsbDevice): UsbDeviceIdentity {
         // Connect and read the descriptors:
-        var rawDescriptors: ByteArray? = null
+        var identity: UsbDeviceIdentity? = null
         var connection: UsbDeviceConnection? = null
         try {
             connection = usbManager.openDevice(device)
-            connection?.let {
-                rawDescriptors = it.rawDescriptors
+            connection?.let { conn ->
+                val rawDescriptors = conn.rawDescriptors
+                if (rawDescriptors != null) {
+                    val (manufacturer, product) = readUtf16DeviceNames(conn, rawDescriptors, device)
+                    val built = UsbDeviceIdentity(
+                        rawDescriptors = rawDescriptors,
+                        manufacturerName = sanitizeUsbText(manufacturer),
+                        productName = sanitizeUsbText(product)
+                    )
+                    utf16NamesByDeviceId[device.deviceId] =
+                        built.manufacturerName to built.productName
+                    identity = built
+                }
             }
         } finally {
             // Clean up whatever happens:
             connection?.close()
         }
-        if (rawDescriptors == null)
-            throw RuntimeException("Unable to read the raw descriptor from USB device ${sanitizeUsbText(device.productName)}.")
+        return identity
+            ?: throw RuntimeException("Unable to read the raw descriptor from USB device ${sanitizeUsbText(device.productName)}.")
+    }
 
-        return rawDescriptors
+    private fun readUtf16DeviceNames(
+        connection: UsbDeviceConnection,
+        rawDescriptors: ByteArray,
+        fallback: UsbDevice
+    ): Pair<String?, String?> {
+        val langId = readUsbLanguageId(connection) ?: 0x0409
+        fun name(index: Int, androidName: String?): String? {
+            if (index == 0) return androidName
+            return readUsbUtf16String(connection, index, langId)
+                ?: readUsbUtf16String(connection, index, 0)
+                ?: androidName
+        }
+        return name(UsbDeviceUtf16Names.manufacturerIndex(rawDescriptors), fallback.manufacturerName) to
+            name(UsbDeviceUtf16Names.productIndex(rawDescriptors), fallback.productName)
+    }
+
+    private fun readUsbLanguageId(connection: UsbDeviceConnection): Int? {
+        val buffer = ByteArray(255)
+        val transferred = connection.controlTransfer(
+            UsbConstants.USB_DIR_IN or UsbConstants.USB_TYPE_STANDARD,
+            UsbDescriptor.REQUEST_GET_DESCRIPTOR,
+            UsbDescriptor.DESCRIPTORTYPE_STRING.toInt() shl 8,
+            0,
+            buffer,
+            buffer.size,
+            1000
+        )
+        if (transferred < 0) return null
+        return UsbDeviceUtf16Names.decodeLanguageId(buffer, transferred)
+    }
+
+    private fun readUsbUtf16String(
+        connection: UsbDeviceConnection,
+        index: Int,
+        langId: Int
+    ): String? {
+        if (index <= 0) return null
+        val buffer = ByteArray(255)
+        val transferred = connection.controlTransfer(
+            UsbConstants.USB_DIR_IN or UsbConstants.USB_TYPE_STANDARD,
+            UsbDescriptor.REQUEST_GET_DESCRIPTOR,
+            (UsbDescriptor.DESCRIPTORTYPE_STRING.toInt() shl 8) or index,
+            langId,
+            buffer,
+            buffer.size,
+            1000
+        )
+        if (transferred < 0) return null
+        return UsbDeviceUtf16Names.decodeStringDescriptor(buffer, transferred)
     }
 
     private fun findUsbDeviceById(deviceId: Int): UsbDevice? {
@@ -1500,7 +1569,7 @@ class UsbService(private val context: Context,
             AudioDeviceInfo.TYPE_AUX_LINE -> "Aux"
             else -> "Audio output"
         }
-        val product = device.productName?.toString()?.trim().orEmpty()
+        val product = restoreUtf16AudioProduct(device.productName)
         return if (product.isNotEmpty() &&
             !product.equals("Android", ignoreCase = true) &&
             device.type != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER &&
@@ -1510,6 +1579,26 @@ class UsbService(private val context: Context,
         } else {
             typeLabel
         }
+    }
+
+    private fun restoreUtf16AudioProduct(androidName: CharSequence?): String {
+        val trimmed = androidName?.toString()?.trim().orEmpty()
+        if (trimmed.isEmpty()) return trimmed
+        utf16NamesByDeviceId.values.forEach { (manufacturer, product) ->
+            UsbDeviceUtf16Names.preferUtf16Name(trimmed, manufacturer, product)?.let { return it }
+        }
+        for (usb in usbManager.deviceList.values) {
+            val cached = utf16NamesByDeviceId[usb.deviceId] ?: continue
+            val androidProduct = usb.productName?.trim().orEmpty()
+            val androidManufacturer = usb.manufacturerName?.trim().orEmpty()
+            if (trimmed == androidProduct ||
+                trimmed == androidManufacturer ||
+                trimmed == "$androidManufacturer $androidProduct".trim()
+            ) {
+                return cached.second ?: cached.first ?: trimmed
+            }
+        }
+        return trimmed
     }
 
     private fun isSelectableOutput(device: AudioDeviceInfo): Boolean {

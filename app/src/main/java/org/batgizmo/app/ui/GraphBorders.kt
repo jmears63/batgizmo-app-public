@@ -25,6 +25,7 @@ package org.batgizmo.app.ui
 import android.graphics.Paint
 import android.graphics.RectF
 import androidx.compose.material3.ColorScheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
@@ -167,7 +168,9 @@ abstract class BorderBase {
     }
 }
 
-class TitleBorder(private var title: String?) : BorderBase() {
+class TitleBorder(initialTitle: String?) : BorderBase() {
+    private val titleState = mutableStateOf(initialTitle)
+
     override fun doLayoutFirstPass(length: Dp): Dp {
         reset()
         val cd = CalculatedDimensions(
@@ -201,6 +204,7 @@ class TitleBorder(private var title: String?) : BorderBase() {
 
                 val drawPhase2 = {
                     val textPaint = getTextPaint(colorScheme, density)
+                    val title = titleState.value
 
                     val x = with(density) { (origin.x.toPx()) + (it.lengthDp.toPx()) / 2 }
                     val y = with(density) { (origin.y + titlePaddingDp + titleTextHeightDp).toPx() }
@@ -217,8 +221,11 @@ class TitleBorder(private var title: String?) : BorderBase() {
     }
 
     fun setTitle(title: String?) {
-        this.title = title
+        titleState.value = title
     }
+
+    /** Snapshot-read so a Compose Canvas redraws when [setTitle] runs. */
+    fun observeTitle(): String? = titleState.value
 }
 
 class BlankBorderVertical : BorderBase() {

@@ -607,7 +607,7 @@ class SpectrogramUI(
             ) {
                 // Box so that we can overlay things on the spectrogram:
                 Box {
-                    val title = rememberSaveable { uiState.title }
+                    val title = uiState.title
                     val detailsText = model.detailsTextFlow.collectAsStateWithLifecycle()
 
                     SpectrogramPaneSet(
