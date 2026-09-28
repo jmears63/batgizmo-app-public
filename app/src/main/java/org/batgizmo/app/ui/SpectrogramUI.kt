@@ -928,10 +928,10 @@ class SpectrogramUI(
                                 ageColors = appMode.intValue == AppMode.LIVE.value,
                             )
                         } else {
-                            Spacer(modifier.weight(1f))
+                            Spacer(Modifier.weight(1f))
                         }
                     } else {
-                        Spacer(modifier.weight(1f))
+                        Spacer(Modifier.weight(1f))
                     }
 
                     if (uiState.audioMode.intValue == AudioMode.ON.value) {
