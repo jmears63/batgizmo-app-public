@@ -1989,25 +1989,31 @@ class UIModel(application: Application,
                         mutableMlWillAcceptAudioFlow.value
                     ) {
                         mlSummaryAccumulator.submitResult(result)
-                        if (result.detections.isNotEmpty() &&
-                            settings.isClassifierAutoTrigger()
-                        ) {
-                            val top = result.detections.first()
-                            val windowSec = Settings.classifierWindowDurationSec(
-                                descriptor.windowSamples,
-                                descriptor.sampleRateHz,
-                            ) ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
-                            val windowEnd = result.observedAtEpochSec + windowSec
-                            Timber.i(
-                                "CLF_REC_DBG classifier window %s → %s (%d detection(s))",
-                                FileWriter.wallClock(result.observedAtEpochSec),
-                                FileWriter.wallClock(windowEnd),
-                                result.detections.size,
-                            )
-                            fileWriter?.triggerClassifier(
+                        if (result.detections.isNotEmpty()) {
+                            // Always record detections for GUANO Species Auto ID when
+                            // Auto Id is producing hits (any trigger mode).
+                            fileWriter?.noteClassifierDetections(
                                 result.observedAtEpochSec,
-                                top.labelKey,
+                                result.detections,
                             )
+                            if (settings.isClassifierAutoTrigger()) {
+                                val top = result.detections.first()
+                                val windowSec = Settings.classifierWindowDurationSec(
+                                    descriptor.windowSamples,
+                                    descriptor.sampleRateHz,
+                                ) ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
+                                val windowEnd = result.observedAtEpochSec + windowSec
+                                Timber.i(
+                                    "CLF_REC_DBG classifier window %s → %s (%d detection(s))",
+                                    FileWriter.wallClock(result.observedAtEpochSec),
+                                    FileWriter.wallClock(windowEnd),
+                                    result.detections.size,
+                                )
+                                fileWriter?.triggerClassifier(
+                                    result.observedAtEpochSec,
+                                    top.labelKey,
+                                )
+                            }
                         }
                     }
                 }.also {

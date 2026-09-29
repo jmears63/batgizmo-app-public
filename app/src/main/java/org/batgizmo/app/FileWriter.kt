@@ -43,6 +43,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.batgizmo.app.ml.MlCatalog
+import org.batgizmo.app.ml.MlDetection
 import org.batgizmo.app.pipeline.LiveConnectResult
 import org.batgizmo.app.pipeline.NativeUSB
 import timber.log.Timber
@@ -58,6 +59,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
 import kotlin.math.round
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -118,6 +120,65 @@ class FileWriter(
             // Six lowercase ASCII letters only — safe as a filename fragment.
             if (code.length != 6 || code.any { it !in 'a'..'z' }) return ""
             return code
+        }
+
+        /** One Auto Id detection used when building GUANO [Species Auto ID]. */
+        data class SpeciesAutoIdHit(
+            val windowStartEpochSec: Double,
+            val labelKey: String,
+            val confidence: Float,
+        )
+
+        /** True if two window-start epochs refer to the same analysed window (~1 ms). */
+        fun sameClassifierWindowStart(a: Double, b: Double): Boolean =
+            abs(a - b) < 1e-3
+
+        /**
+         * Build comma+space separated [Species Auto ID] from hits for one WAV.
+         * Keep windows that overlap [fileStartEpochSec, fileEndEpochSec), and
+         * optionally the opening classifier trigger window on the first file.
+         */
+        fun buildSpeciesAutoId(
+            hits: List<SpeciesAutoIdHit>,
+            windowSec: Double,
+            fileStartEpochSec: Double,
+            fileEndEpochSec: Double,
+            openingTriggerWindowStartEpochSec: Double? = null,
+            allowOpeningTrigger: Boolean = false,
+            maxSpecies: Int = 10,
+        ): String? {
+            if (windowSec <= 0.0 || maxSpecies <= 0) return null
+            val maxConfByKey = LinkedHashMap<String, Float>()
+            for (hit in hits) {
+                val key = hit.labelKey.trim()
+                if (key.isEmpty()) continue
+                val windowEnd = hit.windowStartEpochSec + windowSec
+                val overlapsFile =
+                    fileStartEpochSec > 0.0 &&
+                        fileEndEpochSec > fileStartEpochSec &&
+                        hit.windowStartEpochSec < fileEndEpochSec &&
+                        windowEnd > fileStartEpochSec
+                val isOpeningTrigger =
+                    allowOpeningTrigger &&
+                        openingTriggerWindowStartEpochSec != null &&
+                        sameClassifierWindowStart(
+                            hit.windowStartEpochSec,
+                            openingTriggerWindowStartEpochSec,
+                        )
+                if (!overlapsFile && !isOpeningTrigger) continue
+                val prev = maxConfByKey[key]
+                if (prev == null || hit.confidence > prev)
+                    maxConfByKey[key] = hit.confidence
+            }
+            if (maxConfByKey.isEmpty()) return null
+            val names = maxConfByKey.entries
+                .sortedByDescending { it.value }
+                .asSequence()
+                .map { it.key }
+                .take(maxSpecies)
+                .toList()
+            if (names.isEmpty()) return null
+            return names.joinToString(", ")
         }
 
         fun autoTriggerType(settings: Settings): TriggerType =
@@ -222,33 +283,28 @@ class FileWriter(
     private fun computeBufferSizeEntries(totalTimeMs: Int): Int =
         (sampleRate.toLong() * maxOf(totalTimeMs, 0) / 1000).toInt().coerceAtLeast(1)
 
-    private data class ClassifierWindowCache(
+    private data class ClassifierModelCache(
         val modelId: String,
         val durationSec: Float?,
+        val versionName: String?,
     )
 
-    /** Published atomically; do not take [mutex] while holding [classifierWindowResolveLock]. */
-    private val classifierWindowResolveLock = Any()
+    /** Published atomically; do not take [mutex] while holding [classifierModelResolveLock]. */
+    private val classifierModelResolveLock = Any()
     @Volatile
-    private var classifierWindowCache: ClassifierWindowCache? = null
+    private var classifierModelCache: ClassifierModelCache? = null
 
     /**
-     * May resolve [MlCatalog]; call only when [mutex] is not held.
+     * Resolve (or return cached) Auto Id model geometry/metadata.
+     * May touch [MlCatalog]; call only when [mutex] is not held.
      */
-    private fun classifierWindowDurationSec(): Float? {
+    private fun ensureClassifierModelCache(): ClassifierModelCache {
         val modelId = model.settings.autoIdModelId
-        classifierWindowCache?.let { cached ->
-            if (cached.modelId == modelId) return cached.durationSec
-        }
-        return resolveClassifierWindowCache(modelId).durationSec
-    }
-
-    private fun resolveClassifierWindowCache(modelId: String): ClassifierWindowCache {
-        classifierWindowCache?.let { cached ->
+        classifierModelCache?.let { cached ->
             if (cached.modelId == modelId) return cached
         }
-        synchronized(classifierWindowResolveLock) {
-            classifierWindowCache?.let { cached ->
+        synchronized(classifierModelResolveLock) {
+            classifierModelCache?.let { cached ->
                 if (cached.modelId == modelId) return cached
             }
             val resolved = try {
@@ -258,25 +314,33 @@ class FileWriter(
                     desc.windowSamples,
                     desc.sampleRateHz,
                 )
-                ClassifierWindowCache(modelId, durationSec)
+                ClassifierModelCache(
+                    modelId,
+                    durationSec,
+                    desc.versionName?.takeIf { it.isNotBlank() },
+                )
             } catch (e: Exception) {
-                Timber.w(e, "Could not resolve classifier window duration")
-                ClassifierWindowCache(modelId, null)
+                Timber.w(e, "Could not resolve classifier model metadata")
+                ClassifierModelCache(modelId, null, null)
             }
-            classifierWindowCache = resolved
+            classifierModelCache = resolved
             return resolved
         }
     }
 
+    /** May resolve [MlCatalog]; call only when [mutex] is not held. */
+    private fun classifierWindowDurationSec(): Float? =
+        ensureClassifierModelCache().durationSec
+
     /** Reads the published cache only; safe under [mutex]. */
     private fun classifierWindowDurationSecOrFallback(): Float {
-        val cached = cachedClassifierGeometry()
+        val cached = cachedClassifierModel()
         return cached?.durationSec ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
     }
 
-    private fun cachedClassifierGeometry(): ClassifierWindowCache? {
+    private fun cachedClassifierModel(): ClassifierModelCache? {
         val modelId = model.settings.autoIdModelId
-        val cached = classifierWindowCache
+        val cached = classifierModelCache
         return if (cached != null && cached.modelId == modelId) cached else null
     }
 
@@ -354,6 +418,7 @@ class FileWriter(
     private var nextReadIndex = 0
 
     /** Unix-epoch seconds of the sample at [nextWriteIndex] (just after the last stored sample). */
+    @Volatile
     private var writeCursorEpochSec: Double = 0.0
 
     /** First sample of the current classifier file sequence, Unix-epoch seconds. */
@@ -373,6 +438,34 @@ class FileWriter(
      * Empty for energy/manual or when no usable scientific name was supplied.
      */
     private var sequenceSpeciesCode: String = ""
+
+    /**
+     * Classifier detections observed while a recording sequence is collecting,
+     * plus recent windows buffered while idle (so pre-trigger audio in the WAV is
+     * covered). Filtered to this WAV when writing GUANO [Species Auto ID].
+     */
+    private val speciesHitsLock = Any()
+    private val classifierSpeciesHits = mutableListOf<SpeciesAutoIdHit>()
+    /**
+     * Recent Auto Id hits while no sequence is collecting. Accumulated (not
+     * last-window-only) so detections that land in pre-trigger audio are still
+     * available when the next file opens.
+     */
+    private val pendingClassifierSpeciesHits = mutableListOf<SpeciesAutoIdHit>()
+    @Volatile private var collectingClassifierSpecies = false
+
+    /** Window start of the classifier trigger that opened this sequence, if any. */
+    private var sequenceTriggerWindowStartEpochSec: Double? = null
+
+    /**
+     * When true, [speciesAutoIdForCurrentFile] may include the opening trigger
+     * window even if ring lookback left it before this file's audio start.
+     * Only the first WAV of a classifier-triggered sequence sets this.
+     */
+    private var speciesAutoIdAllowOpeningTrigger: Boolean = false
+
+    /** Epoch start of PCM in the current WAV (inclusive). */
+    private var currentFileAudioStartEpochSec: Double = 0.0
 
     private var guanoDataTime: String? = null
     private var triggerHandlerJob: Job? = null
@@ -623,6 +716,81 @@ class FileWriter(
         )
     }
 
+    /**
+     * Record Auto Id detections for GUANO [Species Auto ID]. While a sequence is
+     * collecting, hits are kept for later file-span filtering. While idle, recent
+     * windows are buffered so pre-trigger overlap is not lost. Safe to call from
+     * the ML callback thread.
+     */
+    fun noteClassifierDetections(
+        windowStartEpochSec: Double,
+        detections: List<MlDetection>,
+    ) {
+        if (detections.isEmpty()) return
+        val hits = detections.mapNotNull { d ->
+            val key = d.labelKey.trim()
+            if (key.isEmpty()) null
+            else SpeciesAutoIdHit(windowStartEpochSec, key, d.confidence)
+        }
+        if (hits.isEmpty()) return
+        val protect = hits.map { it.windowStartEpochSec }.toMutableSet()
+        synchronized(speciesHitsLock) {
+            if (collectingClassifierSpecies) {
+                // Keep the opening-trigger window for the whole sequence so a long
+                // recording cannot age it out before endFile's lookback bypass.
+                sequenceTriggerWindowStartEpochSec?.let { protect.add(it) }
+                classifierSpeciesHits.addAll(hits)
+                pruneSpeciesHitsLocked(classifierSpeciesHits, protect)
+            } else {
+                pendingClassifierSpeciesHits.addAll(hits)
+                // Never drop the windows we just added: late inference can put
+                // windowStart older than the retention cutoff.
+                pruneSpeciesHitsLocked(pendingClassifierSpeciesHits, protect)
+            }
+        }
+    }
+
+    private fun speciesHitRetainSec(): Double =
+        model.settings.preTriggerTimeMs / 1000.0 +
+            classifierWindowDurationSecOrFallback().toDouble() +
+            classifierInferSlackMs / 1000.0
+
+    /**
+     * Drop hits older than the ring can retain (pre-trigger + window + inference
+     * slack). [protectWindowStarts] are kept even when older (just-noted / opening
+     * trigger). Caller must hold [speciesHitsLock].
+     */
+    private fun pruneSpeciesHitsLocked(
+        hits: MutableList<SpeciesAutoIdHit>,
+        protectWindowStarts: Set<Double> = emptySet(),
+    ) {
+        if (hits.isEmpty()) return
+        val nowEpochSec =
+            if (writeCursorEpochSec > 0.0) writeCursorEpochSec
+            else System.currentTimeMillis() / 1000.0
+        val cutoff = nowEpochSec - speciesHitRetainSec()
+        hits.removeAll { hit ->
+            hit.windowStartEpochSec < cutoff &&
+                protectWindowStarts.none {
+                    sameClassifierWindowStart(it, hit.windowStartEpochSec)
+                }
+        }
+    }
+
+    /**
+     * End collecting: demote recent hits to pending so the next recording's
+     * pre-trigger can still match them. Caller need not hold [speciesHitsLock].
+     */
+    private fun demoteSpeciesHitsToPending() {
+        synchronized(speciesHitsLock) {
+            collectingClassifierSpecies = false
+            pendingClassifierSpeciesHits.clear()
+            pendingClassifierSpeciesHits.addAll(classifierSpeciesHits)
+            classifierSpeciesHits.clear()
+            pruneSpeciesHitsLocked(pendingClassifierSpeciesHits)
+        }
+    }
+
     private suspend fun test() {
         Timber.d("test() called")
 
@@ -756,6 +924,10 @@ class FileWriter(
         sequenceEndEpochSec = 0.0
         activeSequenceTriggerType = null
         sequenceSpeciesCode = ""
+        sequenceTriggerWindowStartEpochSec = null
+        speciesAutoIdAllowOpeningTrigger = false
+        demoteSpeciesHitsToPending()
+        currentFileAudioStartEpochSec = 0.0
     }
 
     private suspend fun transitionStartManualTriggered(config: TriggerConfig) {
@@ -871,7 +1043,14 @@ class FileWriter(
         val s = model.settings      // For brevity. Note that model.settings is a var not a val.
 
         // Resolve catalog before taking [mutex] (lock order: catalog cache, then mutex).
-        classifierWindowDurationSec()
+        // Warm window metadata whenever Auto Id may contribute Species Auto ID.
+        val classifierModel =
+            if (triggerType == TriggerType.AUTO_CLASSIFIER ||
+                model.settings.isAutoIdEnabled()
+            )
+                ensureClassifierModelCache()
+            else
+                null
         mutex.withLock {
             activeSequenceTriggerType = triggerType
             sequenceSpeciesCode =
@@ -879,6 +1058,39 @@ class FileWriter(
                     speciesCodeFromScientificName(scientificName)
                 else
                     ""
+            sequenceTriggerWindowStartEpochSec =
+                if (triggerType == TriggerType.AUTO_CLASSIFIER)
+                    classifierWindowStartEpochSec
+                else
+                    null
+            // Collect Auto Id hits for Species Auto ID on every recording type.
+            synchronized(speciesHitsLock) {
+                // Set collecting inside the lock before clear/merge so a concurrent
+                // note cannot append into the list we are about to wipe.
+                collectingClassifierSpecies = true
+                // Do not prune on adopt: retention prune can drop a late
+                // opening-trigger window; endFile filters by file span.
+                classifierSpeciesHits.clear()
+                classifierSpeciesHits.addAll(pendingClassifierSpeciesHits)
+                pendingClassifierSpeciesHits.clear()
+                if (triggerType == TriggerType.AUTO_CLASSIFIER) {
+                    // If a concurrent note raced the trigger window out of pending
+                    // before adopt, still keep the primary species for GUANO.
+                    val triggerStart = classifierWindowStartEpochSec
+                    val key = scientificName.trim()
+                    if (triggerStart != null && key.isNotEmpty() &&
+                        classifierSpeciesHits.none {
+                            sameClassifierWindowStart(it.windowStartEpochSec, triggerStart) &&
+                                it.labelKey == key
+                        }
+                    ) {
+                        classifierSpeciesHits.add(
+                            // 0f = placeholder confidence (unknown); real scores win.
+                            SpeciesAutoIdHit(triggerStart, key, 0f),
+                        )
+                    }
+                }
+            }
             getSettingsSnapshot()
         }
 
@@ -909,12 +1121,15 @@ class FileWriter(
             }
         }
 
-        if (triggerType == TriggerType.AUTO_CLASSIFIER) {
-            val windowSec = classifierWindowDurationSec()
+        if (triggerType == TriggerType.AUTO_CLASSIFIER && classifierModel != null) {
             initialFileFields.apply {
                 put("$batgizmoNamespace|AutoIdModel", s.autoIdModelId)
-                if (windowSec != null)
-                    put("$batgizmoNamespace|ClassifierWindowS", prettyFloat3Dps(windowSec))
+                classifierModel.versionName?.let {
+                    put("$batgizmoNamespace|AutoIdModelVersion", it)
+                }
+                classifierModel.durationSec?.let {
+                    put("$batgizmoNamespace|ClassifierWindowS", prettyFloat3Dps(it))
+                }
                 if (sequenceSpeciesCode.isNotEmpty())
                     put("$batgizmoNamespace|SpeciesCode", sequenceSpeciesCode)
             }
@@ -957,6 +1172,8 @@ class FileWriter(
 
                 // Create a publicly accessible .wav file containing data from the temp file:
                 mutex.withLock {
+                    speciesAutoIdAllowOpeningTrigger =
+                        firstFile && triggerType == TriggerType.AUTO_CLASSIFIER
                     endFile(if (firstFile) initialFileFields else continuationFileFields)
                 }
                 firstFile = false
@@ -989,6 +1206,10 @@ class FileWriter(
             fileWriteActive = false
             activeSequenceTriggerType = null
             sequenceSpeciesCode = ""
+            sequenceTriggerWindowStartEpochSec = null
+            speciesAutoIdAllowOpeningTrigger = false
+            demoteSpeciesHitsToPending()
+            currentFileAudioStartEpochSec = 0.0
             signalCurrentlyWriting(false)
         }
     }
@@ -1122,13 +1343,29 @@ class FileWriter(
                     // Indefinite:
                     null
                 }
-                sequenceStartEpochSec = 0.0
+                // Epoch span so Species Auto ID can overlap-filter this file even
+                // when the recording was not opened by a classifier trigger.
+                val cursorEpochSec = if (writeCursorEpochSec > 0.0)
+                    writeCursorEpochSec
+                else
+                    System.currentTimeMillis() / 1000.0
+                sequenceStartEpochSec =
+                    if (sampleRate > 0)
+                        cursorEpochSec - preTriggerEntriesAvailable.toDouble() / sampleRate
+                    else
+                        0.0
                 sequenceEndEpochSec = 0.0
             }
         }
 
         // Track how many entries to write to each file:
         entriesActuallyWrittenToCurrentFile = 0
+        currentFileAudioStartEpochSec =
+            if (sequenceStartEpochSec > 0.0 && sampleRate > 0)
+                sequenceStartEpochSec +
+                    entriesActuallyWrittenToFileSequence.toDouble() / sampleRate
+            else
+                0.0
 
         return s
     }
@@ -1374,6 +1611,8 @@ class FileWriter(
             }
         }
 
+        speciesAutoIdForCurrentFile()?.let { fields["Species Auto ID"] = it }
+
         // Custom Guano fields:
         fields["$batgizmoNamespace|DeviceModel"] = "${Build.MANUFACTURER} ${Build.MODEL}"
         fields["$batgizmoNamespace|Version"] = BuildConfig.VERSION_NAME
@@ -1396,6 +1635,37 @@ class FileWriter(
         }
 
         return data
+    }
+
+    /**
+     * Comma-separated GUANO [Species Auto ID] for classifier windows associated
+     * with this WAV: scientific names, highest score first, at most ten.
+     * Applies to any recording type when Auto Id detections overlap the file.
+     */
+    private fun speciesAutoIdForCurrentFile(): String? {
+        if (sampleRate <= 0)
+            return null
+        val hitsSnapshot: List<SpeciesAutoIdHit>
+        synchronized(speciesHitsLock) {
+            if (!collectingClassifierSpecies && classifierSpeciesHits.isEmpty())
+                return null
+            hitsSnapshot = classifierSpeciesHits.toList()
+        }
+        val windowSec = classifierWindowDurationSecOrFallback().toDouble()
+        val fileStart = currentFileAudioStartEpochSec
+        val fileEnd =
+            if (fileStart > 0.0)
+                fileStart + entriesActuallyWrittenToCurrentFile.toDouble() / sampleRate
+            else
+                0.0
+        return buildSpeciesAutoId(
+            hits = hitsSnapshot,
+            windowSec = windowSec,
+            fileStartEpochSec = fileStart,
+            fileEndEpochSec = fileEnd,
+            openingTriggerWindowStartEpochSec = sequenceTriggerWindowStartEpochSec,
+            allowOpeningTrigger = speciesAutoIdAllowOpeningTrigger,
+        )
     }
 
     private fun moveTempFileToMediaStore(
