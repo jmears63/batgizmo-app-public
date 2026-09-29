@@ -881,6 +881,7 @@ class MlProcessor(
                     MlDetection(
                         label = labels[i],
                         confidence = score,
+                        labelKey = labelKeys[i],
                     )
                 )
             }

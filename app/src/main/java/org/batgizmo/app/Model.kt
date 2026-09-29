@@ -1992,6 +1992,7 @@ class UIModel(application: Application,
                         if (result.detections.isNotEmpty() &&
                             settings.isClassifierAutoTrigger()
                         ) {
+                            val top = result.detections.first()
                             val windowSec = Settings.classifierWindowDurationSec(
                                 descriptor.windowSamples,
                                 descriptor.sampleRateHz,
@@ -2003,7 +2004,10 @@ class UIModel(application: Application,
                                 FileWriter.wallClock(windowEnd),
                                 result.detections.size,
                             )
-                            fileWriter?.triggerClassifier(result.observedAtEpochSec)
+                            fileWriter?.triggerClassifier(
+                                result.observedAtEpochSec,
+                                top.labelKey,
+                            )
                         }
                     }
                 }.also {

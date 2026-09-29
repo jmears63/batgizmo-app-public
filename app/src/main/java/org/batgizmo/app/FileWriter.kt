@@ -89,6 +89,37 @@ class FileWriter(
                 .format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
         }
 
+        /**
+         * Species code from a binomial scientific name: first three ASCII letters
+         * of each of the two words, lower case (e.g. Myotis daubentonii → myodau).
+         * Returns "" if the name is empty, not exactly two words, a word has fewer
+         * than three letters, or the result would not be filesystem-safe.
+         */
+        fun speciesCodeFromScientificName(scientificName: String): String {
+            val words = scientificName.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            if (words.size != 2) return ""
+
+            fun stem(word: String): String? {
+                val letters = buildString {
+                    for (ch in word) {
+                        when (ch) {
+                            in 'A'..'Z' -> append(ch.lowercaseChar())
+                            in 'a'..'z' -> append(ch)
+                        }
+                    }
+                }
+                if (letters.length < 3) return null
+                return letters.take(3)
+            }
+
+            val first = stem(words[0]) ?: return ""
+            val second = stem(words[1]) ?: return ""
+            val code = first + second
+            // Six lowercase ASCII letters only — safe as a filename fragment.
+            if (code.length != 6 || code.any { it !in 'a'..'z' }) return ""
+            return code
+        }
+
         fun autoTriggerType(settings: Settings): TriggerType =
             if (settings.isClassifierAutoTrigger()) TriggerType.AUTO_CLASSIFIER
             else TriggerType.AUTO_ENERGY
@@ -110,7 +141,11 @@ class FileWriter(
 
     private sealed class TriggerEvent {
         data object Energy : TriggerEvent()
-        data class Classifier(val windowStartEpochSec: Double) : TriggerEvent()
+        data class Classifier(
+            val windowStartEpochSec: Double,
+            /** Scientific name of the top detection that opened this trigger; empty if unknown. */
+            val scientificName: String = "",
+        ) : TriggerEvent()
     }
 
     private enum class State(val value: Int) {
@@ -332,6 +367,12 @@ class FileWriter(
 
     /** Trigger type of the file sequence currently being written, if any. */
     private var activeSequenceTriggerType: TriggerType? = null
+
+    /**
+     * Species code baked into this classifier sequence's file names (first trigger only).
+     * Empty for energy/manual or when no usable scientific name was supplied.
+     */
+    private var sequenceSpeciesCode: String = ""
 
     private var guanoDataTime: String? = null
     private var triggerHandlerJob: Job? = null
@@ -569,10 +610,17 @@ class FileWriter(
 
     /**
      * Call this method to trigger or retrigger classifier-auto at [windowStartEpochSec].
+     * [scientificName] is used only when opening a new recording (highest-scoring
+     * detection from that window); retriggers that extend an open sequence ignore it.
      */
-    fun triggerClassifier(windowStartEpochSec: Double) {
-        Timber.d("triggerClassifier() called windowStart=$windowStartEpochSec")
-        triggerEventChannel.trySend(TriggerEvent.Classifier(windowStartEpochSec))
+    fun triggerClassifier(windowStartEpochSec: Double, scientificName: String = "") {
+        Timber.d(
+            "triggerClassifier() called windowStart=$windowStartEpochSec " +
+                "scientificName=$scientificName"
+        )
+        triggerEventChannel.trySend(
+            TriggerEvent.Classifier(windowStartEpochSec, scientificName)
+        )
     }
 
     private suspend fun test() {
@@ -707,6 +755,7 @@ class FileWriter(
         sequenceStartEpochSec = 0.0
         sequenceEndEpochSec = 0.0
         activeSequenceTriggerType = null
+        sequenceSpeciesCode = ""
     }
 
     private suspend fun transitionStartManualTriggered(config: TriggerConfig) {
@@ -755,13 +804,16 @@ class FileWriter(
                 for (event in triggerEventChannel) {
                     val armedType = mutex.withLock { triggerConfig?.triggerType }
                     val windowStart: Double?
+                    val scientificName: String
                     if (armedType == TriggerType.AUTO_ENERGY && event is TriggerEvent.Energy) {
                         windowStart = null
+                        scientificName = ""
                     } else if (
                         armedType == TriggerType.AUTO_CLASSIFIER &&
                         event is TriggerEvent.Classifier
                     ) {
                         windowStart = event.windowStartEpochSec
+                        scientificName = event.scientificName
                     } else {
                         continue
                     }
@@ -774,6 +826,7 @@ class FileWriter(
                                 true,
                                 armedType ?: TriggerType.AUTO_ENERGY,
                                 windowStart,
+                                scientificName,
                             )
                         }
                     }
@@ -810,7 +863,8 @@ class FileWriter(
     private suspend fun writeFileSequence(scope: CoroutineScope,
                                           isTriggered: Boolean,
                                           triggerType: TriggerType,
-                                          classifierWindowStartEpochSec: Double? = null
+                                          classifierWindowStartEpochSec: Double? = null,
+                                          scientificName: String = "",
                                           ) {
         Timber.i("writeFileSequence called triggerType=$triggerType")
 
@@ -820,6 +874,11 @@ class FileWriter(
         classifierWindowDurationSec()
         mutex.withLock {
             activeSequenceTriggerType = triggerType
+            sequenceSpeciesCode =
+                if (triggerType == TriggerType.AUTO_CLASSIFIER)
+                    speciesCodeFromScientificName(scientificName)
+                else
+                    ""
             getSettingsSnapshot()
         }
 
@@ -856,6 +915,8 @@ class FileWriter(
                 put("$batgizmoNamespace|AutoIdModel", s.autoIdModelId)
                 if (windowSec != null)
                     put("$batgizmoNamespace|ClassifierWindowS", prettyFloat3Dps(windowSec))
+                if (sequenceSpeciesCode.isNotEmpty())
+                    put("$batgizmoNamespace|SpeciesCode", sequenceSpeciesCode)
             }
         }
 
@@ -927,6 +988,7 @@ class FileWriter(
             Timber.d("Finally executed")
             fileWriteActive = false
             activeSequenceTriggerType = null
+            sequenceSpeciesCode = ""
             signalCurrentlyWriting(false)
         }
     }
@@ -1487,8 +1549,9 @@ class FileWriter(
 
     /**
      * Create a file name in the standard format used by bat detectors:
-     * YYYMMDD_HHMMSS.wav, in local time subject to DST. Also, the name
-     * of a folder to put it in, based on the date.
+     * YYYYMMDD_HHMMSS.wav, in local time subject to DST. Classifier-triggered
+     * recordings may append _{speciesCode}. Also, the name of a folder to put
+     * it in, based on the date.
      */
     private fun generateFileNameAndFolder(now: OffsetDateTime): WavFileInfo {
 
@@ -1496,9 +1559,13 @@ class FileWriter(
         val folderFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
         val folderName = now.format(folderFormatter)
 
-        // --- File name: "YYYYMMDD_HHMMSS.wav" ---
+        // --- File name: "YYYYMMDD_HHMMSS" or "YYYYMMDD_HHMMSS_code" ---
         val fileFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
-        val fileNameBase = now.format(fileFormatter)
+        val timestamp = now.format(fileFormatter)
+        val fileNameBase = if (sequenceSpeciesCode.isNotEmpty())
+            "${timestamp}_$sequenceSpeciesCode"
+        else
+            timestamp
 
         return WavFileInfo(fileNameBase = fileNameBase, folderName = folderName)
     }

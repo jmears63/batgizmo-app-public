@@ -41,8 +41,11 @@ data class MlResult(
 )
 
 data class MlDetection(
+    /** Localized display name for the UI. */
     val label: String,
     val confidence: Float,
+    /** Stable catalog key (scientific / first label column). */
+    val labelKey: String = label,
 )
 
 /**
