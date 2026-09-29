@@ -677,7 +677,6 @@ class UsbService(private val context: Context,
     }
 
     private val VOLUME_CONTROL = 0x02
-    private val MUTE_CONTROL = 0x01
     private val DEVICE_TO_HOST_CLASS_INTERFACE = 0xA1
     private val HOST_TO_DEVICE_CLASS_INTERFACE = 0x21
 
@@ -797,30 +796,6 @@ class UsbService(private val context: Context,
 
         if (sent != 2) {
             throw IllegalStateException("Failed to set volume control")
-        }
-    }
-
-    private fun setMuteValue(
-        connection: UsbDeviceConnection,
-        featureUnitId: Int,
-        interfaceNumber: Int,
-        muted: Boolean,
-        channel: Int
-    ) {
-        val buffer = byteArrayOf(if (muted) 1 else 0)
-        val wValue = (MUTE_CONTROL shl 8) or channel
-        val wIndex = (featureUnitId shl 8) or interfaceNumber
-        val sent = connection.controlTransfer(
-            HOST_TO_DEVICE_CLASS_INTERFACE,
-            UsbAudioRequest.SET_CUR.code,
-            wValue,
-            wIndex,
-            buffer,
-            buffer.size,
-            1000
-        )
-        if (sent != 1) {
-            throw IllegalStateException("Failed to set mute control")
         }
     }
 
@@ -1395,13 +1370,9 @@ class UsbService(private val context: Context,
                         Timber.d("Capture volume on FU $unitId channel $volumeChannel")
 
                         if (min <= max && res > 0) {
-                            for (ch in endpointData.unmuteChannels) {
-                                try {
-                                    setMuteValue(conn, unitId, ifNumber, muted = false, channel = ch)
-                                } catch (e: IllegalStateException) {
-                                    Timber.e("Unable to unmute microphone channel $ch: $e")
-                                }
-                            }
+                            // Do not SET Mute here. Some devices (notably BatGizmo) advertise
+                            // mute on master and channel 1; writing unmute on connect can leave
+                            // the capture path silent with BatGizmo hardware. Leave mute state to the device firmware.
                             Timber.d("onFeatureUnitDiscovered invoked: $min $max $res $cur")
                             onFeatureUnitDiscovered(min / 256f, max / 256f, res / 256f, cur / 256f)
                         }

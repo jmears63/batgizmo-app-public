@@ -29,7 +29,7 @@ import com.android.server.usb.descriptors.UsbTerminalTypes
  *
  * [volumeChannels] are Feature Unit channel indexes for GET/SET CUR Volume
  * (0 = master, 1 = left, …). [unmuteChannels] are indexes that advertise Mute
- * on the same unit; they are cleared when applying gain.
+ * on the same unit (recorded for diagnostics; not written on connect).
  */
 internal data class UsbCaptureVolume(
     val featureUnitId: Int,
