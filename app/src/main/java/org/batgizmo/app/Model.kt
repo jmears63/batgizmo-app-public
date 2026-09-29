@@ -1992,6 +1992,17 @@ class UIModel(application: Application,
                         if (result.detections.isNotEmpty() &&
                             settings.isClassifierAutoTrigger()
                         ) {
+                            val windowSec = Settings.classifierWindowDurationSec(
+                                descriptor.windowSamples,
+                                descriptor.sampleRateHz,
+                            ) ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
+                            val windowEnd = result.observedAtEpochSec + windowSec
+                            Timber.i(
+                                "CLF_REC_DBG classifier window %s → %s (%d detection(s))",
+                                FileWriter.wallClock(result.observedAtEpochSec),
+                                FileWriter.wallClock(windowEnd),
+                                result.detections.size,
+                            )
                             fileWriter?.triggerClassifier(result.observedAtEpochSec)
                         }
                     }

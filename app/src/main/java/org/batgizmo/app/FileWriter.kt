@@ -51,13 +51,16 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
+import java.time.Instant
 import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.round
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 class FileWriter(
     private val scope: CoroutineScope,
@@ -76,6 +79,14 @@ class FileWriter(
 
         public fun prettyFloat3Dps(value: Float) : String {
             return "%.3f".format(value).trimEnd('0').trimEnd('.')
+        }
+
+        /** Format Unix-epoch seconds as local wall-clock with milliseconds. */
+        fun wallClock(epochSec: Double): String {
+            val millis = (epochSec * 1000.0).roundToLong()
+            return Instant.ofEpochMilli(millis)
+                .atZone(ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"))
         }
 
         fun autoTriggerType(settings: Settings): TriggerType =
@@ -893,6 +904,26 @@ class FileWriter(
             } while (continuationFileNeeded)
         }
         finally {
+            if (triggerType == TriggerType.AUTO_CLASSIFIER &&
+                classifierWindowStartEpochSec != null
+            ) {
+                val windowSec = classifierWindowDurationSecOrFallback().toDouble()
+                val windowEndEpochSec = classifierWindowStartEpochSec + windowSec
+                val written = entriesActuallyWrittenToFileSequence
+                val writtenEndEpochSec = if (sampleRate > 0)
+                    sequenceStartEpochSec + written.toDouble() / sampleRate
+                else
+                    sequenceStartEpochSec
+                Timber.i(
+                    "CLF_REC_DBG classifier window %s → %s; " +
+                        "written file data %s → %s (%d samples)",
+                    wallClock(classifierWindowStartEpochSec),
+                    wallClock(windowEndEpochSec),
+                    wallClock(sequenceStartEpochSec),
+                    wallClock(writtenEndEpochSec),
+                    written,
+                )
+            }
             Timber.d("Finally executed")
             fileWriteActive = false
             activeSequenceTriggerType = null
@@ -954,9 +985,17 @@ class FileWriter(
                     entriesAvailable - preLookback
                 )
                 if (originLookback < originRequested) {
+                    val missingMs = if (sampleRate > 0)
+                        (originRequested - originLookback) * 1000.0 / sampleRate
+                    else
+                        0.0
                     Timber.w(
-                        "Classifier window start not fully in ring: " +
-                            "needed $originRequested samples, have $originLookback after pre-trigger"
+                        "CLF_REC_DBG LOOKBACK SHORTFALL: wanted %d samples back to " +
+                            "classifier window start, only got %d (%.0f ms of the analysed " +
+                            "window is missing from the start of the recording)",
+                        originRequested,
+                        originLookback,
+                        missingMs,
                     )
                 }
                 val startLookback = originLookback + preLookback
@@ -980,6 +1019,18 @@ class FileWriter(
                     (sequenceEndEpochSec - sequenceStartEpochSec) * sampleRate
                 ).toInt()
                 entriesToWriteToFileSequence = maxOf(planned, startLookback)
+
+                // Classifier window vs planned recording span (filter: CLF_REC_DBG).
+                val windowSec = classifierWindowDurationSecOrFallback().toDouble()
+                val windowEndEpochSec = classifierWindowStartEpochSec + windowSec
+                Timber.i(
+                    "CLF_REC_DBG classifier window %s → %s; " +
+                        "planned file data %s → %s",
+                    wallClock(classifierWindowStartEpochSec),
+                    wallClock(windowEndEpochSec),
+                    wallClock(sequenceStartEpochSec),
+                    wallClock(sequenceEndEpochSec),
+                )
             } else {
                 /*
                  * Figure out where to start writing to file from in the buffer. That can be in past if pretrigger
