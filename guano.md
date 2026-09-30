@@ -1,4 +1,4 @@
-# GUANO fields written by Batgizmo
+# GUANO fields written by BatGizmo
 
 Namespace for app-specific fields: `BatGizmo|App`.
 
