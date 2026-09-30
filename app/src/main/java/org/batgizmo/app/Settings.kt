@@ -87,7 +87,7 @@ data class Settings(
     var suppressUpdateNotification: Boolean = false,
     var suppressHighRateMicOffer: Boolean = false,
     /** Shape preset for auto-tuned heterodyne tracking. */
-    var autoHeterodyneMode: Int = AutoHeterodyneModeOptions.HOCKEY_STICK.value,
+    var autoHeterodyneMode: Int = AutoHeterodyneModeOptions.DEFAULT.value,
     /** Lower frequency limit (kHz) for auto heterodyne activity spans. */
     var autoHeterodyneLoMinKhz: Int = DEFAULT_AUTO_HET_LO_MIN_KHZ,
     /** Upper frequency limit (kHz) for auto heterodyne activity spans. */
@@ -273,7 +273,7 @@ data class Settings(
         override fun theLabel(): String = label
 
         companion object {
-            val DEFAULT = HOCKEY_STICK
+            val DEFAULT = MYOTIS
             fun coerce(mode: Int): Int =
                 entries.firstOrNull { it.value == mode }?.value ?: DEFAULT.value
         }
