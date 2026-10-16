@@ -23,6 +23,7 @@
 package org.batgizmo.app.ui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
@@ -78,6 +79,7 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -976,16 +978,16 @@ class SettingsUI(private val model: UIModel) {
                                             modifier = Modifier.weight(1f),
                                             verticalAlignment = Alignment.CenterVertically,
                                         ) {
+                                            Checkbox(
+                                                checked = checked,
+                                                enabled = autoIdEnabled,
+                                                onCheckedChange = { setFamilyChecked(family, it) },
+                                            )
                                             Text(
                                                 family.displayName,
                                                 modifier = Modifier.weight(1f),
                                                 maxLines = 2,
                                                 overflow = TextOverflow.Ellipsis,
-                                            )
-                                            Checkbox(
-                                                checked = checked,
-                                                enabled = autoIdEnabled,
-                                                onCheckedChange = { setFamilyChecked(family, it) },
                                             )
                                         }
                                         if (family.isByom) {
@@ -997,6 +999,11 @@ class SettingsUI(private val model: UIModel) {
                                             }
                                         }
                                     }
+                                    val isLandscape =
+                                        LocalConfiguration.current.orientation ==
+                                            Configuration.ORIENTATION_LANDSCAPE
+                                    val showSuppressions =
+                                        selectedVariant.enableSuppressionsButton
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically,
@@ -1027,8 +1034,18 @@ class SettingsUI(private val model: UIModel) {
                                                 }
                                             }
                                         }
+                                        if (isLandscape && showSuppressions) {
+                                            Button(
+                                                onClick = {
+                                                    suppressionsFamilyId = family.id
+                                                },
+                                                enabled = rowEnabled,
+                                            ) {
+                                                Text("Suppressions")
+                                            }
+                                        }
                                     }
-                                    if (selectedVariant.enableSuppressionsButton) {
+                                    if (!isLandscape && showSuppressions) {
                                         Button(
                                             onClick = { suppressionsFamilyId = family.id },
                                             enabled = rowEnabled,
@@ -1055,7 +1072,7 @@ class SettingsUI(private val model: UIModel) {
                                 },
                                 enabled = !importBusy,
                             ) {
-                                Text("Import…")
+                                Text("Import classifier…")
                             }
                         }
                     }
