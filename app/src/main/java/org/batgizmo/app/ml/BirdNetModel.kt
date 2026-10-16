@@ -121,8 +121,8 @@ class BirdNetModel(
         loggedMissingSnapshot = false
     }
 
-    override fun predict(window: FloatArray): FloatArray {
-        val scores = super.predict(window)
+    override fun predict(input: MlModelInput): FloatArray {
+        val scores = super.predict(input)
         applyGeoFilter(scores)
         return scores
     }

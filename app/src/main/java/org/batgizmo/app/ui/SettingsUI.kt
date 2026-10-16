@@ -23,7 +23,6 @@
 package org.batgizmo.app.ui
 
 import android.content.Context
-import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
@@ -79,7 +78,6 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -161,9 +159,15 @@ class SettingsUI(private val model: UIModel) {
         // (model.settings is a plain var and does not trigger recomposition on its own):
         var autoIdEnabled by rememberSaveable { mutableStateOf(model.settings.autoIdEnabled) }
         var autoIdModelId by rememberSaveable { mutableStateOf(model.settings.autoIdModelId) }
+        var autoIdEnabledFamilyIds by remember {
+            mutableStateOf(model.settings.autoIdEnabledFamilyIds.toList())
+        }
+        var autoIdFamilyPrefs by remember {
+            mutableStateOf(model.settings.autoIdFamilyPrefs)
+        }
 
         var classifierWindowSec by remember { mutableStateOf<Float?>(null) }
-        LaunchedEffect(autoIdModelId) {
+        LaunchedEffect(autoIdModelId, autoIdEnabledFamilyIds, autoIdFamilyPrefs) {
             classifierWindowSec = withContext(Dispatchers.IO) {
                 try {
                     MlCatalog.ensureInitialized(context.applicationContext)
@@ -739,7 +743,8 @@ class SettingsUI(private val model: UIModel) {
                     var catalogRevision by remember { mutableIntStateOf(0) }
                     var importBusy by remember { mutableStateOf(false) }
                     var importError by remember { mutableStateOf<String?>(null) }
-                    var confirmRemove by remember { mutableStateOf(false) }
+                    var confirmRemoveFamilyId by remember { mutableStateOf<String?>(null) }
+                    var suppressionsFamilyId by rememberSaveable { mutableStateOf<String?>(null) }
                     var pendingOverwrite by remember {
                         mutableStateOf<PendingByomOverwrite?>(null)
                     }
@@ -754,7 +759,6 @@ class SettingsUI(private val model: UIModel) {
                     val descriptors = remember(catalogRevision) {
                         MlCatalog.listDescriptors(context.assets)
                     }
-                    // Families that currently have at least one installable variant.
                     val families = remember(descriptors) {
                         descriptors
                             .groupBy { it.familyId }
@@ -762,7 +766,6 @@ class SettingsUI(private val model: UIModel) {
                                 AutoIdFamily(
                                     id = familyId,
                                     displayName = variants.first().familyDisplayName,
-                                    // Family defaultVariantId (if present) first, then A–Z.
                                     variants = variants.sortedWith(
                                         compareBy<MlModelDescriptor> {
                                             it.id != it.familyDefaultVariantId
@@ -771,59 +774,100 @@ class SettingsUI(private val model: UIModel) {
                                     isByom = variants.any { it.isByom },
                                 )
                             }
-                            .sortedBy { it.displayName }
+                            .sortedWith(
+                                compareBy<AutoIdFamily> { it.isByom }.thenBy { it.displayName }
+                            )
                     }
-                    val selectedDescriptor = remember(autoIdModelId, descriptors) {
-                        descriptors.firstOrNull { it.id == autoIdModelId }
-                    }
-                    val selectedFamilyId =
-                        selectedDescriptor?.familyId
-                            ?: families.firstOrNull()?.id
-                            ?: ""
-                    val familyVariants = remember(selectedFamilyId, families) {
-                        families.firstOrNull { it.id == selectedFamilyId }?.variants.orEmpty()
-                    }
-                    val selectedIsByom = selectedDescriptor?.isByom == true
 
                     fun versionLabel(version: String?): String =
                         version?.takeIf { it.isNotBlank() } ?: "unknown"
 
-                    var autoIdLanguage by rememberSaveable {
-                        mutableStateOf(model.settings.autoIdLanguage)
+                    fun syncLocalFromSettings() {
+                        autoIdModelId = model.settings.autoIdModelId
+                        autoIdEnabledFamilyIds = model.settings.autoIdEnabledFamilyIds.toList()
+                        autoIdFamilyPrefs = model.settings.autoIdFamilyPrefs
                     }
 
-                    fun persistSelection(
-                        modelId: String,
-                        language: Int = autoIdLanguage,
-                        alsoRemember: Map<String, AutoIdFamilyPref> = emptyMap(),
-                    ) {
-                        if (modelId.isBlank()) return
-                        autoIdModelId = modelId
-                        autoIdLanguage = language
-                        // ViewModel scope: survives file-picker / composition pauses.
+                    fun persistSettings(updated: Settings) {
                         model.viewModelScope.launch {
-                            val desc = MlCatalog.resolveDescriptor(context.assets, modelId)
-                            val lang = language.coerceIn(
-                                0,
-                                (desc.languages.size - 1).coerceAtLeast(0),
-                            )
-                            autoIdLanguage = lang
-                            val defaults = desc.labelCatalog
-                                .filter { !it.discard }
-                                .associate { it.key to it.disableByDefault }
-                            val updated = model.settings.withAutoIdFamilySelection(
-                                familyId = desc.familyId,
-                                modelId = desc.id,
-                                language = lang,
-                                alsoRemember = alsoRemember,
-                            )
-                            updated.mergeAutoIdSuppressionDefaults(desc.id, defaults)
                             model.updateStoredSettings(updated)
+                            syncLocalFromSettings()
                         }
                     }
 
-                    fun persistModelId(modelId: String) {
-                        persistSelection(modelId)
+                    fun defaultVariantFor(family: AutoIdFamily): MlModelDescriptor {
+                        val pref = autoIdFamilyPrefs[family.id]
+                        return pref?.variantId
+                            ?.let { id -> family.variants.firstOrNull { it.id == id } }
+                            ?: family.variants.first()
+                    }
+
+                    fun persistFamilyVariant(familyId: String, variantId: String) {
+                        val desc = descriptors.firstOrNull { it.id == variantId } ?: return
+                        val language = autoIdFamilyPrefs[familyId]?.language
+                            ?: Settings.DEFAULT_AUTO_ID_LANGUAGE
+                        val lang = language.coerceIn(
+                            0,
+                            (desc.languages.size - 1).coerceAtLeast(0),
+                        )
+                        val defaults = desc.labelCatalog
+                            .filter { !it.discard }
+                            .associate { it.key to it.disableByDefault }
+                        val updated = model.settings.withAutoIdFamilySelection(
+                            familyId = familyId,
+                            modelId = desc.id,
+                            language = lang,
+                        )
+                        updated.mergeAutoIdSuppressionDefaults(desc.id, defaults)
+                        autoIdFamilyPrefs = updated.autoIdFamilyPrefs
+                        autoIdEnabledFamilyIds = updated.autoIdEnabledFamilyIds
+                        autoIdModelId = updated.autoIdModelId
+                        persistSettings(updated)
+                    }
+
+                    fun persistFamilyLanguage(familyId: String, language: Int) {
+                        val variantId = autoIdFamilyPrefs[familyId]?.variantId
+                            ?: families.firstOrNull { it.id == familyId }
+                                ?.let { defaultVariantFor(it).id }
+                            ?: return
+                        val desc = descriptors.firstOrNull { it.id == variantId } ?: return
+                        val lang = language.coerceIn(
+                            0,
+                            (desc.languages.size - 1).coerceAtLeast(0),
+                        )
+                        val updated = model.settings.withAutoIdFamilySelection(
+                            familyId = familyId,
+                            modelId = desc.id,
+                            language = lang,
+                        )
+                        autoIdFamilyPrefs = updated.autoIdFamilyPrefs
+                        autoIdModelId = updated.autoIdModelId
+                        persistSettings(updated)
+                    }
+
+                    fun setFamilyChecked(family: AutoIdFamily, checked: Boolean) {
+                        val default = defaultVariantFor(family)
+                        val language = autoIdFamilyPrefs[family.id]?.language
+                            ?: Settings.DEFAULT_AUTO_ID_LANGUAGE.let { d ->
+                                if (default.languages.isEmpty()) d
+                                else d.coerceIn(0, default.languages.lastIndex)
+                            }
+                        val updated = model.settings.withAutoIdFamilyChecked(
+                            familyId = family.id,
+                            checked = checked,
+                            defaultVariantId = default.id,
+                            defaultLanguage = language,
+                        )
+                        if (checked) {
+                            val defaults = default.labelCatalog
+                                .filter { !it.discard }
+                                .associate { it.key to it.disableByDefault }
+                            updated.mergeAutoIdSuppressionDefaults(default.id, defaults)
+                        }
+                        autoIdEnabledFamilyIds = updated.autoIdEnabledFamilyIds
+                        autoIdFamilyPrefs = updated.autoIdFamilyPrefs
+                        autoIdModelId = updated.autoIdModelId
+                        persistSettings(updated)
                     }
 
                     val appContext = context.applicationContext
@@ -838,8 +882,8 @@ class SettingsUI(private val model: UIModel) {
                                     replaceExisting = replaceExisting,
                                 )
                                 catalogRevision++
+                                syncLocalFromSettings()
                                 autoIdModelId = installed.id
-                                autoIdLanguage = model.settings.autoIdLanguage
                             } catch (e: Exception) {
                                 Timber.e(e, "BYOM import failed")
                                 importError = when (e) {
@@ -861,8 +905,6 @@ class SettingsUI(private val model: UIModel) {
                         importBusy = true
                         importError = null
                         pendingOverwrite = null
-                        // Must not use rememberCoroutineScope here: returning from the
-                        // document picker can leave composition and cancel that scope.
                         model.viewModelScope.launch {
                             try {
                                 withContext(Dispatchers.IO) {
@@ -885,8 +927,8 @@ class SettingsUI(private val model: UIModel) {
                                         replaceExisting = false,
                                     )
                                     catalogRevision++
+                                    syncLocalFromSettings()
                                     autoIdModelId = installed.id
-                                    autoIdLanguage = model.settings.autoIdLanguage
                                     importBusy = false
                                 }
                             } catch (e: Exception) {
@@ -902,165 +944,106 @@ class SettingsUI(private val model: UIModel) {
                         }
                     }
 
-                    val familyOptions = remember(families) {
-                        families.map { it.id to it.displayName }
-                    }
-                    val variantOptions = remember(familyVariants) {
-                        familyVariants.map { it.id to it.displayName }
-                    }
-                    val isLandscape =
-                        LocalConfiguration.current.orientation ==
-                            Configuration.ORIENTATION_LANDSCAPE
-                    val showFamily = familyOptions.isNotEmpty()
-                    val showVariant = familyVariants.isNotEmpty()
-
-                    val onFamilySelected: (String) -> Unit = { familyId ->
-                        val variants = families.firstOrNull { it.id == familyId }
-                            ?.variants
-                            .orEmpty()
-                        if (variants.isNotEmpty()) {
-                            if (selectedDescriptor?.familyId == familyId) {
-                                persistModelId(selectedDescriptor.id)
-                            } else {
-                                val leaving = if (selectedFamilyId.isNotBlank() &&
-                                    autoIdModelId.isNotBlank()
-                                ) {
-                                    mapOf(
-                                        selectedFamilyId to AutoIdFamilyPref(
-                                            variantId = autoIdModelId,
-                                            language = autoIdLanguage,
-                                        )
-                                    )
-                                } else {
-                                    emptyMap()
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        families.forEach { family ->
+                            key(family.id) {
+                                val checked = family.id in autoIdEnabledFamilyIds
+                                val rowEnabled = autoIdEnabled && checked
+                                val selectedVariant = defaultVariantFor(family)
+                                val variantOptions = family.variants.map { it.id to it.displayName }
+                                val languages = selectedVariant.languages
+                                val languageOptions = languages.mapIndexed { i, name ->
+                                    i.toString() to name
                                 }
-                                val remembered =
-                                    (model.settings.autoIdFamilyPrefs + leaving)[familyId]
-                                val nextId = remembered?.variantId
-                                    ?.takeIf { id -> variants.any { it.id == id } }
-                                    ?: variants.first().id
-                                val nextLanguages =
-                                    variants.first { it.id == nextId }.languages
-                                val nextLanguage = remembered?.language
-                                    ?.takeIf {
-                                        nextLanguages.isEmpty() || it in nextLanguages.indices
+                                val prefLanguage = autoIdFamilyPrefs[family.id]?.language
+                                    ?: Settings.DEFAULT_AUTO_ID_LANGUAGE
+                                val selectedLanguage =
+                                    if (prefLanguage in languages.indices) prefLanguage else 0
+
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                family.displayName,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Checkbox(
+                                                checked = checked,
+                                                enabled = autoIdEnabled,
+                                                onCheckedChange = { setFamilyChecked(family, it) },
+                                            )
+                                        }
+                                        if (family.isByom) {
+                                            TextButton(
+                                                onClick = { confirmRemoveFamilyId = family.id },
+                                                enabled = !importBusy,
+                                            ) {
+                                                Text("Remove")
+                                            }
+                                        }
                                     }
-                                    ?: Settings.DEFAULT_AUTO_ID_LANGUAGE.let { default ->
-                                        if (nextLanguages.isEmpty()) default
-                                        else default.coerceIn(0, nextLanguages.lastIndex)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            MyDynamicSelector(
+                                                options = variantOptions,
+                                                description = "Variant",
+                                                selectedValue = selectedVariant.id,
+                                                enabled = rowEnabled && family.variants.size > 1,
+                                            ) { variantId: String ->
+                                                persistFamilyVariant(family.id, variantId)
+                                            }
+                                        }
+                                        if (languageOptions.isNotEmpty()) {
+                                            Box(modifier = Modifier.weight(1f)) {
+                                                MyDynamicSelector(
+                                                    options = languageOptions,
+                                                    description = "Language",
+                                                    selectedValue = selectedLanguage.toString(),
+                                                    enabled = rowEnabled && languages.size > 1,
+                                                ) { value: String ->
+                                                    val index = value.toIntOrNull()
+                                                        ?.takeIf { it in languages.indices }
+                                                        ?: 0
+                                                    persistFamilyLanguage(family.id, index)
+                                                }
+                                            }
+                                        }
                                     }
-                                persistSelection(
-                                    nextId,
-                                    nextLanguage,
-                                    alsoRemember = leaving,
-                                )
+                                    if (selectedVariant.enableSuppressionsButton) {
+                                        Button(
+                                            onClick = { suppressionsFamilyId = family.id },
+                                            enabled = rowEnabled,
+                                        ) {
+                                            Text("Suppressions")
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
 
-                    if (isLandscape && showFamily && showVariant) {
-                        // Landscape: Model 2/3, Variant 1/3 on one row.
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.End,
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(2f)
-                                    .padding(end = 8.dp),
-                            ) {
-                                MyDynamicSelector(
-                                    options = familyOptions,
-                                    description = "Model",
-                                    selectedValue = selectedFamilyId,
-                                    enabled = autoIdEnabled,
-                                    onChange = onFamilySelected,
-                                )
-                            }
-                            Box(modifier = Modifier.weight(1f)) {
-                                MyDynamicSelector(
-                                    options = variantOptions,
-                                    description = "Variant",
-                                    selectedValue = autoIdModelId,
-                                    enabled = autoIdEnabled && familyVariants.size > 1,
-                                ) { variantId: String ->
-                                    persistModelId(variantId)
-                                }
-                            }
-                        }
-                    } else {
-                        if (showFamily) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                MyDynamicSelector(
-                                    options = familyOptions,
-                                    description = "Model",
-                                    selectedValue = selectedFamilyId,
-                                    enabled = autoIdEnabled,
-                                    onChange = onFamilySelected,
-                                )
-                            }
-                        }
-                        if (showVariant) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                MyDynamicSelector(
-                                    options = variantOptions,
-                                    description = "Variant",
-                                    selectedValue = autoIdModelId,
-                                    enabled = autoIdEnabled && familyVariants.size > 1,
-                                ) { variantId: String ->
-                                    persistModelId(variantId)
-                                }
-                            }
-                        }
-                    }
-
-                    var showSuppressions by rememberSaveable { mutableStateOf(false) }
-                    val languages = selectedDescriptor?.languages.orEmpty()
-                    val languageOptions = remember(languages) {
-                        languages.mapIndexed { index, name -> index.toString() to name }
-                    }
-                    if (languages.isNotEmpty()) {
-                        val selectedIndex =
-                            if (autoIdLanguage in languages.indices) autoIdLanguage else 0
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            MyDynamicSelector(
-                                options = languageOptions,
-                                description = "Language",
-                                selectedValue = selectedIndex.toString(),
-                                enabled = autoIdEnabled && languages.size > 1
-                            ) { value: String ->
-                                val index =
-                                    value.toIntOrNull()?.takeIf { it in languages.indices } ?: 0
-                                persistSelection(autoIdModelId, index)
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Button(
-                            onClick = { showSuppressions = true },
-                            enabled = autoIdEnabled &&
-                                selectedDescriptor != null &&
-                                selectedDescriptor.enableSuppressionsButton
-                        ) {
-                            Text("Suppressions")
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (selectedIsByom) {
-                                TextButton(
-                                    onClick = { confirmRemove = true },
-                                    enabled = !importBusy
-                                ) {
-                                    Text("Remove")
-                                }
-                            }
                             TextButton(
                                 onClick = {
                                     importLauncher.launch(
@@ -1070,7 +1053,7 @@ class SettingsUI(private val model: UIModel) {
                                         )
                                     )
                                 },
-                                enabled = !importBusy
+                                enabled = !importBusy,
                             ) {
                                 Text("Import…")
                             }
@@ -1125,37 +1108,46 @@ class SettingsUI(private val model: UIModel) {
                         )
                     }
 
-                    if (showSuppressions &&
-                        selectedDescriptor != null &&
-                        selectedDescriptor.enableSuppressionsButton
+                    val suppressionsFamily = suppressionsFamilyId
+                        ?.let { id -> families.firstOrNull { it.id == id } }
+                    val suppressionsDescriptor = suppressionsFamily?.let { defaultVariantFor(it) }
+                    if (suppressionsFamily != null &&
+                        suppressionsDescriptor != null &&
+                        suppressionsDescriptor.enableSuppressionsButton
                     ) {
-                        val labelCatalog = selectedDescriptor.labelCatalog
+                        val labelCatalog = suppressionsDescriptor.labelCatalog
                         val suppressible = remember(labelCatalog) {
                             labelCatalog.filter { !it.discard }
                         }
+                        val languageIndex = autoIdFamilyPrefs[suppressionsFamily.id]?.language
+                            ?: Settings.DEFAULT_AUTO_ID_LANGUAGE
                         MlSuppressionsDialog(
                             entries = suppressible,
-                            languageIndex = autoIdLanguage,
-                            suppressions = model.settings.suppressionsFor(selectedDescriptor.id),
-                            onDismiss = { showSuppressions = false },
+                            languageIndex = languageIndex.coerceIn(
+                                0,
+                                (suppressionsDescriptor.languages.size - 1).coerceAtLeast(0),
+                            ),
+                            suppressions =
+                                model.settings.suppressionsFor(suppressionsDescriptor.id),
+                            onDismiss = { suppressionsFamilyId = null },
                             onConfirm = { updated ->
                                 scope.launch {
                                     val nested = model.settings.autoIdSuppressions +
-                                        (selectedDescriptor.id to updated)
+                                        (suppressionsDescriptor.id to updated)
                                     model.updateStoredSettings(
                                         model.settings.copy(autoIdSuppressions = nested)
                                     )
-                                    showSuppressions = false
+                                    suppressionsFamilyId = null
                                 }
                             },
                         )
                     }
 
-                    if (confirmRemove && selectedDescriptor != null && selectedIsByom) {
-                        val familyName = selectedDescriptor.familyDisplayName
-                        val familyId = selectedDescriptor.familyId
+                    confirmRemoveFamilyId?.let { familyId ->
+                        val family = families.firstOrNull { it.id == familyId }
+                        val familyName = family?.displayName ?: familyId
                         AlertDialog(
-                            onDismissRequest = { confirmRemove = false },
+                            onDismissRequest = { confirmRemoveFamilyId = null },
                             title = { Text("Remove model") },
                             text = {
                                 Text(
@@ -1166,7 +1158,7 @@ class SettingsUI(private val model: UIModel) {
                             confirmButton = {
                                 TextButton(
                                     onClick = {
-                                        confirmRemove = false
+                                        confirmRemoveFamilyId = null
                                         model.viewModelScope.launch {
                                             val ok = model.removeByomClassifier(familyId)
                                             if (!ok) {
@@ -1174,8 +1166,7 @@ class SettingsUI(private val model: UIModel) {
                                                 return@launch
                                             }
                                             catalogRevision++
-                                            autoIdModelId = model.settings.autoIdModelId
-                                            autoIdLanguage = model.settings.autoIdLanguage
+                                            syncLocalFromSettings()
                                         }
                                     }
                                 ) {
@@ -1183,7 +1174,7 @@ class SettingsUI(private val model: UIModel) {
                                 }
                             },
                             dismissButton = {
-                                TextButton(onClick = { confirmRemove = false }) {
+                                TextButton(onClick = { confirmRemoveFamilyId = null }) {
                                     Text("Cancel")
                                 }
                             },

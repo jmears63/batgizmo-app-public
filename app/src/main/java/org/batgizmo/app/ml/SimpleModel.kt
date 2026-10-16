@@ -55,19 +55,49 @@ open class SimpleModel(
             "Label count (${descriptor.labelCatalog.size}) does not match model outputs ($numClasses)"
         }
         val inputLen = interpreter.getInputTensor(0).shape().last()
-        require(inputLen == descriptor.windowSamples) {
-            "Model input length $inputLen != windowSamples ${descriptor.windowSamples}"
+        val expectedLen = expectedInputLength()
+        require(inputLen == expectedLen) {
+            "Model input length $inputLen != expected $expectedLen " +
+                "(windowSamples=${descriptor.windowSamples}, stft=${descriptor.stft})"
         }
     }
 
-    override fun predict(window: FloatArray): FloatArray {
-        require(window.size == descriptor.windowSamples) {
-            "window must have ${descriptor.windowSamples} samples, got ${window.size}"
+    private fun expectedInputLength(): Int {
+        val stft = descriptor.stft
+        return if (stft == null) {
+            descriptor.windowSamples
+        } else {
+            stft.outputSize(descriptor.windowSamples)
         }
-        interpreter.resizeInput(0, intArrayOf(1, descriptor.windowSamples))
+    }
+
+    override fun predict(input: MlModelInput): FloatArray {
+        val features = when (input) {
+            is MlModelInput.PcmWindow -> {
+                require(descriptor.stft == null) {
+                    "model ${descriptor.id} expects spectrogram input"
+                }
+                require(input.samples.size == descriptor.windowSamples) {
+                    "window must have ${descriptor.windowSamples} samples, got ${input.samples.size}"
+                }
+                input.samples
+            }
+            is MlModelInput.Spectrogram -> {
+                val stft = requireNotNull(descriptor.stft) {
+                    "model ${descriptor.id} expects PCM input"
+                }
+                val expected = stft.outputSize(descriptor.windowSamples)
+                require(input.values.size == expected) {
+                    "spectrogram must have $expected values, got ${input.values.size}"
+                }
+                input.values
+            }
+        }
+        val len = features.size
+        interpreter.resizeInput(0, intArrayOf(1, len))
         interpreter.allocateTensors()
         val logits = Array(1) { FloatArray(numClasses) }
-        interpreter.run(arrayOf(window), logits)
+        interpreter.run(arrayOf(features), logits)
         return flatSigmoid(logits[0])
     }
 

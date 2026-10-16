@@ -22,7 +22,6 @@
 
 package org.batgizmo.app
 
-import org.batgizmo.app.FileWriter.SpeciesAutoIdHit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -32,12 +31,15 @@ class SpeciesAutoIdTest {
 
     private val windowSec = 1.0
 
+    private fun hit(start: Double, key: String, confidence: Float) =
+        FileWriter.SpeciesAutoIdHit(start, key, confidence)
+
     @Test
     fun mergesSameSpeciesKeepingHighestScore() {
         val hits = listOf(
-            SpeciesAutoIdHit(100.0, "Myotis daubentonii", 0.4f),
-            SpeciesAutoIdHit(100.5, "Myotis daubentonii", 0.9f),
-            SpeciesAutoIdHit(101.0, "Pipistrellus nathusii", 0.7f),
+            hit(100.0, "Myotis daubentonii", 0.4f),
+            hit(100.5, "Myotis daubentonii", 0.9f),
+            hit(101.0, "Pipistrellus nathusii", 0.7f),
         )
         assertEquals(
             "Myotis daubentonii, Pipistrellus nathusii",
@@ -53,7 +55,7 @@ class SpeciesAutoIdTest {
     @Test
     fun ordersByDescendingScoreAndCapsAtTen() {
         val hits = (0 until 12).map { i ->
-            SpeciesAutoIdHit(
+            hit(
                 windowStartEpochSec = 100.0 + i * 0.1,
                 labelKey = "Species species$i",
                 confidence = i / 12f,
@@ -74,9 +76,9 @@ class SpeciesAutoIdTest {
     @Test
     fun excludesWindowsOutsideFileSpan() {
         val hits = listOf(
-            SpeciesAutoIdHit(90.0, "Outside early", 0.99f),
-            SpeciesAutoIdHit(100.0, "Inside", 0.5f),
-            SpeciesAutoIdHit(120.0, "Outside late", 0.99f),
+            hit(90.0, "Outside early", 0.99f),
+            hit(100.0, "Inside", 0.5f),
+            hit(120.0, "Outside late", 0.99f),
         )
         assertEquals(
             "Inside",
@@ -93,7 +95,7 @@ class SpeciesAutoIdTest {
     fun openingTriggerBypassOnlyWhenAllowed() {
         val triggerStart = 95.0
         val hits = listOf(
-            SpeciesAutoIdHit(triggerStart, "Myotis daubentonii", 0.8f),
+            hit(triggerStart, "Myotis daubentonii", 0.8f),
         )
         assertNull(
             FileWriter.buildSpeciesAutoId(
@@ -122,7 +124,7 @@ class SpeciesAutoIdTest {
     fun openingTriggerMatchesWithSmallEpochEpsilon() {
         assertTrue(FileWriter.sameClassifierWindowStart(100.0, 100.0 + 5e-4))
         val hits = listOf(
-            SpeciesAutoIdHit(100.0, "Myotis daubentonii", 0.8f),
+            hit(100.0, "Myotis daubentonii", 0.8f),
         )
         assertEquals(
             "Myotis daubentonii",
@@ -140,8 +142,8 @@ class SpeciesAutoIdTest {
     @Test
     fun usesCommaAndSpaceSeparator() {
         val hits = listOf(
-            SpeciesAutoIdHit(100.0, "Aaa aaa", 0.9f),
-            SpeciesAutoIdHit(100.0, "Bbb bbb", 0.5f),
+            hit(100.0, "Aaa aaa", 0.9f),
+            hit(100.0, "Bbb bbb", 0.5f),
         )
         assertEquals(
             "Aaa aaa, Bbb bbb",

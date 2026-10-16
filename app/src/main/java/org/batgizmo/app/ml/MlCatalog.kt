@@ -624,6 +624,7 @@ object MlCatalog {
                 familyDefaultVariantId = variantId,
                 isByom = true,
                 versionName = fields.summary.versionName,
+                stft = fields.stft,
             ),
         )
     }
@@ -643,6 +644,7 @@ object MlCatalog {
         val overlapFraction: Float,
         val detectionThreshold: Float,
         val enableSuppressionsButton: Boolean,
+        val stft: MlStftParams?,
     )
 
     private fun parseByomPackFields(json: JSONObject): ByomPackFields {
@@ -696,6 +698,12 @@ object MlCatalog {
         require(detectionThreshold in 0f..1f) {
             "detectionThreshold must be in 0.0..1.0 (got $detectionThreshold)"
         }
+        val stft = MlStftParams.fromJsonOrNull(json)
+        if (stft != null) {
+            require(windowSamples >= stft.fftSize) {
+                "windowSamples ($windowSamples) must be >= stft.fftSize (${stft.fftSize})"
+            }
+        }
         return ByomPackFields(
             summary = summary,
             modelFile = modelFile,
@@ -707,6 +715,7 @@ object MlCatalog {
             overlapFraction = overlapFraction,
             detectionThreshold = detectionThreshold,
             enableSuppressionsButton = json.optBoolean("enableSuppressionsButton", true),
+            stft = stft,
         )
     }
 
@@ -1020,6 +1029,8 @@ object MlCatalog {
         val enableSuppressionsButton: Boolean,
         /** Optional full model id of the family's preferred variant. */
         val defaultVariantId: String?,
+        /** Optional log-magnitude STFT; null when omitted from family.json. */
+        val stft: MlStftParams?,
     )
 
     private fun readFamilyJson(
@@ -1039,12 +1050,19 @@ object MlCatalog {
         } else {
             null
         }
+        val windowSamples = json.getInt("windowSamples")
+        val stft = MlStftParams.fromJsonOrNull(json)
+        if (stft != null) {
+            require(windowSamples >= stft.fftSize) {
+                "windowSamples ($windowSamples) must be >= stft.fftSize (${stft.fftSize})"
+            }
+        }
         return FamilyInfo(
             id = json.getString("id"),
             displayName = json.getString("displayName"),
             kind = parseKind(json.getString("kind")),
             sampleRateHz = sampleRateHz,
-            windowSamples = json.getInt("windowSamples"),
+            windowSamples = windowSamples,
             overlapFraction = json.optDouble("overlapFraction", 0.25).toFloat()
                 .coerceIn(0f, 0.95f),
             minSampleRateHz = json.optInt(
@@ -1062,6 +1080,7 @@ object MlCatalog {
             geoThreshold = json.optDouble("geoThreshold", 0.03).toFloat(),
             enableSuppressionsButton = json.optBoolean("enableSuppressionsButton", true),
             defaultVariantId = defaultVariantId,
+            stft = stft,
         )
     }
 
@@ -1112,6 +1131,7 @@ object MlCatalog {
             enableSuppressionsButton = family.enableSuppressionsButton,
             familyDefaultVariantId = family.defaultVariantId,
             isByom = isByom,
+            stft = family.stft,
         )
     }
 

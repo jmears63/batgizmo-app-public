@@ -28,16 +28,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Outcome of ML analysis for one analysed window.
+ * Outcome of ML analysis for one analysed window from one model.
  *
  * [observedAtEpochSec] is the Unix-epoch time (seconds) of the start of the
  * analysed window. [completedAtEpochSec] is when [MlProcessor] finished this
- * window (used for live UI age styling).
+ * window (used for live UI age styling). [modelId] identifies which leaf model
+ * produced the detections.
  */
 data class MlResult(
     val detections: List<MlDetection> = emptyList(),
     val observedAtEpochSec: Double = 0.0,
     val completedAtEpochSec: Double = 0.0,
+    val modelId: String = "",
 )
 
 data class MlDetection(
@@ -59,7 +61,7 @@ data class MlSummaryEntry(
 )
 
 /**
- * Windowing parameters taken from the active [MlModelDescriptor].
+ * Windowing parameters taken from an [MlModelDescriptor].
  */
 data class MlWindowing(
     val modelSampleRateHz: Int,
@@ -93,26 +95,30 @@ data class MlWindowing(
 /**
  * Thin client for ML analysis of raw audio via [MlProcessor].
  *
- * Call [reset] with the sample rate before any [submit]. [submit] copies PCM
- * into the processor; overlapping windows and resampling happen on the
- * processor's worker threads. Pass [isLast] when the stream ends so a partial
- * final window is zero-padded and processed.
+ * [modelId] is the user-selected primary model; [descriptors] is the full
+ * active set (primary + internal companions). Call [reset] with the sample rate
+ * before any [submit].
  *
- * @param onResult invoked when analysis of a window completes
+ * @param onResult invoked when analysis of a window completes (any active model)
  */
 class MlClient(
     context: Context,
     val modelId: String,
-    descriptor: MlModelDescriptor,
+    descriptors: List<MlModelDescriptor>,
     onResult: (MlResult) -> Unit,
 ) {
-    private var windowing: MlWindowing = MlWindowing.from(descriptor)
+    private val activeDescriptors: List<MlModelDescriptor> =
+        descriptors.ifEmpty {
+            error("MlClient requires at least one descriptor")
+        }
+
+    /** Stable ids of models this client runs (primary + companions). */
+    fun activeModelIds(): List<String> = activeDescriptors.map { it.id }
 
     /** Sample rate set by the last [reset]; 0 until [reset] has been called. */
     private var sampleRateHz: Int = 0
 
-    private val processor = MlProcessor(context.applicationContext, modelId).also {
-        it.setWindowing(windowing)
+    private val processor = MlProcessor(context.applicationContext, activeDescriptors).also {
         it.start(onResult)
     }
 
@@ -130,34 +136,31 @@ class MlClient(
 
     private val mutableWillAcceptAudioFlow = MutableStateFlow(false)
     /**
-     * True when [reset] has set a sample rate at or above [MlWindowing.minSampleRateHz]
-     * so [submit] will ingest rather than drop audio.
+     * True when [reset] has set a sample rate at or above at least one model's
+     * [MlWindowing.minSampleRateHz] so [submit] will ingest rather than drop audio.
      */
     val willAcceptAudioFlow: StateFlow<Boolean> = mutableWillAcceptAudioFlow.asStateFlow()
 
     /**
-     * Whether the current [sampleRateHz] is high enough for this model to use
-     * submitted audio. False until [reset], or when below [MlWindowing.minSampleRateHz].
-     *
-     * [MlProcessor] also enforces [MlWindowing.minSampleRateHz] (defense in depth
-     * for model switches and flush-only [isLast] submits).
+     * Whether the current [sampleRateHz] is high enough for any active model.
      */
     fun willAcceptAudio(): Boolean =
-        sampleRateHz > 0 && sampleRateHz >= windowing.minSampleRateHz
+        sampleRateHz > 0 &&
+            activeDescriptors.any { sampleRateHz >= it.minSampleRateHz }
 
     /** Live vs viewer enqueue policy; forwarded to [MlProcessor]. */
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
         processor.setOverflowPolicy(policy)
     }
 
-    /** Species-name language index for the ML panel; forwarded to [MlProcessor]. */
-    fun setLabelLanguage(languageIndex: Int) {
-        processor.setLabelLanguage(languageIndex)
+    /** Species-name language for one model; forwarded to [MlProcessor]. */
+    fun setLabelLanguage(forModelId: String, languageIndex: Int) {
+        processor.setLabelLanguage(forModelId, languageIndex)
     }
 
-    /** User suppressions (label key → ignore); forwarded to [MlProcessor]. */
-    fun setSuppressions(suppressions: Map<String, Boolean>) {
-        processor.setSuppressions(suppressions)
+    /** User suppressions for [forModelId]. */
+    fun setSuppressions(forModelId: String, suppressions: Map<String, Boolean>) {
+        processor.setSuppressions(forModelId, suppressions)
     }
 
     /**
@@ -175,16 +178,6 @@ class MlClient(
     /** Discard queued work and reset the resample stream. */
     fun clearQueue() {
         processor.clearQueue()
-    }
-
-    /**
-     * Replace windowing parameters (e.g. after switching Auto Id models).
-     * Caller should [reset] afterward.
-     */
-    fun updateWindowing(windowing: MlWindowing) {
-        this.windowing = windowing
-        processor.setWindowing(windowing)
-        publishWillAcceptAudio()
     }
 
     /**

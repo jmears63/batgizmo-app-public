@@ -29,7 +29,7 @@ android {
         minSdk = 29
         targetSdk = 37
         versionCode = 56
-        versionName = "3.2.0"
+        versionName = "main"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {

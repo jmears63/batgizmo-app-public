@@ -60,7 +60,15 @@ class EmbedThenClassifyModel(
         }
     }
 
-    override fun predict(window: FloatArray): FloatArray {
+    override fun predict(input: MlModelInput): FloatArray {
+        require(descriptor.stft == null) {
+            "embed_then_classify does not support stft (model ${descriptor.id})"
+        }
+        val window = when (input) {
+            is MlModelInput.PcmWindow -> input.samples
+            is MlModelInput.Spectrogram ->
+                error("embed_then_classify expects PCM windows (model ${descriptor.id})")
+        }
         require(window.size == descriptor.windowSamples) {
             "window must have ${descriptor.windowSamples} samples, got ${window.size}"
         }

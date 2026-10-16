@@ -67,6 +67,11 @@ data class MlModelDescriptor(
      * bundled models that do not declare one.
      */
     val versionName: String? = null,
+    /**
+     * Optional log-magnitude STFT before inference. Null / omitted in JSON ⇒
+     * raw PCM windows ([MlModelInput.PcmWindow]).
+     */
+    val stft: MlStftParams? = null,
 ) {
     /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
     val labelKeys: List<String> = labelCatalog.map { it.key }
@@ -128,10 +133,11 @@ interface MlModelBase : AutoCloseable {
     }
 
     /**
-     * Classify one float PCM window of [windowSamples] at [sampleRateHz].
+     * Classify one analysis frame. Input kind must match [descriptor.stft]
+     * ([MlModelInput.PcmWindow] when null, [MlModelInput.Spectrogram] otherwise).
      * Returns scores in `[0, 1]` aligned with [labelCatalog].
      */
-    fun predict(window: FloatArray): FloatArray
+    fun predict(input: MlModelInput): FloatArray
 }
 
 /** Default LiteRT thread count for interpreters. */

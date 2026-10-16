@@ -48,19 +48,26 @@ enum class MlOverflowPolicy {
 }
 
 /**
- * ML processing backend.
+ * Multi-model ML processing backend.
  *
- * Raw PCM is resampled once on a dedicated thread (stateful r8brain → model-rate
- * ring), then overlapping windows are offered to a single infer thread (LiteRT
- * is not thread-safe).
+ * Raw PCM is ingested once, then a metadata-driven graph shares resample /
+ * window / optional log-magnitude STFT stages across active models. Each model
+ * has its own infer thread and LiteRT instance.
  *
  * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingRawCount]
  * already reaches [MAX_LIVE_QUEUED].
  */
 class MlProcessor(
     context: Context,
-    private val modelId: String,
+    private val descriptors: List<MlModelDescriptor>,
 ) {
+    init {
+        require(descriptors.isNotEmpty()) { "descriptors must not be empty" }
+        require(descriptors.map { it.id }.toSet().size == descriptors.size) {
+            "duplicate model ids in descriptors"
+        }
+    }
+
     private sealed class RawItem {
         class Audio(
             val buffer: ShortArray,
@@ -72,7 +79,7 @@ class MlProcessor(
             val epoch: Long,
         ) : RawItem()
 
-        /** Clear ring + resampler; keep workers alive. */
+        /** Clear rings + resamplers; keep workers alive. */
         object ClearStream : RawItem()
 
         object Shutdown : RawItem()
@@ -80,7 +87,7 @@ class MlProcessor(
 
     private sealed class InferItem {
         class Job(
-            val window: FloatArray,
+            val input: MlModelInput,
             val bufferId: Int,
             val epoch: Long,
             val observedAtEpochSec: Double,
@@ -94,7 +101,6 @@ class MlProcessor(
         object Shutdown : InferItem()
     }
 
-    /** Timing / identity carried from a raw buffer through window emission. */
     private data class EmissionContext(
         val windowing: MlWindowing,
         val bufferId: Int,
@@ -182,30 +188,52 @@ class MlProcessor(
         }
     }
 
+    private class StftHandle(
+        val params: MlStftParams,
+        val windowSamples: Int,
+        var nativeHandle: Long,
+    ) {
+        fun process(pcm: FloatArray): FloatArray? {
+            if (nativeHandle == 0L) return null
+            return nativeStftProcess(nativeHandle, pcm)
+        }
+
+        fun destroy() {
+            if (nativeHandle != 0L) {
+                nativeStftDestroy(nativeHandle)
+                nativeHandle = 0L
+            }
+        }
+    }
+
     /**
-     * Resample-thread state: stateful resampler, model-rate ring, and timeline.
-     * Not thread-safe — owned exclusively by [resampleLoop].
+     * One model-rate branch: shared r8brain into float scratch, then fan-out
+     * append into per-window rings (so different window/hop configs do not share
+     * discard state).
      */
-    private inner class ResampleStream {
-        val ring = FloatRing()
+    private inner class RateStream(
+        val modelRateHz: Int,
+        val windowBranches: List<WindowStream>,
+    ) {
         private var resamplerHandle = 0L
         private var resamplerInHz = 0
         private var resamplerOutHz = 0
-        private var ringStartEpochSec = 0.0
-        private var ringHasTimeline = false
         var streamEpoch: Long = epoch.get()
-
-        fun noteRing() {
-            ringFillForUi = ring.size
-            publishBuffering()
-        }
 
         fun clear() {
             destroyResampler()
-            ring.clear()
-            ringHasTimeline = false
+            for (w in windowBranches) w.clear()
             streamEpoch = epoch.get()
-            noteRing()
+            noteRings()
+        }
+
+        fun noteRings() {
+            var fill = 0
+            for (w in windowBranches) {
+                if (w.ring.size > fill) fill = w.ring.size
+            }
+            ringFillForUi = fill
+            publishBuffering()
         }
 
         fun ensureResampler(inHz: Int, outHz: Int): Boolean {
@@ -232,81 +260,62 @@ class MlProcessor(
             return true
         }
 
-        fun appendPcm(pcm: ShortArray, offset: Int = 0, count: Int = pcm.size - offset) {
-            if (count <= 0) return
-            val floats = FloatArray(count)
-            for (i in 0 until count) {
-                floats[i] = pcm[offset + i] / 32768f
-            }
-            ring.append(floats)
-        }
-
         fun appendResampledOrIdentity(
             pcm: ShortArray,
             captureRateHz: Int,
-            modelRateHz: Int,
             bufferId: Int,
             observedAtEpochSec: Double,
         ) {
             if (pcm.isEmpty()) return
-            if (!ringHasTimeline) {
-                ringStartEpochSec = observedAtEpochSec
-                ringHasTimeline = true
-            }
+            for (w in windowBranches) w.ensureTimeline(observedAtEpochSec)
+
             if (captureRateHz == modelRateHz) {
-                appendPcm(pcm)
+                appendPcmToWindows(pcm)
                 return
             }
             val out = nativeResamplerProcess(resamplerHandle, pcm, 0, pcm.size)
             if (out == null) {
-                Timber.e("MlProcessor: resample failed on buffer #$bufferId")
+                Timber.e("MlProcessor: resample failed on buffer #$bufferId ($captureRateHz→$modelRateHz)")
             } else {
-                appendPcm(out)
+                appendPcmToWindows(out)
             }
         }
 
         fun flushResampler() {
             if (resamplerHandle == 0L) return
             val flushed = nativeResamplerFlush(resamplerHandle) ?: return
-            if (flushed.isNotEmpty()) appendPcm(flushed)
+            if (flushed.isNotEmpty()) appendPcmToWindows(flushed)
         }
 
-        fun emitFullWindows(ctx: EmissionContext) {
-            val w = ctx.windowing
-            val resampleMs = ctx.resampleMs
-            while (ring.size >= w.windowSamples) {
-                if (ctx.jobEpoch != epoch.get()) return
-                val window = FloatArray(w.windowSamples)
-                ring.copyWindow(window)
-                val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
-                offerWindow(window, ctx, observed, resampleMs)
-                ring.discard(ctx.hop)
-                if (ringHasTimeline) {
-                    ringStartEpochSec += ctx.hop.toDouble() / w.modelSampleRateHz
-                }
+        fun emitFullWindows(ctxBase: EmissionContext) {
+            for (w in windowBranches) {
+                w.emitFullWindows(
+                    ctxBase.copy(windowing = w.windowing),
+                    modelWorkers,
+                )
             }
-            noteRing()
+            noteRings()
         }
 
-        /**
-         * Emit every full window, then zero-pad any partial remainder into one
-         * final window. No-op if the ring is empty.
-         */
-        fun emitEndOfStream(ctx: EmissionContext) {
-            if (ring.size <= 0) return
-            if (ctx.jobEpoch != epoch.get()) return
-            emitFullWindows(ctx)
-            if (ring.size <= 0 || ctx.jobEpoch != epoch.get()) return
-            if (ring.size >= ctx.windowing.windowSamples) return
+        fun emitEndOfStream(ctxBase: EmissionContext) {
+            for (w in windowBranches) {
+                w.emitEndOfStream(
+                    ctxBase.copy(windowing = w.windowing),
+                    modelWorkers,
+                )
+            }
+            noteRings()
+        }
 
-            ring.appendZeros(ctx.windowing.windowSamples - ring.size)
-            val window = FloatArray(ctx.windowing.windowSamples)
-            ring.copyWindow(window)
-            val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
-            offerWindow(window, ctx, observed, ctx.resampleMs)
-            ring.clear()
-            ringHasTimeline = false
-            noteRing()
+        private fun appendPcmToWindows(pcm: ShortArray) {
+            if (pcm.isEmpty()) return
+            val floats = FloatArray(pcm.size)
+            for (i in pcm.indices) {
+                floats[i] = pcm[i] / 32768f
+            }
+            for (w in windowBranches) {
+                w.ring.append(floats)
+            }
         }
 
         private fun destroyResampler() {
@@ -317,46 +326,242 @@ class MlProcessor(
             resamplerInHz = 0
             resamplerOutHz = 0
         }
+    }
 
-        private fun offerWindow(
+    private inner class WindowStream(
+        val windowing: MlWindowing,
+        val pcmModelIds: List<String>,
+        val stftGroups: List<Pair<MlStftParams, List<String>>>,
+    ) {
+        val ring = FloatRing()
+        private var ringStartEpochSec = 0.0
+        private var ringHasTimeline = false
+        private val stftHandles = HashMap<MlStftParams, StftHandle>()
+
+        fun ensureTimeline(observedAtEpochSec: Double) {
+            if (!ringHasTimeline) {
+                ringStartEpochSec = observedAtEpochSec
+                ringHasTimeline = true
+            }
+        }
+
+        fun clear() {
+            ring.clear()
+            ringHasTimeline = false
+            for (h in stftHandles.values) h.destroy()
+            stftHandles.clear()
+        }
+
+        fun emitFullWindows(
+            ctx: EmissionContext,
+            workers: Map<String, ModelWorker>,
+        ) {
+            val w = ctx.windowing
+            val resampleMs = ctx.resampleMs
+            while (ring.size >= w.windowSamples) {
+                if (ctx.jobEpoch != epoch.get()) return
+                val window = FloatArray(w.windowSamples)
+                ring.copyWindow(window)
+                val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
+                dispatchWindow(window, ctx, observed, resampleMs, workers)
+                ring.discard(ctx.hop)
+                if (ringHasTimeline) {
+                    ringStartEpochSec += ctx.hop.toDouble() / w.modelSampleRateHz
+                }
+            }
+        }
+
+        fun emitEndOfStream(
+            ctx: EmissionContext,
+            workers: Map<String, ModelWorker>,
+        ) {
+            if (ring.size <= 0) return
+            if (ctx.jobEpoch != epoch.get()) return
+            emitFullWindows(ctx, workers)
+            if (ring.size <= 0 || ctx.jobEpoch != epoch.get()) return
+            if (ring.size >= ctx.windowing.windowSamples) return
+
+            ring.appendZeros(ctx.windowing.windowSamples - ring.size)
+            val window = FloatArray(ctx.windowing.windowSamples)
+            ring.copyWindow(window)
+            val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
+            dispatchWindow(window, ctx, observed, ctx.resampleMs, workers)
+            ring.clear()
+            ringHasTimeline = false
+        }
+
+        private fun dispatchWindow(
             window: FloatArray,
+            ctx: EmissionContext,
+            observedAtEpochSec: Double,
+            resampleMs: Long,
+            workers: Map<String, ModelWorker>,
+        ) {
+            for (modelId in pcmModelIds) {
+                val worker = workers[modelId] ?: continue
+                offerInfer(
+                    worker,
+                    MlModelInput.PcmWindow(window.copyOf()),
+                    ctx,
+                    observedAtEpochSec,
+                    resampleMs,
+                )
+            }
+            for ((stft, modelIds) in stftGroups) {
+                if (modelIds.isEmpty()) continue
+                val spectrogram = ensureStft(stft)?.process(window)
+                if (spectrogram == null) {
+                    Timber.e(
+                        "MlProcessor: STFT failed fft=${stft.fftSize} hop=${stft.hopSamples}"
+                    )
+                    continue
+                }
+                val nFrames = stft.nFrames(windowing.windowSamples)
+                val nBins = stft.nFreqBins()
+                for ((index, modelId) in modelIds.withIndex()) {
+                    val worker = workers[modelId] ?: continue
+                    val values =
+                        if (index == modelIds.lastIndex) spectrogram
+                        else spectrogram.copyOf()
+                    offerInfer(
+                        worker,
+                        MlModelInput.Spectrogram(values, nFrames, nBins),
+                        ctx,
+                        observedAtEpochSec,
+                        resampleMs,
+                    )
+                }
+            }
+        }
+
+        private fun ensureStft(params: MlStftParams): StftHandle? {
+            stftHandles[params]?.let { return it }
+            val handle = nativeStftCreate(
+                params.fftSize,
+                params.hopSamples,
+                windowing.windowSamples,
+            )
+            if (handle == 0L) {
+                Timber.e("MlProcessor: failed to create STFT $params")
+                return null
+            }
+            return StftHandle(params, windowing.windowSamples, handle).also {
+                stftHandles[params] = it
+            }
+        }
+
+        private fun offerInfer(
+            worker: ModelWorker,
+            input: MlModelInput,
             ctx: EmissionContext,
             observedAtEpochSec: Double,
             resampleMs: Long,
         ) {
             if (ctx.jobEpoch != epoch.get()) return
+
+            if (overflowPolicy == MlOverflowPolicy.DropIfFull) {
+                while (true) {
+                    val pending = worker.inferPendingCount.get()
+                    if (pending >= MAX_LIVE_INFER_QUEUED) {
+                        Timber.w(
+                            "MlProcessor: infer queue depth $pending for " +
+                                "${worker.descriptor.id}: window from buffer #${ctx.bufferId} dropped"
+                        )
+                        return
+                    }
+                    if (worker.inferPendingCount.compareAndSet(pending, pending + 1)) break
+                }
+            } else {
+                worker.inferPendingCount.incrementAndGet()
+            }
+
             val inferQueuedAtMs = SystemClock.elapsedRealtime()
-            val inferDepth = inferPendingCount.incrementAndGet()
+            val inferDepth = worker.inferPendingCount.get()
             markWorkStarted()
-            val offered = inferQueue.offer(
-                InferItem.Job(
-                    window = window,
-                    bufferId = ctx.bufferId,
-                    epoch = ctx.jobEpoch,
-                    observedAtEpochSec = observedAtEpochSec,
-                    queuedAtElapsedRealtimeMs = ctx.queuedAtMs,
-                    queueWaitMs = ctx.queueWaitMs,
-                    resampleMs = resampleMs,
-                    inferQueuedAtElapsedRealtimeMs = inferQueuedAtMs,
-                    inferQueueLengthWhenQueued = inferDepth,
-                )
+            val job = InferItem.Job(
+                input = input,
+                bufferId = ctx.bufferId,
+                epoch = ctx.jobEpoch,
+                observedAtEpochSec = observedAtEpochSec,
+                queuedAtElapsedRealtimeMs = ctx.queuedAtMs,
+                queueWaitMs = ctx.queueWaitMs,
+                resampleMs = resampleMs,
+                inferQueuedAtElapsedRealtimeMs = inferQueuedAtMs,
+                inferQueueLengthWhenQueued = inferDepth,
             )
+            val offered = if (overflowPolicy == MlOverflowPolicy.QueueAll) {
+                // May block preprocess until this model catches up — viewer must not drop.
+                try {
+                    worker.inferQueue.put(job)
+                    true
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    false
+                }
+            } else {
+                worker.inferQueue.offer(job)
+            }
             if (!offered) {
-                inferPendingCount.decrementAndGet()
+                worker.inferPendingCount.decrementAndGet()
                 markWorkFinished()
                 Timber.w(
-                    "MlProcessor: infer queue rejected window from buffer #${ctx.bufferId}"
+                    "MlProcessor: infer queue rejected window for ${worker.descriptor.id} " +
+                        "from buffer #${ctx.bufferId}"
                 )
             }
         }
     }
 
-    companion object {
+    private inner class ModelWorker(
+        val descriptor: MlModelDescriptor,
+    ) {
+        val inferQueue = LinkedBlockingQueue<InferItem>()
+        val inferPendingCount = AtomicInteger(0)
+        /** Last [geoEpoch] applied on this worker's infer thread. */
+        var appliedGeoEpoch: Long = -1L
+        @Volatile
+        var model: MlModelBase? = null
+        var thread: Thread? = null
+
         /**
-         * Soft cap on queued raw buffers in live mode ([MlOverflowPolicy.DropIfFull]).
-         * Viewer mode ([MlOverflowPolicy.QueueAll]) ignores this.
+         * Open the model on the infer thread only. Geo is applied via
+         * [syncGeoOnInferThread], not here from other threads.
          */
+        fun ensureModel(): MlModelBase? {
+            model?.let { return it }
+            return try {
+                MlCatalog.ensureInitialized(appContext)
+                MlCatalog.openModel(appContext.assets, descriptor.id).also { opened ->
+                    model = opened
+                    Timber.i(
+                        "MlProcessor: loaded Auto Id model ${opened.id} " +
+                            "(${opened.sampleRateHz} Hz, ${opened.windowSamples} samples" +
+                            "${if (opened.descriptor.stft != null) ", stft" else ""})"
+                    )
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "MlProcessor: failed to load Auto Id model ${descriptor.id}")
+                null
+            }
+        }
+
+        /** Infer-thread only. */
+        fun closeModel() {
+            model?.close()
+            model = null
+            appliedGeoEpoch = -1L
+        }
+    }
+
+    companion object {
         const val MAX_LIVE_QUEUED = 10
+
+        /**
+         * Soft cap on queued infer jobs per model in live mode
+         * ([MlOverflowPolicy.DropIfFull]). Viewer ([MlOverflowPolicy.QueueAll])
+         * ignores this and may block preprocess on [BlockingQueue.put].
+         */
+        const val MAX_LIVE_INFER_QUEUED = 8
 
         init {
             System.loadLibrary("batgizmo-native")
@@ -381,124 +586,130 @@ class MlProcessor(
 
         @JvmStatic
         private external fun nativeResamplerDestroy(handle: Long)
+
+        @JvmStatic
+        private external fun nativeStftCreate(
+            fftSize: Int,
+            hopSamples: Int,
+            windowSamples: Int,
+        ): Long
+
+        @JvmStatic
+        private external fun nativeStftProcess(
+            handle: Long,
+            pcmWindow: FloatArray,
+        ): FloatArray?
+
+        @JvmStatic
+        private external fun nativeStftDestroy(handle: Long)
     }
 
     private val appContext = context.applicationContext
     private val rawQueue = LinkedBlockingQueue<RawItem>()
-    private val inferQueue = LinkedBlockingQueue<InferItem>()
 
     private val pendingRawCount = AtomicInteger(0)
-    private val inferPendingCount = AtomicInteger(0)
     private val bufferIdSeq = AtomicInteger(0)
-    /** Bumped by [clearQueue] / [reset] so in-flight work is ignored. */
     private val epoch = AtomicLong(0)
 
     private val activeWorkCount = AtomicInteger(0)
     private val mutableBusyFlow = MutableStateFlow(false)
-    /**
-     * True while any work unit is outstanding (queued or in-flight raw/infer).
-     * Drives the Auto Id sparkle together with [isBuffering].
-     */
     val isBusy: StateFlow<Boolean> = mutableBusyFlow.asStateFlow()
 
     private val mutableBufferingFlow = MutableStateFlow(false)
-    /**
-     * True while raw PCM is waiting to be resampled, or the model-rate ring holds
-     * a partial window (not yet a full infer input). Does not include infer-only
-     * work — that is covered by [isBusy].
-     */
     val isBuffering: StateFlow<Boolean> = mutableBufferingFlow.asStateFlow()
 
-    /** Ring fill observed on the resample thread; used for [isBuffering]. */
     @Volatile
     private var ringFillForUi: Int = 0
 
     @Volatile
     private var overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull
 
+    /** modelId → species-name language column index. */
     @Volatile
-    private var labelLanguageIndex: Int = 0
+    private var labelLanguageByModel: Map<String, Int> = emptyMap()
 
+    /** modelId → suppressed label keys. */
     @Volatile
-    private var suppressedLabelKeys: Set<String> = emptySet()
+    private var suppressedByModel: Map<String, Set<String>> = emptyMap()
 
+    /**
+     * BirdNET geo snapshot. Written from the client thread; read and applied to
+     * [BirdNetModel] only on each model's infer thread (see [syncGeoOnInferThread]).
+     */
     @Volatile
     private var geoSnapshot: BirdNetModel.GeoSnapshot? = null
 
-    @Volatile
-    private var windowing: MlWindowing? = null
+    /** Bumped whenever [geoSnapshot] is set or cleared so infer threads re-sync. */
+    private val geoEpoch = AtomicLong(0)
 
-    private var model: MlModelBase? = null
-
-    /**
-     * Capture rate from the last [reset]. Recorded for API honesty; each
-     * [tryEnqueue] still carries its own rate (resampler adapts if it differs).
-     */
     @Volatile
     private var captureSampleRateHz: Int = 0
 
-    /**
-     * True after [start] until [close] begins. Cleared at the start of [close]
-     * so [tryEnqueue] stops accepting before workers are torn down.
-     */
     @Volatile
     private var running = false
 
-    private var resampleThread: Thread? = null
-    private var inferThread: Thread? = null
+    private var preprocessThread: Thread? = null
+    private val modelWorkers: Map<String, ModelWorker> =
+        descriptors.associate { it.id to ModelWorker(it) }
+
+    /** Smallest windowSamples among descriptors; used for buffering UI. */
+    private val minWindowSamples: Int =
+        descriptors.minOf { it.windowSamples }
 
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
         overflowPolicy = policy
     }
 
-    fun setLabelLanguage(languageIndex: Int) {
-        labelLanguageIndex = languageIndex
+    /** Set species-name language for one model (other models unchanged). */
+    fun setLabelLanguage(modelId: String, languageIndex: Int) {
+        labelLanguageByModel = labelLanguageByModel + (modelId to languageIndex)
     }
 
-    fun setSuppressions(suppressions: Map<String, Boolean>) {
-        suppressedLabelKeys = suppressions.filterValues { it }.keys
+    /** Replace suppressions for [modelId] (other models unchanged). */
+    fun setSuppressions(modelId: String, suppressions: Map<String, Boolean>) {
+        val next = suppressedByModel.toMutableMap()
+        next[modelId] = suppressions.filterValues { it }.keys
+        suppressedByModel = next
     }
 
+    /**
+     * Publish a geo snapshot for BirdNET workers. First snapshot wins.
+     * [BirdNetModel] is updated only on each infer thread via [syncGeoOnInferThread].
+     */
     fun setGeoSnapshot(snapshot: BirdNetModel.GeoSnapshot?) {
         if (snapshot == null) return
         if (geoSnapshot != null) return
         geoSnapshot = snapshot
-        val opened = model
-        if (opened is BirdNetModel) {
-            opened.setGeoSnapshot(snapshot)
-        }
-    }
-
-    fun clearGeoSnapshot() {
-        geoSnapshot = null
-        val opened = model
-        if (opened is BirdNetModel) {
-            opened.resetGeoFilter()
-        }
-    }
-
-    fun setWindowing(windowing: MlWindowing) {
-        this.windowing = windowing
+        geoEpoch.incrementAndGet()
     }
 
     /**
-     * Record the capture sample rate and clear stream/queue state.
-     * Must be called before [tryEnqueue], and again whenever the rate changes.
+     * Clear geo snapshot/mask so a new location can be applied. Infer threads
+     * observe the bump via [geoEpoch] and call [BirdNetModel.resetGeoFilter].
      */
+    fun clearGeoSnapshot() {
+        geoSnapshot = null
+        geoEpoch.incrementAndGet()
+    }
+
+    /**
+     * Infer-thread only: apply the latest [geoSnapshot] to [bird] when [geoEpoch]
+     * has advanced since this worker last synced.
+     */
+    private fun syncGeoOnInferThread(worker: ModelWorker, bird: BirdNetModel) {
+        val epochNow = geoEpoch.get()
+        if (epochNow == worker.appliedGeoEpoch) return
+        bird.resetGeoFilter()
+        geoSnapshot?.let { bird.setGeoSnapshot(it) }
+        worker.appliedGeoEpoch = epochNow
+    }
+
     fun reset(sampleRateHz: Int) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         captureSampleRateHz = sampleRateHz
         clearQueue()
     }
 
-    /**
-     * Discard queued raw and infer work and reset the resample stream.
-     *
-     * Each queued [RawItem.Audio] / [InferItem.Job] holds one [activeWorkCount]
-     * unit: this method finishes those units. In-flight items (already taken by
-     * a worker) are finished by that worker's `finally` / epoch skip path — never
-     * by both. [Shutdown] sentinels are preserved if encountered while draining.
-     */
     fun clearQueue() {
         val newEpoch = epoch.incrementAndGet()
         var dropped = 0
@@ -515,26 +726,26 @@ class MlProcessor(
                 RawItem.Shutdown -> sawRawShutdown = true
             }
         }
-        var sawInferShutdown = false
-        while (true) {
-            val item = inferQueue.poll() ?: break
-            when (item) {
-                is InferItem.Job -> {
-                    dropped++
-                    inferPendingCount.decrementAndGet()
-                    markWorkFinished()
+        for (worker in modelWorkers.values) {
+            var sawInferShutdown = false
+            while (true) {
+                val item = worker.inferQueue.poll() ?: break
+                when (item) {
+                    is InferItem.Job -> {
+                        dropped++
+                        worker.inferPendingCount.decrementAndGet()
+                        markWorkFinished()
+                    }
+                    InferItem.Shutdown -> sawInferShutdown = true
                 }
-                InferItem.Shutdown -> sawInferShutdown = true
+            }
+            if (sawInferShutdown) {
+                worker.inferQueue.offer(InferItem.Shutdown)
             }
         }
-        // Do not pendingRawCount.set(0): in-flight takes already decremented;
-        // forcing zero would desync the live depth cap from the real queue.
         rawQueue.offer(RawItem.ClearStream)
         if (sawRawShutdown) {
             rawQueue.offer(RawItem.Shutdown)
-        }
-        if (sawInferShutdown) {
-            inferQueue.offer(InferItem.Shutdown)
         }
         if (dropped > 0) {
             Timber.i("MlProcessor: cleared $dropped queued job(s) (epoch=$newEpoch)")
@@ -542,15 +753,6 @@ class MlProcessor(
         publishBuffering()
     }
 
-    /**
-     * Offer PCM for background processing without blocking.
-     *
-     * On success, ownership of [buffer] transfers when [offset] is 0 and [count]
-     * equals [buffer].size; otherwise a slice is copied. Empty [count] with
-     * [isLast] true flushes the stream (end of page / disconnect).
-     *
-     * @return true if accepted
-     */
     fun tryEnqueue(
         buffer: ShortArray,
         offset: Int,
@@ -574,9 +776,6 @@ class MlProcessor(
             }
 
         val bufferId = bufferIdSeq.incrementAndGet()
-        // Snapshot epoch after reserving the slot so a concurrent clearQueue that
-        // already bumped epoch either drains us (finishes our work unit) or we
-        // carry the new epoch.
         if (overflowPolicy == MlOverflowPolicy.DropIfFull) {
             while (true) {
                 if (!running) return false
@@ -624,93 +823,151 @@ class MlProcessor(
         return true
     }
 
-    /** Start the resample and infer worker threads. Safe to call once. */
     fun start(onResult: (MlResult) -> Unit) {
         check(!running) { "MlProcessor already started" }
         running = true
-        val resample = Thread({
+        for (worker in modelWorkers.values) {
+            val t = Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                inferLoop(worker, onResult)
+            }, "MlInfer-${worker.descriptor.id}")
+            worker.thread = t
+            t.start()
+        }
+        val preprocess = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-            resampleLoop()
-        }, "MlResample")
-        val infer = Thread({
-            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-            inferLoop(onResult)
-        }, "MlInfer")
-        resampleThread = resample
-        inferThread = infer
-        resample.start()
-        infer.start()
+            preprocessLoop()
+        }, "MlPreprocess")
+        preprocessThread = preprocess
+        preprocess.start()
     }
 
-    /**
-     * Stop accepting work, wake workers, join them, then release the model.
-     * Idempotent. [running] is cleared first so [tryEnqueue] fails immediately.
-     */
     fun close() {
         if (!running) return
         running = false
         rawQueue.offer(RawItem.Shutdown)
-        val resample = resampleThread
-        val infer = inferThread
+        val preprocess = preprocessThread
         try {
-            resample?.join(5_000)
-            infer?.join(5_000)
+            preprocess?.join(5_000)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
-        if (resample?.isAlive == true || infer?.isAlive == true) {
-            Timber.w("MlProcessor: workers still alive after join; interrupting")
-            resample?.interrupt()
-            infer?.interrupt()
+        if (preprocess?.isAlive == true) {
+            Timber.w("MlProcessor: preprocess still alive after join; interrupting")
+            preprocess.interrupt()
             try {
-                resample?.join(1_000)
-                infer?.join(1_000)
+                preprocess.join(1_000)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             }
         }
-        // Model is owned by the infer thread until workers have stopped.
-        model?.close()
-        model = null
-        resampleThread = null
-        inferThread = null
+        for (worker in modelWorkers.values) {
+            val t = worker.thread
+            try {
+                t?.join(5_000)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            if (t?.isAlive == true) {
+                Timber.w("MlProcessor: infer ${worker.descriptor.id} still alive; interrupting")
+                t.interrupt()
+                try {
+                    t.join(5_000)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+            if (t?.isAlive == true) {
+                Timber.e(
+                    "MlProcessor: infer ${worker.descriptor.id} did not exit; " +
+                        "leaving model close to that thread"
+                )
+            }
+            // Model is closed in inferLoop's finally — never from this thread.
+            worker.thread = null
+        }
+        preprocessThread = null
         activeWorkCount.set(0)
         mutableBusyFlow.value = false
         mutableBufferingFlow.value = false
         ringFillForUi = 0
     }
 
-    private fun resampleLoop() {
-        val stream = ResampleStream()
+    private fun preprocessLoop() {
+        var rates: List<RateStream> = emptyList()
+        var graphCaptureHz = 0
         try {
             while (true) {
                 when (val item = rawQueue.take()) {
                     RawItem.Shutdown -> {
-                        stream.clear()
-                        inferQueue.offer(InferItem.Shutdown)
+                        for (r in rates) r.clear()
+                        for (worker in modelWorkers.values) {
+                            worker.inferQueue.offer(InferItem.Shutdown)
+                        }
                         break
                     }
-                    RawItem.ClearStream -> stream.clear()
-                    is RawItem.Audio -> processAudio(stream, item)
+                    RawItem.ClearStream -> {
+                        for (r in rates) r.clear()
+                    }
+                    is RawItem.Audio -> {
+                        if (graphCaptureHz != item.sampleRateHz || rates.isEmpty()) {
+                            for (r in rates) r.clear()
+                            rates = buildRateStreams(item.sampleRateHz)
+                            graphCaptureHz = item.sampleRateHz
+                            Timber.i(
+                                "MlProcessor: preprocess graph for ${item.sampleRateHz} Hz → " +
+                                    "${rates.size} rate branch(es), " +
+                                    "${rates.sumOf { it.windowBranches.size }} window branch(es)"
+                            )
+                        }
+                        processAudio(rates, item)
+                    }
                 }
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
-            inferQueue.offer(InferItem.Shutdown)
+            for (worker in modelWorkers.values) {
+                worker.inferQueue.offer(InferItem.Shutdown)
+            }
         } finally {
-            stream.clear()
+            for (r in rates) r.clear()
         }
     }
 
-    private fun processAudio(stream: ResampleStream, item: RawItem.Audio) {
+    private fun buildRateStreams(captureSampleRateHz: Int): List<RateStream> {
+        val spec = MlPipelineSpec.build(descriptors, captureSampleRateHz)
+        return spec.rateBranches.map { rate ->
+            RateStream(
+                modelRateHz = rate.sampleRateHz,
+                windowBranches = rate.windowBranches.map { w ->
+                    WindowStream(
+                        windowing = w.windowing,
+                        pcmModelIds = w.pcmModels.map { it.id },
+                        stftGroups = w.stftGroups.map { g ->
+                            g.stft to g.models.map { it.id }
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    private fun processAudio(rates: List<RateStream>, item: RawItem.Audio) {
         pendingRawCount.decrementAndGet()
         val dequeuedAtMs = SystemClock.elapsedRealtime()
         val queueWaitMs = dequeuedAtMs - item.queuedAtElapsedRealtimeMs
         try {
             if (item.epoch != epoch.get()) return
-            val w = resolveWindowing() ?: return
-            val ctx = EmissionContext(
-                windowing = w,
+            if (rates.isEmpty()) {
+                Timber.i(
+                    "MlProcessor: buffer #${item.bufferId} dropped " +
+                        "(no models accept ${item.sampleRateHz} Hz)"
+                )
+                return
+            }
+
+            val ctxBase = EmissionContext(
+                windowing = rates.first().windowBranches.first().windowing,
                 bufferId = item.bufferId,
                 jobEpoch = item.epoch,
                 queuedAtMs = item.queuedAtElapsedRealtimeMs,
@@ -718,44 +975,28 @@ class MlProcessor(
                 resampleStartedAtMs = dequeuedAtMs,
             )
 
-            // Defense in depth with MlClient.willAcceptAudio: client avoids
-            // enqueueing useless live audio; we still gate here for BYOM /
-            // model switches and flush-only isLast submits below the min rate.
-            if (item.sampleRateHz < w.minSampleRateHz) {
-                Timber.i(
-                    "MlProcessor: buffer #${item.bufferId} dropped " +
-                        "(${item.sampleRateHz} Hz < min ${w.minSampleRateHz} Hz)"
-                )
-                if (item.isLast) {
-                    stream.emitEndOfStream(ctx)
-                    stream.clear()
+            for (rate in rates) {
+                if (item.epoch != rate.streamEpoch) {
+                    rate.clear()
+                    rate.streamEpoch = item.epoch
                 }
-                return
-            }
-
-            if (item.epoch != stream.streamEpoch) {
-                stream.clear()
-                stream.streamEpoch = item.epoch
-            }
-            if (!stream.ensureResampler(item.sampleRateHz, w.modelSampleRateHz)) {
-                return
-            }
-
-            stream.appendResampledOrIdentity(
-                item.buffer,
-                item.sampleRateHz,
-                w.modelSampleRateHz,
-                item.bufferId,
-                item.observedAtEpochSec,
-            )
-            stream.emitFullWindows(ctx)
-
-            if (item.isLast) {
-                stream.flushResampler()
-                stream.emitEndOfStream(ctx)
-                stream.clear()
-            } else {
-                stream.noteRing()
+                if (!rate.ensureResampler(item.sampleRateHz, rate.modelRateHz)) {
+                    continue
+                }
+                rate.appendResampledOrIdentity(
+                    item.buffer,
+                    item.sampleRateHz,
+                    item.bufferId,
+                    item.observedAtEpochSec,
+                )
+                rate.emitFullWindows(ctxBase)
+                if (item.isLast) {
+                    rate.flushResampler()
+                    rate.emitEndOfStream(ctxBase)
+                    rate.clear()
+                } else {
+                    rate.noteRings()
+                }
             }
         } finally {
             markWorkFinished()
@@ -763,20 +1004,20 @@ class MlProcessor(
         }
     }
 
-    private fun inferLoop(onResult: (MlResult) -> Unit) {
+    private fun inferLoop(worker: ModelWorker, onResult: (MlResult) -> Unit) {
         try {
             while (true) {
-                when (val item = inferQueue.take()) {
+                when (val item = worker.inferQueue.take()) {
                     InferItem.Shutdown -> break
                     is InferItem.Job -> {
-                        inferPendingCount.decrementAndGet()
+                        worker.inferPendingCount.decrementAndGet()
                         if (item.epoch != epoch.get()) {
                             markWorkFinished()
                             publishBuffering()
                             continue
                         }
                         try {
-                            onResult(inferWindow(item))
+                            onResult(inferWindow(worker, item))
                         } finally {
                             markWorkFinished()
                             publishBuffering()
@@ -786,6 +1027,9 @@ class MlProcessor(
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
+        } finally {
+            // Own the LiteRT lifetime on this thread only (thread-safe close).
+            worker.closeModel()
         }
     }
 
@@ -806,63 +1050,32 @@ class MlProcessor(
     }
 
     private fun publishBuffering() {
-        val windowSamples = windowing?.windowSamples ?: Int.MAX_VALUE
         val ringFill = ringFillForUi
-        // Ingest / partial-window only — not infer (see [isBusy]).
         mutableBufferingFlow.value =
             pendingRawCount.get() > 0 ||
-                (ringFill > 0 && ringFill < windowSamples)
+                (ringFill > 0 && ringFill < minWindowSamples)
     }
 
-    private fun resolveWindowing(): MlWindowing? {
-        windowing?.let { return it }
-        return try {
-            MlCatalog.ensureInitialized(appContext)
-            MlWindowing.from(MlCatalog.resolveDescriptor(appContext.assets, modelId)).also {
-                windowing = it
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "MlProcessor: no descriptor for $modelId")
-            null
-        }
-    }
-
-    private fun ensureModel(): MlModelBase? {
-        model?.let { return it }
-        return try {
-            MlCatalog.ensureInitialized(appContext)
-            MlCatalog.openModel(appContext.assets, modelId).also { opened ->
-                model = opened
-                windowing = MlWindowing.from(opened.descriptor)
-                if (opened is BirdNetModel) {
-                    geoSnapshot?.let { opened.setGeoSnapshot(it) }
-                }
-                Timber.i(
-                    "MlProcessor: loaded Auto Id model ${opened.id} " +
-                        "(${opened.sampleRateHz} Hz, ${opened.windowSamples} samples)"
-                )
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "MlProcessor: failed to load Auto Id model $modelId")
-            null
-        }
-    }
-
-    private fun inferWindow(job: InferItem.Job): MlResult {
+    private fun inferWindow(worker: ModelWorker, job: InferItem.Job): MlResult {
         fun completedResult(
             detections: List<MlDetection> = emptyList(),
         ): MlResult = MlResult(
             detections = detections,
             observedAtEpochSec = job.observedAtEpochSec,
             completedAtEpochSec = System.currentTimeMillis() / 1000.0,
+            modelId = worker.descriptor.id,
         )
 
-        val autoId = ensureModel() ?: return completedResult()
+        val autoId = worker.ensureModel() ?: return completedResult()
+        if (autoId is BirdNetModel) {
+            syncGeoOnInferThread(worker, autoId)
+        }
         val detectionThreshold = autoId.detectionThreshold
+        val suppressed = suppressedByModel[worker.descriptor.id].orEmpty()
 
         return try {
             val inferStartedAtMs = SystemClock.elapsedRealtime()
-            val scores = autoId.predict(job.window)
+            val scores = autoId.predict(job.input)
             val labelDiscard = autoId.labelDiscard
             val labelKeys = autoId.labelKeys
             var displayLabels: List<String>? = null
@@ -871,12 +1084,13 @@ class MlProcessor(
                 val score = scores[i]
                 if (score <= detectionThreshold ||
                     labelDiscard[i] ||
-                    labelKeys[i] in suppressedLabelKeys
+                    labelKeys[i] in suppressed
                 ) {
                     continue
                 }
+                val languageIndex = labelLanguageByModel[worker.descriptor.id] ?: 0
                 val labels = displayLabels
-                    ?: autoId.labelsFor(labelLanguageIndex).also { displayLabels = it }
+                    ?: autoId.labelsFor(languageIndex).also { displayLabels = it }
                 detections.add(
                     MlDetection(
                         label = labels[i],
@@ -895,14 +1109,16 @@ class MlProcessor(
                     "infer $inferMs ms, total $totalMs ms"
             if (detections.isEmpty()) {
                 Timber.i(
-                    "MlProcessor: buffer #${job.bufferId} detections: (none) ($timing)"
+                    "MlProcessor[${worker.descriptor.id}]: buffer #${job.bufferId} " +
+                        "detections: (none) ($timing)"
                 )
             } else {
                 val listed = detections.joinToString { d ->
                     "${d.label}=${"%.0f".format(d.confidence * 100)}%"
                 }
                 Timber.i(
-                    "MlProcessor: buffer #${job.bufferId} detections: $listed ($timing)"
+                    "MlProcessor[${worker.descriptor.id}]: buffer #${job.bufferId} " +
+                        "detections: $listed ($timing)"
                 )
             }
             completedResult(detections)
@@ -910,8 +1126,8 @@ class MlProcessor(
             val totalMs = SystemClock.elapsedRealtime() - job.queuedAtElapsedRealtimeMs
             Timber.e(
                 e,
-                "MlProcessor: inference failed on buffer #${job.bufferId} " +
-                    "(queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
+                "MlProcessor[${worker.descriptor.id}]: inference failed on buffer " +
+                    "#${job.bufferId} (queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
                     "total $totalMs ms)"
             )
             completedResult()

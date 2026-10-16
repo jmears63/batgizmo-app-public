@@ -39,6 +39,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         dsp_te.cpp
         audio_out.cpp
         ml_resample.cpp
+        ml_stft.cpp
 )
 
 # Include the KissFFT directory

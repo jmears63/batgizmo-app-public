@@ -60,6 +60,8 @@ class MlSummaryAccumulator {
         val label: String,
         val confidence: Float,
         val lastSeenAtEpochSec: Double,
+        /** Map key; disambiguates the same label from different models. */
+        val entryKey: String,
     )
 
     private val resultChannel = Channel<MlResult>(Channel.UNLIMITED)
@@ -127,8 +129,10 @@ class MlSummaryAccumulator {
         // Age styling / live ordering use completion time so a delayed result
         // appears fresh when it first shows, not aged by queue/infer latency.
         val at = result.completedAtEpochSec
+        val modelId = result.modelId
         for (detection in result.detections) {
-            val previous = entries[detection.label]
+            val entryKey = summaryEntryKey(modelId, detection.labelKey, detection.label)
+            val previous = entries[entryKey]
             val confidence =
                 if (previous == null || detection.confidence > previous.confidence) {
                     detection.confidence
@@ -136,7 +140,7 @@ class MlSummaryAccumulator {
                     previous.confidence
                 }
             // Refresh last-seen whenever the label appears again.
-            entries[detection.label] = Entry(detection.label, confidence, at)
+            entries[entryKey] = Entry(detection.label, confidence, at, entryKey)
         }
         publishSummary()
     }
@@ -156,7 +160,7 @@ class MlSummaryAccumulator {
                 dropped.confidence * 100f,
                 mutableMode.value,
             )
-            entries.remove(dropped.label)
+            entries.remove(dropped.entryKey)
         }
         mutableSummary.value = keep.map {
             MlSummaryEntry(it.label, it.confidence, it.lastSeenAtEpochSec)
@@ -165,5 +169,12 @@ class MlSummaryAccumulator {
 
     companion object {
         const val MAX_SUMMARY_ENTRIES = 5
+
+        /** Stable map key so two models can report the same display label. */
+        fun summaryEntryKey(modelId: String, labelKey: String, label: String): String {
+            val id = modelId.ifBlank { "_" }
+            val key = labelKey.ifBlank { label }
+            return "$id\u0000$key"
+        }
     }
 }

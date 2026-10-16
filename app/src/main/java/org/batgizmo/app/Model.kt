@@ -56,6 +56,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.batgizmo.app.ml.BirdNetModel
+import org.batgizmo.app.ml.MlActiveModels
 import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.MlClient
 import org.batgizmo.app.ml.MlModelDescriptor
@@ -928,9 +929,9 @@ class UIModel(application: Application,
         // Kick off reading the settings in a coroutine, which will therefore happen in a bit:
         viewModelScope.launch(Dispatchers.IO) {
             flow.collect { prefs ->
-                var persistMergedSuppressions = false
+                var persistSettings = false
                 mutex.withLock {
-                    settings.copyFromPreferences(prefs)
+                    persistSettings = settings.copyFromPreferences(prefs)
                     if (settings.isAutoIdEnabled()) {
                         val modelId = settings.autoIdModelId
                         val descriptor = try {
@@ -945,25 +946,42 @@ class UIModel(application: Application,
                         }
                         if (descriptor != null && settings.autoIdModelId != descriptor.id) {
                             settings.autoIdModelId = descriptor.id
-                            persistMergedSuppressions = true
+                            val family = descriptor.familyId
+                            settings.autoIdFamilyPrefs = settings.autoIdFamilyPrefs +
+                                (family to AutoIdFamilyPref(
+                                    descriptor.id,
+                                    settings.autoIdFamilyPrefs[family]?.language
+                                        ?: settings.autoIdLanguage,
+                                ))
+                            if (family !in settings.autoIdEnabledFamilyIds) {
+                                settings.autoIdEnabledFamilyIds =
+                                    settings.autoIdEnabledFamilyIds + family
+                            }
+                            persistSettings = true
                         }
-                        val suppressionDefaults = descriptor
-                            ?.labelCatalog
-                            ?.filter { !it.discard }
-                            ?.associate { it.key to it.disableByDefault }
-                            .orEmpty()
-                        persistMergedSuppressions = persistMergedSuppressions ||
-                            settings.mergeAutoIdSuppressionDefaults(
-                                settings.autoIdModelId,
-                                suppressionDefaults,
-                            )
+                        // Merge disable_by_default for every enabled model, not only primary.
+                        val assets = getApplication<Application>().assets
+                        val active = try {
+                            MlActiveModels.resolve(assets, settings)
+                        } catch (e: Exception) {
+                            Timber.e(e, "Failed to resolve active Auto Id models")
+                            emptyList()
+                        }
+                        for (desc in active) {
+                            val defaults = desc.labelCatalog
+                                .filter { !it.discard }
+                                .associate { it.key to it.disableByDefault }
+                            if (settings.mergeAutoIdSuppressionDefaults(desc.id, defaults)) {
+                                persistSettings = true
+                            }
+                        }
                     }
                     if (colourMapHelper.apply(settings.colourMap)) {
                         pipeline?.fullRenderFromSource()
                         triggerBitblt()
                     }
                 }
-                if (persistMergedSuppressions) {
+                if (persistSettings) {
                     settingsDataStore.edit { editPrefs ->
                         settings.copyToPreferences(editPrefs)
                     }
@@ -988,10 +1006,13 @@ class UIModel(application: Application,
                 val nowAutoIdEnabled = updatedSettings.isAutoIdEnabled()
                 val autoIdEnabled = nowAutoIdEnabled && !wasAutoIdEnabled
                 val autoIdDisabled = !nowAutoIdEnabled && wasAutoIdEnabled
-                val autoIdModelChanged =
-                    updatedSettings.autoIdModelId != settings.autoIdModelId
+                val autoIdSelectionChanged =
+                    updatedSettings.autoIdEnabledFamilyIds != settings.autoIdEnabledFamilyIds ||
+                        updatedSettings.autoIdFamilyPrefs != settings.autoIdFamilyPrefs ||
+                        updatedSettings.autoIdModelId != settings.autoIdModelId
                 val autoIdLanguageChanged =
-                    updatedSettings.autoIdLanguage != settings.autoIdLanguage
+                    updatedSettings.autoIdLanguage != settings.autoIdLanguage ||
+                        updatedSettings.autoIdFamilyPrefs != settings.autoIdFamilyPrefs
                 val autoIdSuppressionsChanged =
                     updatedSettings.autoIdSuppressions != settings.autoIdSuppressions
                 settings = updatedSettings
@@ -1004,8 +1025,8 @@ class UIModel(application: Application,
                     pipeline?.fullRenderFromSource()
                     triggerBitblt()
                 }
-                if (autoIdEnabled || (nowAutoIdEnabled && autoIdModelChanged)) {
-                    if (autoIdModelChanged) {
+                if (autoIdEnabled || (nowAutoIdEnabled && autoIdSelectionChanged)) {
+                    if (autoIdSelectionChanged) {
                         synchronized(mlLock) {
                             clearMlClientLocked()
                         }
@@ -1034,10 +1055,7 @@ class UIModel(application: Application,
                 ) {
                     synchronized(mlLock) {
                         mlClient?.let { client ->
-                            client.setLabelLanguage(updatedSettings.autoIdLanguage)
-                            client.setSuppressions(
-                                updatedSettings.suppressionsFor(updatedSettings.autoIdModelId)
-                            )
+                            applyMlClientLabelAndSuppressionsLocked(client, updatedSettings)
                         }
                     }
                     when (val p = pipeline) {
@@ -1112,7 +1130,8 @@ class UIModel(application: Application,
             .filter { it.familyId == familyId }
             .map { it.id }
             .toSet()
-        val removingActive = settings.autoIdModelId in removedModelIds
+        val removingActive = familyId in settings.autoIdEnabledFamilyIds ||
+            settings.autoIdModelId in removedModelIds
         if (removingActive) {
             reloadAutoIdClient(recreate = false)
         }
@@ -1122,11 +1141,17 @@ class UIModel(application: Application,
         if (!removed) return false
         val nested = settings.autoIdSuppressions.filterKeys { it !in removedModelIds }
         val prefsWithout = settings.autoIdFamilyPrefs - familyId
+        val enabledWithout = settings.autoIdEnabledFamilyIds.filterNot { it == familyId }
         val fallback = MlCatalog.resolveDescriptor(assets, null)
         val remaining = MlCatalog.listDescriptors(assets)
-        val remembered = prefsWithout[fallback.familyId]
+        val enabledOrFallback =
+            enabledWithout.ifEmpty { listOf(fallback.familyId) }
+        val firstFamily = enabledOrFallback.first()
+        val remembered = prefsWithout[firstFamily]
+        val variants = remaining.filter { it.familyId == firstFamily }
         val modelId = remembered?.variantId
-            ?.takeIf { id -> remaining.any { it.id == id } }
+            ?.takeIf { id -> variants.any { it.id == id } }
+            ?: variants.firstOrNull()?.id
             ?: fallback.id
         val chosen = remaining.firstOrNull { it.id == modelId } ?: fallback
         val language = remembered?.language
@@ -1135,14 +1160,15 @@ class UIModel(application: Application,
         val updated = settings.copy(
             autoIdModelId = chosen.id,
             autoIdLanguage = language,
+            autoIdEnabledFamilyIds = enabledOrFallback,
             autoIdFamilyPrefs = prefsWithout +
                 (chosen.familyId to AutoIdFamilyPref(chosen.id, language)),
             autoIdSuppressions = nested,
         )
-        val defaults = fallback.labelCatalog
+        val defaults = chosen.labelCatalog
             .filter { !it.discard }
             .associate { it.key to it.disableByDefault }
-        updated.mergeAutoIdSuppressionDefaults(fallback.id, defaults)
+        updated.mergeAutoIdSuppressionDefaults(chosen.id, defaults)
         updateStoredSettings(updated)
         return true
     }
@@ -1963,25 +1989,35 @@ class UIModel(application: Application,
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
         require(settings.isAutoIdEnabled()) { "Auto Id must be enabled" }
         synchronized(mlLock) {
-            val modelId = settings.autoIdModelId
+            MlCatalog.ensureInitialized(getApplication())
+            val assets = getApplication<Application>().assets
+            val descriptors = MlActiveModels.resolve(assets, settings)
+            if (descriptors.isEmpty()) {
+                clearMlClientLocked()
+                mlClientSampleRateHz = null
+                return
+            }
+            val primary = descriptors.first()
+            if (settings.autoIdModelId != primary.id) {
+                settings.autoIdModelId = primary.id
+                settings.autoIdLanguage =
+                    settings.autoIdFamilyPrefs[primary.familyId]?.language
+                        ?: settings.autoIdLanguage
+            }
+            val activeIds = descriptors.map { it.id }
             val existing = mlClient
-            if (existing != null && existing.modelId != modelId) {
+            if (existing != null &&
+                (existing.modelId != primary.id || existing.activeModelIds() != activeIds)
+            ) {
                 clearMlClientLocked()
             }
-            MlCatalog.ensureInitialized(getApplication())
-            val descriptor = MlCatalog.resolveDescriptor(
-                getApplication<Application>().assets,
-                modelId,
-            )
-            if (settings.autoIdModelId != descriptor.id) {
-                settings.autoIdModelId = descriptor.id
-            }
+            val descriptorsById = descriptors.associateBy { it.id }
             val client = mlClient ?: run {
                 val generation = mlResultGeneration.get()
                 MlClient(
                     getApplication(),
-                    descriptor.id,
-                    descriptor,
+                    primary.id,
+                    descriptors,
                 ) { result ->
                     // Drop late results from a previous client (model switch /
                     // teardown) and any results while this rate is rejected.
@@ -1998,9 +2034,10 @@ class UIModel(application: Application,
                             )
                             if (settings.isClassifierAutoTrigger()) {
                                 val top = result.detections.first()
+                                val resultDesc = descriptorsById[result.modelId] ?: primary
                                 val windowSec = Settings.classifierWindowDurationSec(
-                                    descriptor.windowSamples,
-                                    descriptor.sampleRateHz,
+                                    resultDesc.windowSamples,
+                                    resultDesc.sampleRateHz,
                                 ) ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
                                 val windowEnd = result.observedAtEpochSec + windowSec
                                 Timber.i(
@@ -2022,9 +2059,9 @@ class UIModel(application: Application,
                 }
             }
             client.setOverflowPolicy(overflowPolicy)
-            client.setLabelLanguage(settings.autoIdLanguage)
-            client.setSuppressions(settings.suppressionsFor(descriptor.id))
-            if (descriptor.resourcePaths.geoModelRelativeOrNull != null) {
+            applyMlClientLabelAndSuppressionsLocked(client, settings)
+            val anyGeo = descriptors.any { it.resourcePaths.geoModelRelativeOrNull != null }
+            if (anyGeo) {
                 if (forceReset) {
                     client.clearGeoSnapshot()
                 }
@@ -2037,6 +2074,17 @@ class UIModel(application: Application,
                 mlClientSampleRateHz = sampleRateHz
                 mlSummaryAccumulator.clear(summaryMode)
             }
+        }
+    }
+
+    /** Apply per-model language and suppressions from [settings] (caller holds [mlLock]). */
+    private fun applyMlClientLabelAndSuppressionsLocked(client: MlClient, settings: Settings) {
+        for (modelId in client.activeModelIds()) {
+            val familyId = Settings.familyIdOfModelId(modelId)
+            val language = settings.autoIdFamilyPrefs[familyId]?.language
+                ?: settings.autoIdLanguage
+            client.setLabelLanguage(modelId, language)
+            client.setSuppressions(modelId, settings.suppressionsFor(modelId))
         }
     }
 

@@ -28,6 +28,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.ceil
 
@@ -113,23 +114,30 @@ data class Settings(
      */
     var autoTriggerMode: Int = AutoTriggerModeOptions.ENERGY.value,
     /**
-     * Master switch for Auto Id. When false, Auto Id is off but [autoIdModelId]
-     * is retained so re-enabling restores the last model.
+     * Master switch for Auto Id. When false, Auto Id is off but selections
+     * ([autoIdEnabledFamilyIds], [autoIdModelId], …) are retained.
      */
     var autoIdEnabled: Boolean = false,
     /**
-     * Selected Auto Id model id (e.g. `battybirdnet/uk-256khz`).
-     * Kept even when Auto Id is off. See [org.batgizmo.app.ml.MlCatalog].
+     * Primary Auto Id model id (first enabled family's variant). Kept for
+     * migration / classifier-window UI; runtime uses [autoIdEnabledFamilyIds]
+     * plus [autoIdFamilyPrefs]. See [org.batgizmo.app.ml.MlCatalog].
      */
     var autoIdModelId: String = DEFAULT_AUTO_ID_MODEL_ID,
     /**
-     * Language for Auto Id species names: index into the labels JSON
-     * `description` array. Out-of-range values are treated as 0.
+     * Language for the primary [autoIdModelId] (species-name column index).
+     * Per-family languages live in [autoIdFamilyPrefs].
      */
     var autoIdLanguage: Int = DEFAULT_AUTO_ID_LANGUAGE,
     /**
+     * Families whose checkbox is on in Settings (catalog [MlModelDescriptor.familyId]).
+     * Order is stable for pipeline construction. Empty ⇒ no user models even if
+     * [autoIdEnabled] is true.
+     */
+    var autoIdEnabledFamilyIds: List<String> = listOf(DEFAULT_AUTO_ID_FAMILY_ID),
+    /**
      * Last-used variant and language per Auto Id family (classifier), so
-     * switching away and back restores the previous selection.
+     * unchecking/rechecking restores the previous selection.
      */
     var autoIdFamilyPrefs: Map<String, AutoIdFamilyPref> = emptyMap(),
     /**
@@ -529,6 +537,9 @@ data class Settings(
         /** Default Auto Id species-name language index (labels JSON `description`: Latin=0, English=1). */
         const val DEFAULT_AUTO_ID_LANGUAGE = 1
 
+        /** Default bundled Auto Id family id (matches [DEFAULT_AUTO_ID_MODEL_ID]). */
+        const val DEFAULT_AUTO_ID_FAMILY_ID = "battybirdnet"
+
         /** Default bundled Auto Id model id. */
         const val DEFAULT_AUTO_ID_MODEL_ID = "battybirdnet/uk-256khz"
 
@@ -612,9 +623,13 @@ data class Settings(
 
         /**
          * Parse nested or legacy flat suppressions JSON.
-         * Legacy flat maps (label → bool) are nested under [DEFAULT_AUTO_ID_MODEL_ID].
+         * Legacy flat maps (label → bool) are nested under [flatLegacyModelId]
+         * (defaults to [DEFAULT_AUTO_ID_MODEL_ID]).
          */
-        fun autoIdSuppressionsFromJson(json: String): Map<String, Map<String, Boolean>> {
+        fun autoIdSuppressionsFromJson(
+            json: String,
+            flatLegacyModelId: String = DEFAULT_AUTO_ID_MODEL_ID,
+        ): Map<String, Map<String, Boolean>> {
             return try {
                 val root = JSONObject(json)
                 if (root.length() == 0) return emptyMap()
@@ -623,7 +638,8 @@ data class Settings(
                 val firstVal = root.get(firstKey)
                 // Legacy flat map: values are booleans.
                 if (firstVal is Boolean) {
-                    return mapOf(DEFAULT_AUTO_ID_MODEL_ID to labelSuppressionsFromJson(json))
+                    val nestUnder = flatLegacyModelId.ifBlank { DEFAULT_AUTO_ID_MODEL_ID }
+                    return mapOf(nestUnder to labelSuppressionsFromJson(json))
                 }
                 buildMap {
                     put(firstKey, labelSuppressionsFromJson(firstVal.toString()))
@@ -677,6 +693,36 @@ data class Settings(
                 emptyMap()
             }
         }
+
+        /** Serialise enabled family ids as a JSON string array. */
+        fun stringListToJson(list: List<String>): String {
+            val arr = JSONArray()
+            for (id in list) {
+                if (id.isNotBlank()) arr.put(id)
+            }
+            return arr.toString()
+        }
+
+        /** Parse a JSON string array; invalid input yields empty. */
+        fun stringListFromJson(json: String): List<String> {
+            return try {
+                val arr = JSONArray(json)
+                buildList {
+                    for (i in 0 until arr.length()) {
+                        val id = arr.optString(i).trim()
+                        if (id.isNotEmpty() && id !in this) add(id)
+                    }
+                }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+        /** Family id portion of a model id (`family/variant`), or the whole string. */
+        fun familyIdOfModelId(modelId: String): String {
+            val slash = modelId.indexOf('/')
+            return if (slash > 0) modelId.substring(0, slash) else modelId
+        }
     }
 
     /** True when Auto Id is on. */
@@ -697,22 +743,81 @@ data class Settings(
         autoIdSuppressions[modelId] ?: emptyMap()
 
     /**
-     * Set the current Auto Id model/language and remember them for [familyId].
-     * [alsoRemember] is merged first (e.g. the family being left).
+     * Remember variant/language for [familyId], ensure the family is enabled, and
+     * refresh primary [autoIdModelId] / [autoIdLanguage] from the first enabled family.
+     * [alsoRemember] is merged first.
      */
     fun withAutoIdFamilySelection(
         familyId: String,
         modelId: String,
         language: Int,
         alsoRemember: Map<String, AutoIdFamilyPref> = emptyMap(),
+        enableFamily: Boolean = true,
     ): Settings {
         val remembered = autoIdFamilyPrefs + alsoRemember +
             (familyId to AutoIdFamilyPref(modelId, language))
+        val enabled = if (enableFamily) {
+            if (familyId in autoIdEnabledFamilyIds) autoIdEnabledFamilyIds
+            else autoIdEnabledFamilyIds + familyId
+        } else {
+            autoIdEnabledFamilyIds
+        }
+        val primary = primaryFromEnabled(enabled, remembered, modelId, language)
         return copy(
-            autoIdModelId = modelId,
-            autoIdLanguage = language,
+            autoIdModelId = primary.first,
+            autoIdLanguage = primary.second,
+            autoIdEnabledFamilyIds = enabled,
             autoIdFamilyPrefs = remembered,
         )
+    }
+
+    /**
+     * Enable or disable a family checkbox. When enabling with no pref yet, uses
+     * [defaultVariantId] / [defaultLanguage].
+     */
+    fun withAutoIdFamilyChecked(
+        familyId: String,
+        checked: Boolean,
+        defaultVariantId: String,
+        defaultLanguage: Int = DEFAULT_AUTO_ID_LANGUAGE,
+    ): Settings {
+        val enabled = if (checked) {
+            if (familyId in autoIdEnabledFamilyIds) autoIdEnabledFamilyIds
+            else autoIdEnabledFamilyIds + familyId
+        } else {
+            autoIdEnabledFamilyIds.filterNot { it == familyId }
+        }
+        val prefs = if (checked && familyId !in autoIdFamilyPrefs) {
+            autoIdFamilyPrefs + (familyId to AutoIdFamilyPref(defaultVariantId, defaultLanguage))
+        } else {
+            autoIdFamilyPrefs
+        }
+        val primary = primaryFromEnabled(
+            enabled,
+            prefs,
+            fallbackModelId = defaultVariantId,
+            fallbackLanguage = defaultLanguage,
+        )
+        return copy(
+            autoIdEnabledFamilyIds = enabled,
+            autoIdFamilyPrefs = prefs,
+            autoIdModelId = primary.first,
+            autoIdLanguage = primary.second,
+        )
+    }
+
+    private fun primaryFromEnabled(
+        enabled: List<String>,
+        prefs: Map<String, AutoIdFamilyPref>,
+        fallbackModelId: String,
+        fallbackLanguage: Int,
+    ): Pair<String, Int> {
+        val firstFamily = enabled.firstOrNull()
+        if (firstFamily != null) {
+            val pref = prefs[firstFamily]
+            if (pref != null) return pref.variantId to pref.language
+        }
+        return fallbackModelId to fallbackLanguage
     }
 
     /**
@@ -786,6 +891,7 @@ data class Settings(
     private val keyAutoId = booleanPreferencesKey("autoId")
     private val keyMlModelId = stringPreferencesKey("autoIdModelId")
     private val keyAutoIdLanguage = intPreferencesKey("autoIdLanguageIndex")
+    private val keyAutoIdEnabledFamilyIds = stringPreferencesKey("autoIdEnabledFamilyIds")
     private val keyAutoIdFamilyPrefs = stringPreferencesKey("autoIdFamilyPrefs")
     private val keyAutoIdSuppressions = stringPreferencesKey("autoIdSuppressions")
     /** Legacy flat suppressions key; read for migration only. */
@@ -849,11 +955,16 @@ data class Settings(
         prefs[keyAutoId] = autoIdEnabled
         prefs[keyMlModelId] = autoIdModelId
         prefs[keyAutoIdLanguage] = autoIdLanguage
+        prefs[keyAutoIdEnabledFamilyIds] = stringListToJson(autoIdEnabledFamilyIds)
         prefs[keyAutoIdFamilyPrefs] = autoIdFamilyPrefsToJson(autoIdFamilyPrefs)
         prefs[keyAutoIdSuppressions] = autoIdSuppressionsToJson(autoIdSuppressions)
     }
 
-    fun copyFromPreferences(prefs: Preferences) {
+    /**
+     * Load settings from [prefs]. Returns true when Auto Id keys were grandfathered
+     * into the multi-family scheme and should be rewritten to the datastore.
+     */
+    fun copyFromPreferences(prefs: Preferences): Boolean {
 
         pipelineParameters.copyFromPreferences(prefs)
 
@@ -960,38 +1071,110 @@ data class Settings(
             autoHeterodyneLoMinKhz = requireNotNull(prefs[keyAutoHeterodyneLoMinKhz])
         if (prefs[keyAutoHeterodyneLoMaxKhz] != null)
             autoHeterodyneLoMaxKhz = requireNotNull(prefs[keyAutoHeterodyneLoMaxKhz])
-        if (prefs[keyMlModelId] != null)
+        val autoIdNeedsRewrite = loadAndMigrateAutoIdPreferences(prefs)
+        val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
+        autoHeterodyneLoMinKhz = loMinKhz
+        autoHeterodyneLoMaxKhz = loMaxKhz
+        return autoIdNeedsRewrite
+    }
+
+    /**
+     * Load Auto Id fields from [prefs] and grandfather pre-multi-select storage
+     * into [autoIdEnabledFamilyIds] / [autoIdFamilyPrefs].
+     *
+     * Preserves:
+     * - [autoIdEnabled] (or blank-[autoIdModelId]-means-off)
+     * - selected [autoIdModelId] / [autoIdLanguage]
+     * - existing [autoIdFamilyPrefs] memories for other families (unchecked)
+     * - nested or legacy-flat suppressions under the selected model when possible
+     *
+     * @return true if new keys should be persisted so the next launch skips migration
+     */
+    private fun loadAndMigrateAutoIdPreferences(prefs: Preferences): Boolean {
+        var needsRewrite = false
+
+        if (prefs[keyMlModelId] != null) {
             autoIdModelId = requireNotNull(prefs[keyMlModelId])
+        }
         if (prefs[keyAutoId] != null) {
             autoIdEnabled = requireNotNull(prefs[keyAutoId])
         } else {
             // Migrate from model-id-as-enable: blank meant off.
             autoIdEnabled = autoIdModelId.isNotBlank()
+            needsRewrite = true
         }
         // Always keep a concrete model id so re-enabling restores a selection.
         if (autoIdModelId.isBlank()) {
             autoIdModelId = DEFAULT_AUTO_ID_MODEL_ID
+            needsRewrite = true
         }
-        if (prefs[keyAutoIdLanguage] != null)
+        if (prefs[keyAutoIdLanguage] != null) {
             autoIdLanguage = requireNotNull(prefs[keyAutoIdLanguage])
+        }
+
         if (prefs[keyAutoIdFamilyPrefs] != null) {
             autoIdFamilyPrefs =
                 autoIdFamilyPrefsFromJson(requireNotNull(prefs[keyAutoIdFamilyPrefs]))
         }
-        when {
-            prefs[keyAutoIdSuppressions] != null ->
-                autoIdSuppressions =
-                    autoIdSuppressionsFromJson(requireNotNull(prefs[keyAutoIdSuppressions]))
-            prefs[keyBbnSuppresions] != null ->
-                // Migrate legacy flat BattyBirdNET suppressions.
-                autoIdSuppressions = mapOf(
-                    DEFAULT_AUTO_ID_MODEL_ID to
-                        labelSuppressionsFromJson(requireNotNull(prefs[keyBbnSuppresions]))
-                )
+
+        if (prefs[keyAutoIdEnabledFamilyIds] == null) {
+            // Pre-checkbox scheme: one live model id was the selection. Check only
+            // that family; other familyPrefs entries stay as unchecked memories.
+            val family = familyIdOfModelId(autoIdModelId).ifBlank { DEFAULT_AUTO_ID_FAMILY_ID }
+            autoIdEnabledFamilyIds = listOf(family)
+            // Live model/language are authoritative over any stale remembered
+            // variant for this family from the old family-switcher UI.
+            autoIdFamilyPrefs = autoIdFamilyPrefs +
+                (family to AutoIdFamilyPref(autoIdModelId, autoIdLanguage))
+            needsRewrite = true
+        } else {
+            autoIdEnabledFamilyIds =
+                stringListFromJson(requireNotNull(prefs[keyAutoIdEnabledFamilyIds]))
+            // Fill a missing pref for the primary family when it is checked.
+            val primaryFamily = familyIdOfModelId(autoIdModelId)
+            if (primaryFamily in autoIdEnabledFamilyIds &&
+                primaryFamily !in autoIdFamilyPrefs
+            ) {
+                autoIdFamilyPrefs = autoIdFamilyPrefs +
+                    (primaryFamily to AutoIdFamilyPref(autoIdModelId, autoIdLanguage))
+                needsRewrite = true
+            }
+            // Primary fields follow the first checked family's pref.
+            val firstPref = autoIdEnabledFamilyIds.firstOrNull()
+                ?.let { autoIdFamilyPrefs[it] }
+            if (firstPref != null &&
+                (autoIdModelId != firstPref.variantId || autoIdLanguage != firstPref.language)
+            ) {
+                autoIdModelId = firstPref.variantId
+                autoIdLanguage = firstPref.language
+            }
         }
-        val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
-        autoHeterodyneLoMinKhz = loMinKhz
-        autoHeterodyneLoMaxKhz = loMaxKhz
+
+        val suppressionsNestUnder =
+            if (familyIdOfModelId(autoIdModelId) == DEFAULT_AUTO_ID_FAMILY_ID) {
+                autoIdModelId
+            } else {
+                DEFAULT_AUTO_ID_MODEL_ID
+            }
+        when {
+            prefs[keyAutoIdSuppressions] != null -> {
+                autoIdSuppressions = autoIdSuppressionsFromJson(
+                    requireNotNull(prefs[keyAutoIdSuppressions]),
+                    flatLegacyModelId = suppressionsNestUnder,
+                )
+            }
+            prefs[keyBbnSuppresions] != null -> {
+                // Legacy flat BattyBirdNET suppressions → nest under the user's
+                // bat model when possible so Suppressions UI still finds them.
+                autoIdSuppressions = mapOf(
+                    suppressionsNestUnder to
+                        labelSuppressionsFromJson(requireNotNull(prefs[keyBbnSuppresions])),
+                )
+                needsRewrite = true
+            }
+        }
+
+        return needsRewrite
     }
 }
 
