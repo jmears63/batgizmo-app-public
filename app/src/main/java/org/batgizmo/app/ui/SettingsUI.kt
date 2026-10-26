@@ -23,7 +23,6 @@
 package org.batgizmo.app.ui
 
 import android.content.Context
-import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.storage.StorageManager
@@ -34,7 +33,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -79,8 +77,9 @@ import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
@@ -746,6 +745,7 @@ class SettingsUI(private val model: UIModel) {
                     var importBusy by remember { mutableStateOf(false) }
                     var importError by remember { mutableStateOf<String?>(null) }
                     var confirmRemoveFamilyId by remember { mutableStateOf<String?>(null) }
+                    var optionsFamilyId by rememberSaveable { mutableStateOf<String?>(null) }
                     var suppressionsFamilyId by rememberSaveable { mutableStateOf<String?>(null) }
                     var pendingOverwrite by remember {
                         mutableStateOf<PendingByomOverwrite?>(null)
@@ -953,106 +953,40 @@ class SettingsUI(private val model: UIModel) {
                         families.forEach { family ->
                             key(family.id) {
                                 val checked = family.id in autoIdEnabledFamilyIds
-                                val rowEnabled = autoIdEnabled && checked
-                                val selectedVariant = defaultVariantFor(family)
-                                val variantOptions = family.variants.map { it.id to it.displayName }
-                                val languages = selectedVariant.languages
-                                val languageOptions = languages.mapIndexed { i, name ->
-                                    i.toString() to name
-                                }
-                                val prefLanguage = autoIdFamilyPrefs[family.id]?.language
-                                    ?: Settings.DEFAULT_AUTO_ID_LANGUAGE
-                                val selectedLanguage =
-                                    if (prefLanguage in languages.indices) prefLanguage else 0
-
-                                Column(
+                                val nameClickable = autoIdEnabled && checked
+                                Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.weight(1f),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Checkbox(
-                                                checked = checked,
-                                                enabled = autoIdEnabled,
-                                                onCheckedChange = { setFamilyChecked(family, it) },
+                                    Checkbox(
+                                        checked = checked,
+                                        enabled = autoIdEnabled,
+                                        onCheckedChange = { setFamilyChecked(family, it) },
+                                    )
+                                    Text(
+                                        family.displayName,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clickable(
+                                                enabled = nameClickable,
+                                                role = Role.Button,
+                                                onClickLabel = "Classifier options",
+                                                onClick = { optionsFamilyId = family.id },
                                             )
-                                            Text(
-                                                family.displayName,
-                                                modifier = Modifier.weight(1f),
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                        if (family.isByom) {
-                                            TextButton(
-                                                onClick = { confirmRemoveFamilyId = family.id },
-                                                enabled = !importBusy,
-                                            ) {
-                                                Text("Remove")
-                                            }
-                                        }
-                                    }
-                                    val isLandscape =
-                                        LocalConfiguration.current.orientation ==
-                                            Configuration.ORIENTATION_LANDSCAPE
-                                    val showSuppressions =
-                                        selectedVariant.enableSuppressionsButton
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Box(modifier = Modifier.weight(1f)) {
-                                            MyDynamicSelector(
-                                                options = variantOptions,
-                                                description = "Variant",
-                                                selectedValue = selectedVariant.id,
-                                                enabled = rowEnabled && family.variants.size > 1,
-                                            ) { variantId: String ->
-                                                persistFamilyVariant(family.id, variantId)
-                                            }
-                                        }
-                                        if (languageOptions.isNotEmpty()) {
-                                            Box(modifier = Modifier.weight(1f)) {
-                                                MyDynamicSelector(
-                                                    options = languageOptions,
-                                                    description = "Language",
-                                                    selectedValue = selectedLanguage.toString(),
-                                                    enabled = rowEnabled && languages.size > 1,
-                                                ) { value: String ->
-                                                    val index = value.toIntOrNull()
-                                                        ?.takeIf { it in languages.indices }
-                                                        ?: 0
-                                                    persistFamilyLanguage(family.id, index)
-                                                }
-                                            }
-                                        }
-                                        if (isLandscape && showSuppressions) {
-                                            Button(
-                                                onClick = {
-                                                    suppressionsFamilyId = family.id
-                                                },
-                                                enabled = rowEnabled,
-                                            ) {
-                                                Text("Suppressions")
-                                            }
-                                        }
-                                    }
-                                    if (!isLandscape && showSuppressions) {
-                                        Button(
-                                            onClick = { suppressionsFamilyId = family.id },
-                                            enabled = rowEnabled,
-                                        ) {
-                                            Text("Suppressions")
-                                        }
-                                    }
+                                            .padding(vertical = 8.dp),
+                                        color = if (nameClickable) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurface
+                                        },
+                                        textDecoration = if (nameClickable) {
+                                            TextDecoration.Underline
+                                        } else {
+                                            TextDecoration.None
+                                        },
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
                         }
@@ -1125,6 +1059,48 @@ class SettingsUI(private val model: UIModel) {
                         )
                     }
 
+                    val optionsFamily = optionsFamilyId
+                        ?.let { id -> families.firstOrNull { it.id == id } }
+                    if (optionsFamily != null) {
+                        val rowEnabled =
+                            autoIdEnabled && optionsFamily.id in autoIdEnabledFamilyIds
+                        val selectedVariant = defaultVariantFor(optionsFamily)
+                        val languages = selectedVariant.languages
+                        val prefLanguage = autoIdFamilyPrefs[optionsFamily.id]?.language
+                            ?: Settings.DEFAULT_AUTO_ID_LANGUAGE
+                        val selectedLanguage =
+                            if (prefLanguage in languages.indices) prefLanguage else 0
+                        ClassifierOptionsDialog(
+                            title = optionsFamily.displayName,
+                            variantOptions =
+                                optionsFamily.variants.map { it.id to it.displayName },
+                            selectedVariantId = selectedVariant.id,
+                            variantEnabled =
+                                rowEnabled && optionsFamily.variants.size > 1,
+                            onVariantSelected = { variantId ->
+                                persistFamilyVariant(optionsFamily.id, variantId)
+                            },
+                            languageOptions = languages.mapIndexed { i, name ->
+                                i.toString() to name
+                            },
+                            selectedLanguage = selectedLanguage.toString(),
+                            languageEnabled = rowEnabled && languages.size > 1,
+                            onLanguageSelected = { value ->
+                                val index = value.toIntOrNull()
+                                    ?.takeIf { it in languages.indices }
+                                    ?: 0
+                                persistFamilyLanguage(optionsFamily.id, index)
+                            },
+                            showSuppressions = selectedVariant.enableSuppressionsButton,
+                            suppressionsEnabled = rowEnabled,
+                            onSuppressions = { suppressionsFamilyId = optionsFamily.id },
+                            showRemove = optionsFamily.isByom,
+                            removeEnabled = !importBusy,
+                            onRemove = { confirmRemoveFamilyId = optionsFamily.id },
+                            onDismiss = { optionsFamilyId = null },
+                        )
+                    }
+
                     val suppressionsFamily = suppressionsFamilyId
                         ?.let { id -> families.firstOrNull { it.id == id } }
                     val suppressionsDescriptor = suppressionsFamily?.let { defaultVariantFor(it) }
@@ -1181,6 +1157,9 @@ class SettingsUI(private val model: UIModel) {
                                             if (!ok) {
                                                 importError = "Could not remove classifier"
                                                 return@launch
+                                            }
+                                            if (optionsFamilyId == familyId) {
+                                                optionsFamilyId = null
                                             }
                                             catalogRevision++
                                             syncLocalFromSettings()
@@ -1296,6 +1275,79 @@ class SettingsUI(private val model: UIModel) {
             }
         }
     }
+}
+
+/**
+ * Variant, language, class suppressions, and (for an imported pack) removal
+ * for one classifier. Selections are stored as they change.
+ */
+@Composable
+private fun ClassifierOptionsDialog(
+    title: String,
+    variantOptions: List<Pair<String, String>>,
+    selectedVariantId: String,
+    variantEnabled: Boolean,
+    onVariantSelected: (String) -> Unit,
+    languageOptions: List<Pair<String, String>>,
+    selectedLanguage: String,
+    languageEnabled: Boolean,
+    onLanguageSelected: (String) -> Unit,
+    showSuppressions: Boolean,
+    suppressionsEnabled: Boolean,
+    onSuppressions: () -> Unit,
+    showRemove: Boolean,
+    removeEnabled: Boolean,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MyDynamicSelector(
+                    options = variantOptions,
+                    description = "Variant",
+                    selectedValue = selectedVariantId,
+                    enabled = variantEnabled,
+                    onChange = onVariantSelected,
+                )
+                if (languageOptions.isNotEmpty()) {
+                    MyDynamicSelector(
+                        options = languageOptions,
+                        description = "Language",
+                        selectedValue = selectedLanguage,
+                        enabled = languageEnabled,
+                        onChange = onLanguageSelected,
+                    )
+                }
+                if (showSuppressions) {
+                    Button(
+                        onClick = onSuppressions,
+                        enabled = suppressionsEnabled,
+                    ) {
+                        Text("Suppressions")
+                    }
+                }
+                if (showRemove) {
+                    TextButton(
+                        onClick = onRemove,
+                        enabled = removeEnabled,
+                    ) {
+                        Text("Remove")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
 }
 
 /** Held while the user decides whether to replace an installed BYOM pack. */
