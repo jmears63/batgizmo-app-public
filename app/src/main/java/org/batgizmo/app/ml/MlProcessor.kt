@@ -51,7 +51,7 @@ enum class MlOverflowPolicy {
  * Multi-model ML processing backend.
  *
  * Raw PCM is ingested once, then a metadata-driven graph shares resample /
- * window / optional log-magnitude STFT stages across active models. Each model
+ * window / optional log-power STFT stages across active models. Each model
  * has its own infer thread and LiteRT instance.
  *
  * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingRawCount]
@@ -195,7 +195,14 @@ class MlProcessor(
     ) {
         fun process(pcm: FloatArray): FloatArray? {
             if (nativeHandle == 0L) return null
-            return nativeStftProcess(nativeHandle, pcm)
+            val startedNs = System.nanoTime()
+            val out = nativeStftProcess(nativeHandle, pcm)
+            val stftMs = (System.nanoTime() - startedNs) / 1_000_000
+            Timber.i(
+                "MlProcessor: stft $stftMs ms " +
+                    "(fft=${params.fftSize} hop=${params.hopSamples})"
+            )
+            return out
         }
 
         fun destroy() {
@@ -273,7 +280,13 @@ class MlProcessor(
                 appendPcmToWindows(pcm)
                 return
             }
+            val startedNs = System.nanoTime()
             val out = nativeResamplerProcess(resamplerHandle, pcm, 0, pcm.size)
+            val resampleCallMs = (System.nanoTime() - startedNs) / 1_000_000
+            Timber.i(
+                "MlProcessor: resample $resampleCallMs ms " +
+                    "($captureRateHz→$modelRateHz, buffer #$bufferId)"
+            )
             if (out == null) {
                 Timber.e("MlProcessor: resample failed on buffer #$bufferId ($captureRateHz→$modelRateHz)")
             } else {
@@ -283,7 +296,11 @@ class MlProcessor(
 
         fun flushResampler() {
             if (resamplerHandle == 0L) return
-            val flushed = nativeResamplerFlush(resamplerHandle) ?: return
+            val startedNs = System.nanoTime()
+            val flushed = nativeResamplerFlush(resamplerHandle)
+            val resampleCallMs = (System.nanoTime() - startedNs) / 1_000_000
+            Timber.i("MlProcessor: resample flush $resampleCallMs ms →${modelRateHz} Hz")
+            if (flushed == null) return
             if (flushed.isNotEmpty()) appendPcmToWindows(flushed)
         }
 
@@ -417,15 +434,16 @@ class MlProcessor(
                     continue
                 }
                 val nFrames = stft.nFrames(windowing.windowSamples)
-                val nBins = stft.nFreqBins()
+                val input = stft.dropBinsBelow(spectrogram, nFrames)
+                val keptBins = stft.keptFreqBins()
                 for ((index, modelId) in modelIds.withIndex()) {
                     val worker = workers[modelId] ?: continue
                     val values =
-                        if (index == modelIds.lastIndex) spectrogram
-                        else spectrogram.copyOf()
+                        if (index == modelIds.lastIndex) input
+                        else input.copyOf()
                     offerInfer(
                         worker,
-                        MlModelInput.Spectrogram(values, nFrames, nBins),
+                        MlModelInput.Spectrogram(values, nFrames, keptBins),
                         ctx,
                         observedAtEpochSec,
                         resampleMs,
@@ -1093,7 +1111,7 @@ class MlProcessor(
                     ?: autoId.labelsFor(languageIndex).also { displayLabels = it }
                 detections.add(
                     MlDetection(
-                        label = labels[i],
+                        label = autoId.detectionLabel(i, labels[i]),
                         confidence = score,
                         labelKey = labelKeys[i],
                     )

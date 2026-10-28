@@ -31,6 +31,12 @@ enum class MlModelKind {
 
     /** Single end-to-end TFLite (e.g. stock BirdNET, simple BYO). */
     SINGLE_TFLITE,
+
+    /**
+     * Single TFLite whose input is a spectrogram `[1, 1, freq, time]`.
+     * Requires [MlModelDescriptor.stft].
+     */
+    SPECTROGRAM_TFLITE,
 }
 
 /**
@@ -68,10 +74,17 @@ data class MlModelDescriptor(
      */
     val versionName: String? = null,
     /**
-     * Optional log-magnitude STFT before inference. Null / omitted in JSON ⇒
+     * Optional log-power STFT before inference. Null / omitted in JSON ⇒
      * raw PCM windows ([MlModelInput.PcmWindow]).
      */
     val stft: MlStftParams? = null,
+    /**
+     * Optional per-row feature column names (BYOM `model.outputColumns`).
+     * Null ⇒ classic flat `[batch, outputSize]` class logits.
+     * Non-null ⇒ each of the [outputSize] label rows is a vector of these
+     * columns; confidence currently comes from [BYOM_CONFIDENCE_COLUMN].
+     */
+    val outputColumns: List<String>? = null,
 ) {
     /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
     val labelKeys: List<String> = labelCatalog.map { it.key }
@@ -133,6 +146,11 @@ interface MlModelBase : AutoCloseable {
     }
 
     /**
+     * Text shown for score [index]. [catalogLabel] is the label-catalog name.
+     */
+    fun detectionLabel(index: Int, catalogLabel: String): String = catalogLabel
+
+    /**
      * Classify one analysis frame. Input kind must match [descriptor.stft]
      * ([MlModelInput.PcmWindow] when null, [MlModelInput.Spectrogram] otherwise).
      * Returns scores in `[0, 1]` aligned with [labelCatalog].
@@ -142,3 +160,9 @@ interface MlModelBase : AutoCloseable {
 
 /** Default LiteRT thread count for interpreters. */
 const val DEFAULT_TFLITE_NUM_THREADS = 4
+
+/**
+ * Confidence column when [MlModelDescriptor.outputColumns] is set.
+ * Temporary until BYOM can name the score column explicitly.
+ */
+const val BYOM_CONFIDENCE_COLUMN = "hs_prob"

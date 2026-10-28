@@ -47,6 +47,8 @@ struct MlStft {
     int windowSamples = 0;
     int nFreqBins = 0;
     int nFrames = 0;
+    /** Sum of the periodic Hann window. Complex STFT bins are divided by this. */
+    float windowSum = 0.f;
     kiss_fftr_cfg cfg = nullptr;
     std::vector<float> hann;
     std::vector<float> frame;
@@ -57,16 +59,13 @@ bool isPowerOfTwo(int n) {
     return n >= 2 && (n & (n - 1)) == 0;
 }
 
+/** Periodic Hann, matching torch.hann_window(n, periodic=True). */
 void fillHann(std::vector<float> *out, int n) {
     out->resize(static_cast<size_t>(n));
-    if (n == 1) {
-        (*out)[0] = 1.f;
-        return;
-    }
     for (int i = 0; i < n; ++i) {
         (*out)[static_cast<size_t>(i)] =
                 0.5f * (1.f - std::cos(2.f * static_cast<float>(M_PI) * static_cast<float>(i) /
-                                       static_cast<float>(n - 1)));
+                                       static_cast<float>(n)));
     }
 }
 
@@ -107,6 +106,17 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeStftCreate(
         return 0;
     }
     fillHann(&stft->hann, fftSize);
+    float windowSum = 0.f;
+    for (float w : stft->hann) {
+        windowSum += w;
+    }
+    if (!(windowSum > 0.f)) {
+        LOGE("nativeStftCreate: Hann window sum is not positive");
+        kiss_fftr_free(stft->cfg);
+        stft->cfg = nullptr;
+        return 0;
+    }
+    stft->windowSum = windowSum;
     stft->frame.assign(static_cast<size_t>(fftSize), 0.f);
     stft->spectrum.assign(static_cast<size_t>(stft->nFreqBins), kiss_fft_cpx{0.f, 0.f});
 
@@ -146,11 +156,12 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeStftProcess(
         }
         kiss_fftr(stft->cfg, stft->frame.data(), stft->spectrum.data());
         const int outBase = frame * stft->nFreqBins;
+        const float norm = stft->windowSum;
         for (int b = 0; b < stft->nFreqBins; ++b) {
-            const float re = stft->spectrum[static_cast<size_t>(b)].r;
-            const float im = stft->spectrum[static_cast<size_t>(b)].i;
-            const float mag = std::sqrt(re * re + im * im);
-            out[static_cast<size_t>(outBase + b)] = std::log(mag + kLogEps);
+            const float re = stft->spectrum[static_cast<size_t>(b)].r / norm;
+            const float im = stft->spectrum[static_cast<size_t>(b)].i / norm;
+            const float power = re * re + im * im;
+            out[static_cast<size_t>(outBase + b)] = 10.f * std::log10(power + kLogEps);
         }
     }
 

@@ -165,24 +165,22 @@ class BirdNetModel(
 
         geoResolved = true
         return try {
-            val geo = createInterpreter(assets, descriptor.resourcePaths.root, relative, numThreads)
+            val session = openCompiledSession(
+                assets, descriptor.resourcePaths.root, relative, numThreads,
+            )
             try {
-                val inputShape = geo.getInputTensor(0).shape()
+                val inputShape = session.inputShapes[0]
                 require(inputShape.last() == 3 || inputShape.contentEquals(intArrayOf(1, 3))) {
                     "Unexpected geo input shape ${inputShape.contentToString()}"
                 }
-                val outClasses = geo.getOutputTensor(0).shape().last()
+                val outClasses = session.outputShapes[0].last()
                 require(outClasses == numClasses) {
                     "Geo outputs ($outClasses) != acoustic classes ($numClasses)"
                 }
 
-                val input = arrayOf(
+                val occurrence = session.run(
                     floatArrayOf(snap.latitude, snap.longitude, snap.week.toFloat())
-                )
-                val output = Array(1) { FloatArray(outClasses) }
-                geo.run(input, output)
-
-                val occurrence = output[0]
+                )[0]
                 val mask = BooleanArray(outClasses) { i -> occurrence[i] >= geoThreshold }
                 val allowed = mask.count { it }
                 Timber.i(
@@ -193,7 +191,7 @@ class BirdNetModel(
                 geoMask = mask
                 mask
             } finally {
-                geo.close()
+                session.close()
             }
         } catch (e: Exception) {
             Timber.w(e, "BirdNetModel: geo model failed; suppressing detections")

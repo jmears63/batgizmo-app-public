@@ -23,7 +23,6 @@
 package org.batgizmo.app.ml
 
 import android.content.res.AssetManager
-import org.tensorflow.lite.Interpreter
 
 /**
  * Two-stage Auto Id: BirdNET embeddings TFLite, then a regional classifier head.
@@ -36,8 +35,8 @@ class EmbedThenClassifyModel(
     numThreads: Int = DEFAULT_TFLITE_NUM_THREADS,
 ) : MlModelBase {
 
-    private val embedder: Interpreter
-    private val classifier: Interpreter
+    private val embedderSession: CompiledModelSession
+    private val classifierSession: CompiledModelSession
     private val embeddingDim: Int
     private val numClasses: Int
 
@@ -46,17 +45,21 @@ class EmbedThenClassifyModel(
         val embeddingsPath = requireNotNull(paths.embeddingsRelativeOrNull) {
             "embed_then_classify requires embeddings path"
         }
-        embedder = createInterpreter(assets, paths.root, embeddingsPath, numThreads)
-        embeddingDim = embedder.getOutputTensor(0).shape()[1]
+        embedderSession = openCompiledSession(
+            assets, paths.root, embeddingsPath, numThreads,
+        )
+        embeddingDim = embedderSession.outputShapes[0][1]
 
-        classifier = createInterpreter(assets, paths.root, paths.classifierOrModel, numThreads)
-        numClasses = classifier.getOutputTensor(0).shape()[1]
+        classifierSession = openCompiledSession(
+            assets, paths.root, paths.classifierOrModel, numThreads,
+        )
+        numClasses = classifierSession.outputShapes[0][1]
 
         require(descriptor.labelCatalog.size == numClasses) {
             "Label count (${descriptor.labelCatalog.size}) does not match classifier outputs ($numClasses)"
         }
-        require(classifier.getInputTensor(0).shape()[1] == embeddingDim) {
-            "Classifier input dim ${classifier.getInputTensor(0).shape()[1]} != embedding dim $embeddingDim"
+        require(classifierSession.inputShapes[0][1] == embeddingDim) {
+            "Classifier input dim ${classifierSession.inputShapes[0][1]} != embedding dim $embeddingDim"
         }
     }
 
@@ -72,25 +75,13 @@ class EmbedThenClassifyModel(
         require(window.size == descriptor.windowSamples) {
             "window must have ${descriptor.windowSamples} samples, got ${window.size}"
         }
-        val features = extractEmbeddings(arrayOf(window))
-        classifier.resizeInput(0, intArrayOf(1, embeddingDim))
-        classifier.allocateTensors()
-        val logits = Array(1) { FloatArray(numClasses) }
-        classifier.run(features, logits)
-        return flatSigmoid(logits[0])
-    }
-
-    private fun extractEmbeddings(samples: Array<FloatArray>): Array<FloatArray> {
-        val batch = samples.size
-        embedder.resizeInput(0, intArrayOf(batch, descriptor.windowSamples))
-        embedder.allocateTensors()
-        val embeddings = Array(batch) { FloatArray(embeddingDim) }
-        embedder.run(samples, embeddings)
-        return embeddings
+        val embedding = embedderSession.run(window)[0]
+        val logits = classifierSession.run(embedding)[0]
+        return flatSigmoid(logits)
     }
 
     override fun close() {
-        embedder.close()
-        classifier.close()
+        embedderSession.close()
+        classifierSession.close()
     }
 }

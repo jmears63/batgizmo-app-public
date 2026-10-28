@@ -118,6 +118,17 @@ class MlClient(
     /** Sample rate set by the last [reset]; 0 until [reset] has been called. */
     private var sampleRateHz: Int = 0
 
+    /**
+     * Live capture arrives in short USB transfers. Hold samples here until
+     * [SUBMIT_BATCH_SEC] of real time is available, then pass one buffer to
+     * the processor. A final short tail is released when [submit] is called
+     * with `isLast`.
+     */
+    private val batchLock = Any()
+    private var batchBuf = ShortArray(0)
+    private var batchFill = 0
+    private var batchEpochSec = 0.0
+
     private val processor = MlProcessor(context.applicationContext, activeDescriptors).also {
         it.start(onResult)
     }
@@ -177,6 +188,7 @@ class MlClient(
 
     /** Discard queued work and reset the resample stream. */
     fun clearQueue() {
+        discardBatch()
         processor.clearQueue()
     }
 
@@ -186,7 +198,10 @@ class MlClient(
      */
     fun reset(sampleRateHz: Int) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
-        this.sampleRateHz = sampleRateHz
+        synchronized(batchLock) {
+            this.sampleRateHz = sampleRateHz
+            batchFill = 0
+        }
         processor.reset(sampleRateHz)
         publishWillAcceptAudio()
     }
@@ -200,8 +215,10 @@ class MlClient(
      *
      * [observedAtEpochSec] is the Unix-epoch time (seconds) of the first submitted sample.
      *
-     * When [isLast] is true, the processor flushes the resampler and zero-pads
-     * any partial final window.
+     * Samples are copied out of [buffer] immediately. They are passed to the
+     * processor in blocks of [SUBMIT_BATCH_SEC] of real time at the capture
+     * rate. When [isLast] is true, any shorter tail is passed as well, and the
+     * processor flushes the resampler and zero-pads any partial final window.
      */
     fun submit(
         buffer: ShortArray,
@@ -218,6 +235,7 @@ class MlClient(
         }
 
         if (!willAcceptAudio()) {
+            discardBatch()
             if (isLast) {
                 // Still flush any prior stream state held in the processor.
                 processor.tryEnqueue(
@@ -232,26 +250,91 @@ class MlClient(
             return
         }
 
-        // Always copy so live USB / shared page buffers can be reused immediately.
-        val owned =
-            if (count == 0) ShortArray(0)
-            else buffer.copyOfRange(offset, offset + count)
-        processor.tryEnqueue(
-            owned,
-            0,
-            owned.size,
-            sampleRateHz,
-            observedAtEpochSec,
-            isLast = isLast,
-        )
+        val ready = ArrayList<PendingBatch>()
+        val rate = synchronized(batchLock) {
+            val target = submitBatchSamples()
+            if (count > 0 && batchFill == 0) {
+                batchEpochSec = observedAtEpochSec
+            }
+            var src = offset
+            val end = offset + count
+            while (src < end) {
+                val n = minOf(target - batchFill, end - src)
+                ensureBatchCapacity(batchFill + n)
+                buffer.copyInto(batchBuf, batchFill, src, src + n)
+                batchFill += n
+                src += n
+                if (batchFill == target) {
+                    ready.add(takeBatch(isLast = false))
+                }
+            }
+            if (isLast) {
+                if (batchFill > 0) {
+                    ready.add(takeBatch(isLast = true))
+                } else {
+                    ready.add(PendingBatch(ShortArray(0), observedAtEpochSec, isLast = true))
+                }
+            }
+            sampleRateHz
+        }
+        for (batch in ready) {
+            processor.tryEnqueue(
+                batch.samples,
+                0,
+                batch.samples.size,
+                rate,
+                batch.epochSec,
+                isLast = batch.isLast,
+            )
+        }
     }
 
     /** Release background resources. */
     fun shutdown() {
+        discardBatch()
         processor.close()
+    }
+
+    private fun submitBatchSamples(): Int {
+        val samples = (sampleRateHz * SUBMIT_BATCH_SEC).toInt()
+        return samples.coerceAtLeast(1)
+    }
+
+    private fun ensureBatchCapacity(needed: Int) {
+        if (batchBuf.size >= needed) return
+        val grown = ShortArray(needed.coerceAtLeast(batchBuf.size * 2))
+        if (batchFill > 0) {
+            batchBuf.copyInto(grown, endIndex = batchFill)
+        }
+        batchBuf = grown
+    }
+
+    private fun takeBatch(isLast: Boolean): PendingBatch {
+        val samples = batchBuf.copyOf(batchFill)
+        val epochSec = batchEpochSec
+        batchEpochSec += batchFill.toDouble() / sampleRateHz
+        batchFill = 0
+        return PendingBatch(samples, epochSec, isLast)
+    }
+
+    private fun discardBatch() {
+        synchronized(batchLock) {
+            batchFill = 0
+        }
     }
 
     private fun publishWillAcceptAudio() {
         mutableWillAcceptAudioFlow.value = willAcceptAudio()
+    }
+
+    private data class PendingBatch(
+        val samples: ShortArray,
+        val epochSec: Double,
+        val isLast: Boolean,
+    )
+
+    private companion object {
+        /** Real-time length of one buffer passed to [MlProcessor]. */
+        const val SUBMIT_BATCH_SEC = 0.1
     }
 }

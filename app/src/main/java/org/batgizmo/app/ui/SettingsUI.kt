@@ -1141,7 +1141,7 @@ class SettingsUI(private val model: UIModel) {
                         val familyName = family?.displayName ?: familyId
                         AlertDialog(
                             onDismissRequest = { confirmRemoveFamilyId = null },
-                            title = { Text("Remove model") },
+                            title = { Text("Remove classifier") },
                             text = {
                                 Text(
                                     "Remove \"$familyName\"? This deletes the imported " +

@@ -196,6 +196,8 @@ object MlCatalog {
                 } else {
                     SimpleModel(assets, descriptor, numThreads)
                 }
+            MlModelKind.SPECTROGRAM_TFLITE ->
+                SpectrogramModel(assets, descriptor, numThreads)
         }
     }
 
@@ -306,10 +308,10 @@ object MlCatalog {
 
                 val bundledIds = readBundledFamilyIds(assets)
                 require(familyId !in bundledIds) {
-                    "BYOM id \"$familyId\" conflicts with a built-in model family"
+                    "BYOM id \"$familyId\" conflicts with a built-in classifier instance"
                 }
                 require(dirName !in bundledIds) {
-                    "BYOM directory \"$dirName\" conflicts with a built-in model family"
+                    "BYOM directory \"$dirName\" conflicts with a built-in classifier instance"
                 }
 
                 // --- Phase 2: commit to final location ---
@@ -588,8 +590,11 @@ object MlCatalog {
                 assets = assets,
                 packDir = packDir,
                 modelRelative = fields.modelFile,
-                inputSize = fields.windowSamples,
+                kind = fields.kind,
+                windowSamples = fields.windowSamples,
+                stft = fields.stft,
                 outputSize = fields.outputSize,
+                outputColumns = fields.outputColumns,
             )
         }
         val labelsTable = parseLabelsJson(
@@ -606,7 +611,7 @@ object MlCatalog {
                 displayName = "Default",
                 familyId = familyId,
                 familyDisplayName = fields.summary.displayName,
-                kind = MlModelKind.SINGLE_TFLITE,
+                kind = fields.kind,
                 sampleRateHz = fields.sampleRateHz,
                 windowSamples = fields.windowSamples,
                 overlapFraction = fields.overlapFraction,
@@ -625,6 +630,7 @@ object MlCatalog {
                 isByom = true,
                 versionName = fields.summary.versionName,
                 stft = fields.stft,
+                outputColumns = fields.outputColumns,
             ),
         )
     }
@@ -644,7 +650,9 @@ object MlCatalog {
         val overlapFraction: Float,
         val detectionThreshold: Float,
         val enableSuppressionsButton: Boolean,
+        val kind: MlModelKind,
         val stft: MlStftParams?,
+        val outputColumns: List<String>?,
     )
 
     private fun parseByomPackFields(json: JSONObject): ByomPackFields {
@@ -672,6 +680,15 @@ object MlCatalog {
         require(outputSize >= MIN_BYOM_OUTPUT_SIZE) {
             "model.outputSize must be at least $MIN_BYOM_OUTPUT_SIZE (got $outputSize)"
         }
+        val outputColumns = parseOutputColumnsOrNull(model)
+        val kind = if (json.has("kind") && !json.isNull("kind")) {
+            parseKind(json.getString("kind"))
+        } else {
+            MlModelKind.SINGLE_TFLITE
+        }
+        require(kind != MlModelKind.EMBED_THEN_CLASSIFY) {
+            "byom.json kind embed_then_classify is not supported"
+        }
         val minSampleRateHz = when {
             json.has("minMicrophoneSampleRateHz") ->
                 json.getInt("minMicrophoneSampleRateHz")
@@ -698,10 +715,17 @@ object MlCatalog {
         require(detectionThreshold in 0f..1f) {
             "detectionThreshold must be in 0.0..1.0 (got $detectionThreshold)"
         }
-        val stft = MlStftParams.fromJsonOrNull(json)
+        // Spectrogram input: model.stftWindow (power of two); hop defaults to window.
+        val stft = MlStftParams.fromByomModelOrNull(model)
         if (stft != null) {
             require(windowSamples >= stft.fftSize) {
-                "windowSamples ($windowSamples) must be >= stft.fftSize (${stft.fftSize})"
+                "windowSamples / model.inputSize ($windowSamples) must be >= " +
+                    "model.stftWindow (${stft.fftSize})"
+            }
+        }
+        if (kind == MlModelKind.SPECTROGRAM_TFLITE) {
+            requireNotNull(stft) {
+                "spectrogram_tflite requires model.stftWindow"
             }
         }
         return ByomPackFields(
@@ -715,8 +739,34 @@ object MlCatalog {
             overlapFraction = overlapFraction,
             detectionThreshold = detectionThreshold,
             enableSuppressionsButton = json.optBoolean("enableSuppressionsButton", true),
+            kind = kind,
             stft = stft,
+            outputColumns = outputColumns,
         )
+    }
+
+    /**
+     * Optional `model.outputColumns`: names for each field in a per-label
+     * output vector. When set, must include [BYOM_CONFIDENCE_COLUMN].
+     */
+    private fun parseOutputColumnsOrNull(model: JSONObject): List<String>? {
+        if (!model.has("outputColumns") || model.isNull("outputColumns")) return null
+        val arr = model.getJSONArray("outputColumns")
+        require(arr.length() > 0) { "model.outputColumns must be a non-empty array" }
+        val cols = List(arr.length()) { i ->
+            val name = arr.getString(i).trim()
+            require(name.isNotEmpty()) {
+                "model.outputColumns[$i] must be a non-empty string"
+            }
+            name
+        }
+        require(cols.distinct().size == cols.size) {
+            "model.outputColumns must not contain duplicates (got $cols)"
+        }
+        require(BYOM_CONFIDENCE_COLUMN in cols) {
+            "model.outputColumns must include \"$BYOM_CONFIDENCE_COLUMN\" (got $cols)"
+        }
+        return cols
     }
 
     /** Family ids listed in assets `catalog.json` (built-in packs). */
@@ -855,16 +905,23 @@ object MlCatalog {
     }
 
     /**
-     * Open [modelRelative] as TFLite and require input/output lengths match
-     * [inputSize] / [outputSize] and that both tensors are FP32
-     * (same conventions as [SimpleModel]).
+     * Open [modelRelative] as TFLite and require the input matches [kind]
+     * and output tensor 0 matches [outputSize] (and optional [outputColumns]).
+     * Both tensors must be FP32.
+     *
+     * [MlModelKind.SINGLE_TFLITE] input length is the PCM [windowSamples], or
+     * the packed STFT length when [stft] is set.
+     * [MlModelKind.SPECTROGRAM_TFLITE] input shape is `[1, 1, freq, time]`.
      */
     private fun validateByomTfliteFile(
         assets: AssetManager,
         packDir: File,
         modelRelative: String,
-        inputSize: Int,
+        kind: MlModelKind,
+        windowSamples: Int,
+        stft: MlStftParams?,
         outputSize: Int,
+        outputColumns: List<String>?,
     ) {
         val root = ModelResourceRoot.Files(packDir)
         val interpreter = try {
@@ -886,31 +943,55 @@ object MlCatalog {
             require(inputTensor.dataType() == DataType.FLOAT32) {
                 "TFLite input data type must be FLOAT32 (got ${inputTensor.dataType()})"
             }
-            var inputLen = inputTensor.shape().last()
-            if (inputLen <= 0) {
-                interpreter.resizeInput(0, intArrayOf(1, inputSize))
-                interpreter.allocateTensors()
-                inputLen = interpreter.getInputTensor(0).shape().last()
-            }
-            require(inputLen == inputSize) {
-                "TFLite input length $inputLen does not match model.inputSize $inputSize"
+            when (kind) {
+                MlModelKind.SPECTROGRAM_TFLITE -> {
+                    val params = requireNotNull(stft) {
+                        "spectrogram_tflite requires model.stftWindow"
+                    }
+                    val nFreq = params.keptFreqBins()
+                    val nFrames = params.nFrames(windowSamples)
+                    val shape = inputTensor.shape()
+                    require(shape.size == 4 &&
+                        dimMatches(shape[0], 1) &&
+                        dimMatches(shape[1], 1) &&
+                        dimMatches(shape[2], nFreq) &&
+                        dimMatches(shape[3], nFrames)
+                    ) {
+                        "TFLite input ${shape.contentToString()} != " +
+                            "[1, 1, $nFreq, $nFrames]"
+                    }
+                }
+                MlModelKind.SINGLE_TFLITE, MlModelKind.EMBED_THEN_CLASSIFY -> {
+                    val inputSize = stft?.modelInputSize(windowSamples) ?: windowSamples
+                    var inputLen = inputTensor.shape().last()
+                    if (inputLen <= 0) {
+                        interpreter.resizeInput(0, intArrayOf(1, inputSize))
+                        interpreter.allocateTensors()
+                        inputLen = interpreter.getInputTensor(0).shape().last()
+                    }
+                    require(inputLen == inputSize) {
+                        "TFLite input length $inputLen does not match expected feature " +
+                            "length $inputSize (PCM windowSamples, or STFT output size " +
+                            "when model.stftWindow is set)"
+                    }
+                }
             }
             val outputTensor = interpreter.getOutputTensor(0)
             require(outputTensor.dataType() == DataType.FLOAT32) {
                 "TFLite output data type must be FLOAT32 (got ${outputTensor.dataType()})"
             }
-            val outShape = outputTensor.shape()
-            val outputLen = when {
-                outShape.size >= 2 && outShape[1] > 0 -> outShape[1]
-                else -> outShape.last()
-            }
-            require(outputLen == outputSize) {
-                "TFLite output length $outputLen does not match model.outputSize $outputSize"
-            }
+            SimpleModel.requireColumnarOrFlatOutputShape(
+                outputTensor.shape(),
+                outputSize,
+                outputColumns,
+            )
         } finally {
             interpreter.close()
         }
     }
+
+    private fun dimMatches(actual: Int, expected: Int): Boolean =
+        actual == expected || actual == -1
 
     private fun readZipEntryNames(
         context: Context,
@@ -1029,7 +1110,7 @@ object MlCatalog {
         val enableSuppressionsButton: Boolean,
         /** Optional full model id of the family's preferred variant. */
         val defaultVariantId: String?,
-        /** Optional log-magnitude STFT; null when omitted from family.json. */
+        /** Optional log-power STFT; null when omitted from family.json. */
         val stft: MlStftParams?,
     )
 
@@ -1096,13 +1177,18 @@ object MlCatalog {
         val labelsRelative = json.getString("labels")
         val labelsTable = parseLabelsJson(openUtf8Resource(assets, root, labelsRelative))
 
+        if (kind == MlModelKind.SPECTROGRAM_TFLITE) {
+            requireNotNull(family.stft) {
+                "spectrogram_tflite requires an stft block in family.json"
+            }
+        }
         val embeddings = when (kind) {
             MlModelKind.EMBED_THEN_CLASSIFY -> json.getString("embeddings")
-            MlModelKind.SINGLE_TFLITE -> null
+            MlModelKind.SINGLE_TFLITE, MlModelKind.SPECTROGRAM_TFLITE -> null
         }
         val classifierOrModel = when (kind) {
             MlModelKind.EMBED_THEN_CLASSIFY -> json.getString("classifier")
-            MlModelKind.SINGLE_TFLITE -> json.getString("model")
+            MlModelKind.SINGLE_TFLITE, MlModelKind.SPECTROGRAM_TFLITE -> json.getString("model")
         }
         // Family-level geo asset → path relative to the variant root (`…/variants/<id>/`).
         val geoFromVariant = family.geoModelRelativeToFamily?.let { "../../$it" }
@@ -1139,6 +1225,7 @@ object MlCatalog {
         when (raw) {
             "embed_then_classify" -> MlModelKind.EMBED_THEN_CLASSIFY
             "single_tflite" -> MlModelKind.SINGLE_TFLITE
+            "spectrogram_tflite" -> MlModelKind.SPECTROGRAM_TFLITE
             else -> error("Unknown Auto Id model kind: $raw")
         }
 

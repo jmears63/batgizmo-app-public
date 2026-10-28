@@ -25,19 +25,27 @@ package org.batgizmo.app.ml
 import org.json.JSONObject
 
 /**
- * Optional log-magnitude STFT feature stage for an Auto Id model.
+ * Optional log-power STFT feature stage for an Auto Id model.
  *
  * When present on [MlModelDescriptor], each PCM analysis window is converted to a
- * packed log-magnitude spectrogram before inference. Absent / null ⇒ raw PCM input.
+ * packed log-power spectrogram before inference: periodic Hann, complex bins
+ * divided by the window sum, then `10·log10` of power. Absent / null ⇒ raw PCM input.
  *
  * Output layout: row-major `[nFrames * nFreqBins]`, frames along the analysis
  * window with [hopSamples], each frame has [nFreqBins] = fftSize/2+1 bins.
+ * [firstFrequencyBin], when greater than 0, drops bins below that index
+ * before the values are passed to the model.
  */
 data class MlStftParams(
     val fftSize: Int,
     val hopSamples: Int,
     /** Analysis window name; only `"hann"` is supported for now. */
     val window: String = "hann",
+    /**
+     * Lowest frequency bin included in the model input (`stft.firstFrequencyBin`).
+     * `0` keeps every bin. Bins below this index are discarded.
+     */
+    val firstFrequencyBin: Int = 0,
 ) {
     init {
         require(fftSize >= 2 && fftSize.countOneBits() == 1) {
@@ -47,6 +55,9 @@ data class MlStftParams(
         require(hopSamples <= fftSize) { "stft.hopSamples must be <= fftSize" }
         require(window == "hann") {
             "stft.window must be \"hann\" for now (got \"$window\")"
+        }
+        require(firstFrequencyBin in 0 until nFreqBins()) {
+            "stft.firstFrequencyBin ($firstFrequencyBin) must be in 0 until ${nFreqBins()}"
         }
     }
 
@@ -64,23 +75,101 @@ data class MlStftParams(
     /** Packed spectrogram length for a PCM window of [windowSamples]. */
     fun outputSize(windowSamples: Int): Int = nFrames(windowSamples) * nFreqBins()
 
+    /** Frequency bins kept in the model input after discarding bins below [firstFrequencyBin]. */
+    fun keptFreqBins(): Int = nFreqBins() - firstFrequencyBin
+
+    /**
+     * Packed model-input length after discarding bins below [firstFrequencyBin].
+     * [firstFrequencyBin] `0` keeps every bin ([outputSize]).
+     */
+    fun modelInputSize(windowSamples: Int): Int =
+        nFrames(windowSamples) * keptFreqBins()
+
+    /**
+     * Copy [packed] (frame-major, [nFreqBins] bins per frame) keeping bins
+     * from [firstFrequencyBin] upward. Does not modify [packed].
+     */
+    fun dropBinsBelow(packed: FloatArray, nFrames: Int): FloatArray {
+        val fullBins = nFreqBins()
+        require(packed.size == nFrames * fullBins) {
+            "spectrogram size ${packed.size} != $nFrames * $fullBins"
+        }
+        if (firstFrequencyBin == 0) return packed
+        val kept = keptFreqBins()
+        val out = FloatArray(nFrames * kept)
+        for (frame in 0 until nFrames) {
+            val src = frame * fullBins + firstFrequencyBin
+            packed.copyInto(out, frame * kept, src, src + kept)
+        }
+        return out
+    }
+
     fun toJson(): JSONObject = JSONObject()
         .put("fftSize", fftSize)
         .put("hopSamples", hopSamples)
         .put("window", window)
+        .put("firstFrequencyBin", firstFrequencyBin)
 
     companion object {
         /**
-         * Parse optional `stft` object from family / BYOM JSON.
+         * Parse optional `stft` object from bundled `family.json`.
          * Returns null when the key is absent or JSON null.
          */
         fun fromJsonOrNull(parent: JSONObject): MlStftParams? {
             if (!parent.has("stft") || parent.isNull("stft")) return null
             val json = parent.getJSONObject("stft")
+            val firstFrequencyBin = if (
+                json.has("firstFrequencyBin") && !json.isNull("firstFrequencyBin")
+            ) {
+                json.getInt("firstFrequencyBin")
+            } else {
+                0
+            }
             return MlStftParams(
                 fftSize = json.getInt("fftSize"),
                 hopSamples = json.getInt("hopSamples"),
                 window = json.optString("window", "hann"),
+                firstFrequencyBin = firstFrequencyBin,
+            )
+        }
+
+        /**
+         * Parse optional BYOM spectrogram input from the `model` object.
+         *
+         * - `stftWindow` present ⇒ log-power STFT before inference; value is
+         *   the power-of-two FFT / analysis-window length.
+         * - `stftHop` optional; defaults to [stftWindow] (non-overlapping frames).
+         * - `firstFrequencyBin` optional; defaults to 0 (keep every bin).
+         * - `stftWindow` absent ⇒ raw PCM input (`null`); `stftHop` or
+         *   `firstFrequencyBin` alone is an error.
+         */
+        fun fromByomModelOrNull(model: JSONObject): MlStftParams? {
+            val hasWindow = model.has("stftWindow") && !model.isNull("stftWindow")
+            if (!hasWindow) {
+                require((!model.has("stftHop") || model.isNull("stftHop")) &&
+                    (!model.has("firstFrequencyBin") || model.isNull("firstFrequencyBin"))
+                ) {
+                    "model.stftHop and model.firstFrequencyBin require model.stftWindow"
+                }
+                return null
+            }
+            val fftSize = model.getInt("stftWindow")
+            val hopSamples = if (model.has("stftHop") && !model.isNull("stftHop")) {
+                model.getInt("stftHop")
+            } else {
+                fftSize
+            }
+            val firstFrequencyBin = if (
+                model.has("firstFrequencyBin") && !model.isNull("firstFrequencyBin")
+            ) {
+                model.getInt("firstFrequencyBin")
+            } else {
+                0
+            }
+            return MlStftParams(
+                fftSize = fftSize,
+                hopSamples = hopSamples,
+                firstFrequencyBin = firstFrequencyBin,
             )
         }
     }
