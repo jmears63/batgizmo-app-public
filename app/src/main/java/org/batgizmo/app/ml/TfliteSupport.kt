@@ -101,8 +101,8 @@ fun loadMappedModelBuffer(
  * A compiled model plus the buffers used for every run.
  *
  * Live and viewer inference both open models through [openCompiledSession],
- * which requests the GPU accelerator. [close] releases the buffers, then
- * the compiled model.
+ * which requests the GPU and CPU accelerators together. [close] releases
+ * the buffers, then the compiled model.
  */
 class CompiledModelSession(
     private val compiled: CompiledModel,
@@ -132,10 +132,12 @@ class CompiledModelSession(
 /**
  * Compile [relativePath] for inference.
  *
- * The GPU accelerator is requested first. If this device cannot compile the
- * graph for the GPU, the same file is compiled for the CPU. [concreteInputShape]
- * is applied while reading tensor metadata when the file still has a dynamic
- * dimension.
+ * The GPU and CPU accelerators are requested together. Ops OpenCL cannot run,
+ * including the frequency broadcast and the gather, stay on the CPU. A
+ * GPU-only compile fails on that split and drops the whole graph onto the
+ * CPU. If the device cannot compile for the GPU at all, the same file is
+ * compiled for the CPU. [concreteInputShape] is applied while reading tensor
+ * metadata when the file still has a dynamic dimension.
  */
 fun openCompiledSession(
     assets: AssetManager,
@@ -157,7 +159,7 @@ fun openCompiledSession(
     return try {
         val inputs = compiled.createInputBuffers()
         val outputs = compiled.createOutputBuffers()
-        val device = if (onGpu) "GPU" else "CPU"
+        val device = if (onGpu) "GPU+CPU" else "CPU"
         Timber.i("CompiledModel loaded $resolvedPath on $device")
         CompiledModelSession(
             compiled = compiled,
@@ -177,7 +179,7 @@ fun openCompiledSession(
 }
 
 private fun gpuOptions(numThreads: Int): CompiledModel.Options {
-    return CompiledModel.Options(Accelerator.GPU).apply {
+    return CompiledModel.Options(Accelerator.GPU, Accelerator.CPU).apply {
         cpuOptions = CompiledModel.CpuOptions(numThreads = numThreads)
     }
 }

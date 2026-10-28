@@ -31,7 +31,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import timber.log.Timber
 
 /** Live vs file-viewer summary policy. Set via [MlSummaryAccumulator.clear]. */
 enum class MlSummaryMode {
@@ -154,12 +153,6 @@ class MlSummaryAccumulator {
         }
         val keep = sorted.take(MAX_SUMMARY_ENTRIES)
         for (dropped in sorted.drop(MAX_SUMMARY_ENTRIES)) {
-            Timber.i(
-                "MlSummary: dropped \"%s\" (%.0f%%) from %s list",
-                dropped.label,
-                dropped.confidence * 100f,
-                mutableMode.value,
-            )
             entries.remove(dropped.entryKey)
         }
         mutableSummary.value = keep.map {

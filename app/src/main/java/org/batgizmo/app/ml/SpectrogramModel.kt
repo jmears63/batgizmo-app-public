@@ -23,6 +23,7 @@
 package org.batgizmo.app.ml
 
 import android.content.res.AssetManager
+import android.os.SystemClock
 import org.tensorflow.lite.DataType
 import timber.log.Timber
 import java.util.Locale
@@ -122,11 +123,11 @@ class SpectrogramModel(
                 "model expects $nFreqBins×$nFrames"
         }
         val flat = flattenFloats(spectrogramToNchw(spectrogram.values, nFrames, nFreqBins))
-        val startedNs = System.nanoTime()
+        val startedMs = SystemClock.elapsedRealtime()
         val outputs = session.run(flat)
-        val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000
-        val device = if (session.onGpu) "GPU" else "CPU"
-        Timber.i("SpectrogramModel[${descriptor.id}]: compiled $device $elapsedMs ms")
+        val wallMs = SystemClock.elapsedRealtime() - startedMs
+        val device = if (session.onGpu) "GPU+CPU" else "CPU"
+        Timber.i("SpectrogramModel[${descriptor.id}]: tflite wall $device $wallMs ms")
         return List(outputs.size) { index ->
             SpectrogramOutput(session.outputShapes[index].copyOf(), outputs[index])
         }
