@@ -88,6 +88,8 @@ class MlProcessor(
         class Job(
             val input: MlModelInput,
             val bufferId: Int,
+            /** Model-rate sample index of this window in the current stream. */
+            val streamSampleOffset: Long,
             val epoch: Long,
             val observedAtEpochSec: Double,
             val queuedAtElapsedRealtimeMs: Long,
@@ -352,6 +354,8 @@ class MlProcessor(
         val ring = FloatRing()
         private var ringStartEpochSec = 0.0
         private var ringHasTimeline = false
+        /** Model-rate index of the next window, from the start of this stream. */
+        private var nextWindowSampleOffset = 0L
         private val stftHandles = HashMap<MlStftParams, StftHandle>()
 
         fun ensureTimeline(observedAtEpochSec: Double) {
@@ -364,6 +368,7 @@ class MlProcessor(
         fun clear() {
             ring.clear()
             ringHasTimeline = false
+            nextWindowSampleOffset = 0L
             for (h in stftHandles.values) h.destroy()
             stftHandles.clear()
         }
@@ -379,8 +384,10 @@ class MlProcessor(
                 val window = FloatArray(w.windowSamples)
                 ring.copyWindow(window)
                 val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
-                dispatchWindow(window, ctx, observed, resampleMs, workers)
+                val sampleOffset = nextWindowSampleOffset
+                dispatchWindow(window, ctx, observed, sampleOffset, resampleMs, workers)
                 ring.discard(ctx.hop)
+                nextWindowSampleOffset += ctx.hop
                 if (ringHasTimeline) {
                     ringStartEpochSec += ctx.hop.toDouble() / w.modelSampleRateHz
                 }
@@ -401,15 +408,18 @@ class MlProcessor(
             val window = FloatArray(ctx.windowing.windowSamples)
             ring.copyWindow(window)
             val observed = if (ringHasTimeline) ringStartEpochSec else 0.0
-            dispatchWindow(window, ctx, observed, ctx.resampleMs, workers)
+            val sampleOffset = nextWindowSampleOffset
+            dispatchWindow(window, ctx, observed, sampleOffset, ctx.resampleMs, workers)
             ring.clear()
             ringHasTimeline = false
+            nextWindowSampleOffset = 0L
         }
 
         private fun dispatchWindow(
             window: FloatArray,
             ctx: EmissionContext,
             observedAtEpochSec: Double,
+            streamSampleOffset: Long,
             resampleMs: Long,
             workers: Map<String, ModelWorker>,
         ) {
@@ -420,6 +430,7 @@ class MlProcessor(
                     MlModelInput.PcmWindow(window.copyOf()),
                     ctx,
                     observedAtEpochSec,
+                    streamSampleOffset,
                     resampleMs,
                 )
             }
@@ -445,6 +456,7 @@ class MlProcessor(
                         MlModelInput.Spectrogram(values, nFrames, keptBins),
                         ctx,
                         observedAtEpochSec,
+                        streamSampleOffset,
                         resampleMs,
                     )
                 }
@@ -472,6 +484,7 @@ class MlProcessor(
             input: MlModelInput,
             ctx: EmissionContext,
             observedAtEpochSec: Double,
+            streamSampleOffset: Long,
             resampleMs: Long,
         ) {
             if (ctx.jobEpoch != epoch.get()) return
@@ -498,6 +511,7 @@ class MlProcessor(
             val job = InferItem.Job(
                 input = input,
                 bufferId = ctx.bufferId,
+                streamSampleOffset = streamSampleOffset,
                 epoch = ctx.jobEpoch,
                 observedAtEpochSec = observedAtEpochSec,
                 queuedAtElapsedRealtimeMs = ctx.queuedAtMs,
@@ -1115,6 +1129,7 @@ class MlProcessor(
                 score: Float,
                 fmaxeHz: Float? = null,
                 timeSec: Double? = null,
+                binIndex: Int? = null,
             ) {
                 if (index !in labelDiscard.indices ||
                     labelDiscard[index] ||
@@ -1131,6 +1146,7 @@ class MlProcessor(
                         labelKey = labelKeys[index],
                         fmaxeHz = fmaxeHz,
                         timeSec = timeSec,
+                        binIndex = binIndex,
                     )
                 )
             }
@@ -1142,6 +1158,7 @@ class MlProcessor(
                         chirp.presence,
                         fmaxeHz = chirp.fmaxeHz,
                         timeSec = chirp.timeSec,
+                        binIndex = chirp.binIndex,
                     )
                 }
             } else {
@@ -1159,17 +1176,20 @@ class MlProcessor(
                 "queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
                     "infer-queue ${job.inferQueueLengthWhenQueued} deep / $inferQueueWaitMs ms, " +
                     "infer $inferMs ms, total $totalMs ms"
+            val where =
+                "buffer #${job.bufferId} offset ${job.streamSampleOffset}"
             if (detections.isEmpty()) {
                 Timber.i(
-                    "MlProcessor[${worker.descriptor.id}]: buffer #${job.bufferId} " +
+                    "MlProcessor[${worker.descriptor.id}]: $where " +
                         "detections: (none) ($timing)"
                 )
             } else {
                 val listed = detections.joinToString { d ->
-                    "${d.label}=${"%.0f".format(d.confidence * 100)}%"
+                    val bin = d.binIndex?.let { "bin $it " }.orEmpty()
+                    "$bin${d.label}=${"%.0f".format(d.confidence * 100)}%"
                 }
                 Timber.i(
-                    "MlProcessor[${worker.descriptor.id}]: buffer #${job.bufferId} " +
+                    "MlProcessor[${worker.descriptor.id}]: $where " +
                         "detections: $listed ($timing)"
                 )
             }
@@ -1179,7 +1199,8 @@ class MlProcessor(
             Timber.e(
                 e,
                 "MlProcessor[${worker.descriptor.id}]: inference failed on buffer " +
-                    "#${job.bufferId} (queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
+                    "#${job.bufferId} offset ${job.streamSampleOffset} " +
+                    "(queue ${job.queueWaitMs} ms, resample ${job.resampleMs} ms, " +
                     "total $totalMs ms)"
             )
             completedResult()

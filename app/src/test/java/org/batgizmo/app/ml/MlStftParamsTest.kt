@@ -27,6 +27,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.io.File
 
 class MlStftParamsTest {
 
@@ -132,6 +133,26 @@ class MlStftParamsTest {
                     .put("firstFrequencyBin", -1),
             ),
         )
+    }
+
+    @Test
+    fun liveBatcnnClipIs310FramesAnd155PresenceBins() {
+        val root = listOf(
+            File("src/main/assets/ml/batcnn"),
+            File("app/src/main/assets/ml/batcnn"),
+        ).first { File(it, "family.json").isFile }
+        val family = JSONObject(File(root, "family.json").readText())
+        val stft = MlStftParams.fromJsonOrNull(family)!!
+        val windowSamples = family.getInt("windowSamples")
+        assertEquals(64_000, windowSamples)
+        assertEquals(205, stft.hopSamples)
+        assertEquals(30, stft.firstFrequencyBin)
+        assertEquals(310, stft.nFrames(windowSamples))
+        assertEquals(227, stft.keptFreqBins())
+        val labels = JSONObject(
+            File(root, "variants/heatmap/labels.json").readText()
+        ).getJSONArray("labels")
+        assertEquals(155, labels.length())
     }
 
     @Test(expected = IllegalArgumentException::class)

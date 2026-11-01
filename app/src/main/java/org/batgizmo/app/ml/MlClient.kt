@@ -55,6 +55,8 @@ data class MlDetection(
     val fmaxeHz: Float? = null,
     /** Seconds from the analysed window start to this chirp's centre. */
     val timeSec: Double? = null,
+    /** Presence time-bin index, when this detection is a spectrogram chirp. */
+    val binIndex: Int? = null,
 )
 
 /**

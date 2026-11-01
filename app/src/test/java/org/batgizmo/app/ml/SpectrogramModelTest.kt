@@ -61,37 +61,37 @@ class SpectrogramModelTest {
     fun presenceOutputIsTheNamedTensorNotTheTypeScores() {
         val names = listOf("fmaxe_hz", "presence_prob", "type_prob")
         val shapes = listOf(
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 4, 248),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 4, 155),
         )
-        assertEquals(1, presenceOutputIndex(names, shapes, labelCount = 248))
+        assertEquals(1, presenceOutputIndex(names, shapes, labelCount = 155))
     }
 
     @Test
     fun presenceOutputFallsBackToFirstVector() {
         val names = listOf("", "", "", "")
         val shapes = listOf(
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 4, 248),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 4, 155),
         )
-        assertEquals(0, presenceOutputIndex(names, shapes, labelCount = 248))
+        assertEquals(0, presenceOutputIndex(names, shapes, labelCount = 155))
     }
 
     @Test
     fun fmaxeOutputIsTheNamedTensor() {
         val names = listOf("presence_prob", "pulse_length_s", "fmaxe_hz", "type_prob")
         val shapes = listOf(
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 4, 248),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 4, 155),
         )
         assertEquals(
             2,
-            fmaxeOutputIndex(names, shapes, labelCount = 248, presenceIndex = 0),
+            fmaxeOutputIndex(names, shapes, labelCount = 155, presenceIndex = 0),
         )
     }
 
@@ -99,14 +99,14 @@ class SpectrogramModelTest {
     fun fmaxeOutputFollowsPresenceWhenUnnamed() {
         val names = listOf("", "", "", "")
         val shapes = listOf(
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 4, 248),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 4, 155),
         )
         assertEquals(
             1,
-            fmaxeOutputIndex(names, shapes, labelCount = 248, presenceIndex = 0),
+            fmaxeOutputIndex(names, shapes, labelCount = 155, presenceIndex = 0),
         )
     }
 
@@ -119,15 +119,15 @@ class SpectrogramModelTest {
     fun pulseLengthOutputIsTheNamedTensor() {
         val names = listOf("presence_prob", "fmaxe_hz", "pulse_length_s", "type_prob")
         val shapes = listOf(
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 4, 248),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 4, 155),
         )
         assertEquals(
             2,
             pulseLengthOutputIndex(
-                names, shapes, labelCount = 248, presenceIndex = 0, fmaxeIndex = 1,
+                names, shapes, labelCount = 155, presenceIndex = 0, fmaxeIndex = 1,
             ),
         )
     }
@@ -136,23 +136,23 @@ class SpectrogramModelTest {
     fun pulseLengthOutputIsTheRemainingPerBinVectorWhenUnnamed() {
         val names = listOf("", "", "", "")
         val shapes = listOf(
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 248),
-            intArrayOf(1, 4, 248),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 155),
+            intArrayOf(1, 4, 155),
         )
         assertEquals(
             2,
             pulseLengthOutputIndex(
-                names, shapes, labelCount = 248, presenceIndex = 0, fmaxeIndex = 1,
+                names, shapes, labelCount = 155, presenceIndex = 0, fmaxeIndex = 1,
             ),
         )
     }
 
     @Test
     fun binCentreIsMidwayThroughItsShareOfTheClip() {
-        assertEquals(0.5 / 248.0 * 0.25, binCentreSec(0, 248, 0.25), 0.0)
-        assertEquals(123.5 / 248.0 * 0.25, binCentreSec(123, 248, 0.25), 0.0)
+        assertEquals(0.5 / 155.0 * 0.25, binCentreSec(0, 155, 0.25), 0.0)
+        assertEquals(123.5 / 155.0 * 0.25, binCentreSec(123, 155, 0.25), 0.0)
     }
 
     @Test
