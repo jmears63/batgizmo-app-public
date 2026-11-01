@@ -110,7 +110,7 @@ data class Settings(
     var autoTriggerRangeMaxkHz: Float = 120f,
     /**
      * Detector used when triggered recording is armed: FFT energy in a
-     * frequency band, or Auto Id classifier match.
+     * frequency band, smart, or Auto Id classifier match.
      */
     var autoTriggerMode: Int = AutoTriggerModeOptions.ENERGY.value,
     /**
@@ -261,6 +261,7 @@ data class Settings(
      */
     enum class AudioPlaybackModeOptions(val value: Int, val label: String) : EnumHelper {
         AUTO_TUNED_HETERODYNE(5, "Auto heterodyne"),
+        SMART_HETERODYNE(6, "Smart heterodyne"),
         SINGLE_HETERODYNE(0, "Classic heterodyne"),
         DUAL_HETERODYNE(1, "Dual heterodyne"),
         PITCH_SHIFTING(3, "Pitch shifting"),
@@ -331,6 +332,7 @@ data class Settings(
         TE_4(4, "4"),
         TE_6(6, "6"),
         TE_8(8, "8"),
+        TE_10(10, "10"),
         TE_12(12, "12"),
         TE_16(16, "16"),
         TE_24(24, "24"),
@@ -400,8 +402,21 @@ data class Settings(
         effectiveAudioPlaybackMode(sampleRateHz) ==
             AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
 
+    /** True when smart heterodyne is the effective playback mode. */
+    fun isSmartHeterodynePlayback(sampleRateHz: Int): Boolean =
+        effectiveAudioPlaybackMode(sampleRateHz) ==
+            AudioPlaybackModeOptions.SMART_HETERODYNE.value
+
     /**
-     * Classic single/dual heterodyne — modes with a manual reference frequency UI.
+     * Auto or smart heterodyne: the reference is tracked, not set by the
+     * manual slider. Smart uses BatCNN FmaxE; auto uses the activity tracker.
+     */
+    fun isTrackedHeterodynePlayback(sampleRateHz: Int): Boolean =
+        isAutoTunedHeterodynePlayback(sampleRateHz) ||
+            isSmartHeterodynePlayback(sampleRateHz)
+
+    /**
+     * Heterodyne modes with a manual reference frequency UI.
      */
     fun isHeterodynePlayback(sampleRateHz: Int): Boolean {
         val mode = effectiveAudioPlaybackMode(sampleRateHz)
@@ -409,9 +424,9 @@ data class Settings(
                 mode == AudioPlaybackModeOptions.DUAL_HETERODYNE.value
     }
 
-    /** Any mode that uses the heterodyne DSP path (manual or auto-tuned). */
+    /** Any mode that uses the heterodyne DSP path (manual, auto, or smart). */
     fun usesHeterodyneDsp(sampleRateHz: Int): Boolean =
-        isHeterodynePlayback(sampleRateHz) || isAutoTunedHeterodynePlayback(sampleRateHz)
+        isHeterodynePlayback(sampleRateHz) || isTrackedHeterodynePlayback(sampleRateHz)
 
     /** Clamp a manual heterodyne LO (kHz) to at least [HETERODYNE_MIN_REF_KHZ]. */
     fun coerceHeterodyneRefkHz(kHz: Int): Int =
@@ -483,6 +498,7 @@ data class Settings(
     /** Auto-record detector when triggered recording is armed. */
     enum class AutoTriggerModeOptions(val value: Int, val label: String) : EnumHelper {
         ENERGY(0, "Energy threshold"),
+        SMART(2, "Smart"),
         CLASSIFIER(1, "Classifier match");
 
         override fun theValue(): Int = value
@@ -732,6 +748,16 @@ data class Settings(
     fun isEnergyAutoTrigger(): Boolean =
         AutoTriggerModeOptions.coerce(autoTriggerMode) ==
             AutoTriggerModeOptions.ENERGY.value
+
+    /** True when triggered recording uses the smart detector. */
+    fun isSmartAutoTrigger(): Boolean =
+        AutoTriggerModeOptions.coerce(autoTriggerMode) ==
+            AutoTriggerModeOptions.SMART.value
+
+    /** True when smart heterodyne is the selected playback mode. */
+    fun isSmartHeterodyneSelected(): Boolean =
+        audioPlaybackModePersisted &&
+            audioPlaybackMode == AudioPlaybackModeOptions.SMART_HETERODYNE.value
 
     /** True when triggered recording uses Auto Id classifier matches. */
     fun isClassifierAutoTrigger(): Boolean =

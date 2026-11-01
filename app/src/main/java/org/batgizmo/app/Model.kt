@@ -61,6 +61,7 @@ import org.batgizmo.app.ml.MlCatalog
 import org.batgizmo.app.ml.MlClient
 import org.batgizmo.app.ml.MlModelDescriptor
 import org.batgizmo.app.ml.MlOverflowPolicy
+import org.batgizmo.app.ml.MlResult
 import org.batgizmo.app.ml.MlSummaryAccumulator
 import org.batgizmo.app.ml.MlSummaryMode
 import org.batgizmo.app.pipeline.AbstractPipeline
@@ -421,11 +422,9 @@ class UIModel(application: Application,
             )
             fileWriter?.run()
 
-            if (settings.isAutoIdEnabled()) {
-                mlSummaryAccumulator.clear(MlSummaryMode.Live)
-                ensureMlClient(result.sampleRate, forceReset = true)
-                liveMlAccepting = true
-            }
+            mlSummaryAccumulator.clear(MlSummaryMode.Live)
+            liveMlAccepting = true
+            ensureMlClient(result.sampleRate, forceReset = true)
 
             if (settings.autoBaselineEnabled) {
                 tryRestoreNoiseBaseline(p)
@@ -598,6 +597,14 @@ class UIModel(application: Application,
     val mlWillAcceptAudioFlow: StateFlow<Boolean> = mutableMlWillAcceptAudioFlow.asStateFlow()
     private var mlWillAcceptAudioCollectJob: Job? = null
 
+    /**
+     * True when a user-selected classifier will ingest audio at the current
+     * sample rate. Internal `liveSystem` models do not count.
+     */
+    private val mutableMlUserModelsActiveFlow = MutableStateFlow(false)
+    val mlUserModelsActiveFlow: StateFlow<Boolean> = mutableMlUserModelsActiveFlow.asStateFlow()
+    private var mlUserModelsActiveCollectJob: Job? = null
+
     /** Live ML client for the current sample rate, or null when inactive. */
     private var mlClient: MlClient? = null
     private var mlClientSampleRateHz: Int? = null
@@ -620,6 +627,17 @@ class UIModel(application: Application,
      */
     @Volatile
     private var liveMlAccepting = false
+
+    /**
+     * Viewer smart heterodyne playback.
+     * [ViewerSmartHet.Playing] blocks file-page analysis from replacing [mlClient].
+     * [ViewerSmartHet.ModelLoaded] means BatCNN was added, so stopping must
+     * submit the file page again without it.
+     */
+    private enum class ViewerSmartHet { Off, Playing, ModelLoaded }
+
+    @Volatile
+    private var viewerSmartHet = ViewerSmartHet.Off
 
     private val audioProgressChannel = Channel<Int>(Channel.CONFLATED)
     val audioProgressFlow = audioProgressChannel.receiveAsFlow()
@@ -1015,6 +1033,9 @@ class UIModel(application: Application,
                         updatedSettings.autoIdFamilyPrefs != settings.autoIdFamilyPrefs
                 val autoIdSuppressionsChanged =
                     updatedSettings.autoIdSuppressions != settings.autoIdSuppressions
+                val liveSystemModelsChanged =
+                    updatedSettings.isSmartHeterodyneSelected() !=
+                        settings.isSmartHeterodyneSelected()
                 settings = updatedSettings
                 if (liveInputSourceChanged) {
                     liveInputSourceOverrideSession = false
@@ -1037,19 +1058,34 @@ class UIModel(application: Application,
                             is FileViewerPipeline -> submitFilePageToMl(p)
                             is LiveUSBPipeline -> {
                                 mlSummaryAccumulator.clear(MlSummaryMode.Live)
-                                ensureMlClient(p.sampleRateHz(), forceReset = true)
                                 liveMlAccepting = true
+                                ensureMlClient(p.sampleRateHz(), forceReset = true)
                             }
                             else -> {}
                         }
                     }
                 } else if (autoIdDisabled) {
-                    liveMlAccepting = false
-                    flushMlClientFinal()
                     synchronized(mlLock) {
                         clearMlClientLocked()
                     }
                     mlSummaryAccumulator.clear(MlSummaryMode.Live)
+                    when (val p = pipeline) {
+                        is LiveUSBPipeline -> {
+                            ensureMlClient(p.sampleRateHz(), forceReset = true)
+                        }
+                        is FileViewerPipeline -> {
+                            liveMlAccepting = false
+                            submitFilePageToMl(p)
+                        }
+                        else -> liveMlAccepting = false
+                    }
+                } else if (liveSystemModelsChanged && pipeline is LiveUSBPipeline) {
+                    val live = pipeline as LiveUSBPipeline
+                    synchronized(mlLock) {
+                        clearMlClientLocked()
+                    }
+                    mlSummaryAccumulator.clear(MlSummaryMode.Live)
+                    ensureMlClient(live.sampleRateHz(), forceReset = true)
                 } else if (nowAutoIdEnabled &&
                     (autoIdLanguageChanged || autoIdSuppressionsChanged)
                 ) {
@@ -1078,10 +1114,9 @@ class UIModel(application: Application,
                 clearMlClientLocked()
             }
             mlSummaryAccumulator.clear(MlSummaryMode.Live)
-            if (!recreate || !settings.isAutoIdEnabled()) return@withContext
+            if (!recreate) return@withContext
             when (val p = pipeline) {
                 is LiveUSBPipeline -> {
-                    liveMlAccepting = true
                     ensureMlClient(p.sampleRateHz(), forceReset = true)
                 }
                 is FileViewerPipeline -> submitFilePageToMl(p)
@@ -1549,58 +1584,38 @@ class UIModel(application: Application,
                     Timber.w("startLiveAudio: no live pipeline; audio not started")
                     audioStartResult = LiveAudioStartResult(startedOK = false)
                 } else {
-                    val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
-                    val modeFactor =
-                        if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
-                            Settings.AudioTimeExpansionFactorOptions.coerce(
-                                settings.audioTimeExpansionFactor
-                            )
-                        else
-                            Settings.AudioPitchRatioOptions.coerceForSampleRate(
-                                settings.audioPitchRatio, sampleRateHz
-                            )
-                    val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
-                    if (isAutoHet)
-                        autoHeterodyne.resetTracker()
-                    val heterodyne1kHz =
-                        if (isAutoHet) autoHeterodyne.initialRefkHz()
-                        else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
-                    val heterodyne2kHz =
-                        if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
-                            settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
-                        else
-                            null
+                    val audio = preparePlaybackAudio(sampleRateHz)
 
                     when (effectiveLiveInputSource()) {
                         Settings.LiveInputSourceOptions.USB.value -> {
                             usbService.startAudio(
-                                heterodyne1kHz,
-                                heterodyne2kHz,
+                                audio.heterodyne1kHz,
+                                audio.heterodyne2kHz,
                                 settings.audioBoostFactor,
-                                playbackMode,
-                                modeFactor,
+                                audio.playbackMode,
+                                audio.modeFactor,
                                 settings.audioPitchHpfEnabled
                             )
                             audioOutputActive = true
-                            if (isAutoHet)
-                                autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
+                            if (audio.tracked)
+                                autoHeterodyne.setDisplayedRefkHz(audio.heterodyne1kHz)
                             audioStartResult = LiveAudioStartResult(startedOK = true)
                         }
 
                         Settings.LiveInputSourceOptions.PHONE_MIC.value -> {
                             val started = usbService.startLiveInputAudio(
                                 sampleRateHz,
-                                heterodyne1kHz,
-                                heterodyne2kHz,
+                                audio.heterodyne1kHz,
+                                audio.heterodyne2kHz,
                                 settings.audioBoostFactor,
-                                playbackMode,
-                                modeFactor,
+                                audio.playbackMode,
+                                audio.modeFactor,
                                 settings.audioPitchHpfEnabled
                             )
                             micCaptureService.liveAudioMonitorEnabled = started
                             audioOutputActive = started
-                            if (started && isAutoHet)
-                                autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
+                            if (started && audio.tracked)
+                                autoHeterodyne.setDisplayedRefkHz(audio.heterodyne1kHz)
                             audioStartResult = LiveAudioStartResult(startedOK = started)
                         }
 
@@ -1617,14 +1632,7 @@ class UIModel(application: Application,
                 liveAudioStartChannel.send(it)
             }
 
-            if (audioOutputActive &&
-                settings.isAutoTunedHeterodynePlayback(
-                    pipeline?.sampleRateHz() ?: return@launch
-                )
-            ) {
-                autoHeterodyne.refreshViewerCache()
-                autoHeterodyne.startWorker()
-            }
+            pipeline?.sampleRateHz()?.let { startTrackedHeterodyneWorker(it) }
 
             Timber.i("startAudio end: runtime.{maxMemory, totalMemory, freeMemory) = " +
                     "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB")
@@ -1632,6 +1640,8 @@ class UIModel(application: Application,
     }
 
     private fun onAudioProgress(position: Int) {
+        if (position >= 0 && viewerSmartHet != ViewerSmartHet.Off)
+            autoHeterodyne.onViewerPlayhead(position)
         audioProgressChannel.trySend(position)
     }
 
@@ -1639,6 +1649,7 @@ class UIModel(application: Application,
         viewModelScope.launch(Dispatchers.Default) {
 
             var audioStartResult: LiveAudioStartResult? = null
+            var smartPlayback: Pair<ShortArray, HORange>? = null
             Timber.d("startViewerAudio called")
 
             mutex.withLock {
@@ -1647,42 +1658,30 @@ class UIModel(application: Application,
 
                     Timber.d("Visible raw data range: ${visibleRawData.second}")
 
-                    val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
-                    val modeFactor =
-                        if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
-                            Settings.AudioTimeExpansionFactorOptions.coerce(
-                                settings.audioTimeExpansionFactor
-                            )
-                        else
-                            Settings.AudioPitchRatioOptions.coerceForSampleRate(
-                                settings.audioPitchRatio, sampleRateHz
-                            )
-                    val isAutoHet = settings.isAutoTunedHeterodynePlayback(sampleRateHz)
-                    if (isAutoHet)
-                        autoHeterodyne.resetTracker()
-                    val heterodyne1kHz =
-                        if (isAutoHet) autoHeterodyne.initialRefkHz()
-                        else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
+                    val audio = preparePlaybackAudio(sampleRateHz)
                     usbService.startAudioFromBuffer(
-                        heterodyne1kHz,
-                        if (playbackMode ==
-                            Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value
-                        )
-                            settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
-                        else
-                            null,
+                        audio.heterodyne1kHz,
+                        audio.heterodyne2kHz,
                         settings.audioBoostFactor,
                         visibleRawData, settings.loopedAudioPlayback,
                         sampleRateHz,
-                        playbackMode,
-                        modeFactor,
+                        audio.playbackMode,
+                        audio.modeFactor,
                         settings.audioPitchHpfEnabled,
                         ::onAudioProgress
                     )
 
                     audioOutputActive = true
-                    if (isAutoHet)
-                        autoHeterodyne.setDisplayedRefkHz(heterodyne1kHz)
+                    if (audio.tracked)
+                        autoHeterodyne.setDisplayedRefkHz(audio.heterodyne1kHz)
+                    if (settings.isSmartHeterodynePlayback(sampleRateHz)) {
+                        // Same lock as stopAudio, and only while this mutex is held,
+                        // so a stop that is waiting cannot clear the flag first.
+                        synchronized(mlLock) {
+                            viewerSmartHet = ViewerSmartHet.Playing
+                        }
+                        smartPlayback = visibleRawData
+                    }
                     audioStartResult = LiveAudioStartResult(startedOK = true)
                 }
             }
@@ -1692,24 +1691,155 @@ class UIModel(application: Application,
                 liveAudioStartChannel.send(it)
             }
 
-            if (audioOutputActive &&
-                settings.isAutoTunedHeterodynePlayback(sampleRateHz)
-            ) {
-                autoHeterodyne.refreshViewerCache()
-                autoHeterodyne.startWorker()
+            startTrackedHeterodyneWorker(sampleRateHz)
+
+            smartPlayback?.let { (buffer, range) ->
+                if (viewerSmartHet == ViewerSmartHet.Playing)
+                    attachViewerSmartHeterodyne(sampleRateHz, buffer, range)
             }
         }
     }
 
+    /**
+     * Reference frequencies and whether the local oscillator is tracked.
+     * Resets the tracker when the mode tracks.
+     */
+    private data class PlaybackAudioSetup(
+        val playbackMode: Int,
+        val modeFactor: Int,
+        val heterodyne1kHz: Int,
+        val heterodyne2kHz: Int?,
+        val tracked: Boolean,
+    )
+
+    private suspend fun preparePlaybackAudio(sampleRateHz: Int): PlaybackAudioSetup {
+        val playbackMode = settings.effectiveAudioPlaybackMode(sampleRateHz)
+        val modeFactor =
+            if (playbackMode == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value)
+                Settings.AudioTimeExpansionFactorOptions.coerce(
+                    settings.audioTimeExpansionFactor
+                )
+            else
+                Settings.AudioPitchRatioOptions.coerceForSampleRate(
+                    settings.audioPitchRatio, sampleRateHz
+                )
+        val tracked = settings.isTrackedHeterodynePlayback(sampleRateHz)
+        if (tracked)
+            autoHeterodyne.resetTracker()
+        val heterodyne1kHz =
+            if (tracked) autoHeterodyne.initialRefkHz()
+            else settings.coerceHeterodyneRefkHz(settings.heterodyneRef1kHz)
+        val heterodyne2kHz =
+            if (playbackMode == Settings.AudioPlaybackModeOptions.DUAL_HETERODYNE.value)
+                settings.coerceHeterodyneRefkHz(settings.heterodyneRef2kHz)
+            else
+                null
+        return PlaybackAudioSetup(
+            playbackMode,
+            modeFactor,
+            heterodyne1kHz,
+            heterodyne2kHz,
+            tracked,
+        )
+    }
+
+    /** Start the LO worker. Auto heterodyne also refreshes the viewer bucket cache. */
+    private suspend fun startTrackedHeterodyneWorker(sampleRateHz: Int) {
+        if (!audioOutputActive || !settings.isTrackedHeterodynePlayback(sampleRateHz))
+            return
+        if (settings.isAutoTunedHeterodynePlayback(sampleRateHz))
+            autoHeterodyne.refreshViewerCache()
+        autoHeterodyne.startWorker()
+    }
+
+    /**
+     * Viewer smart heterodyne: add BatCNN and analyse the buffer now playing.
+     * Peak epochs are seconds from the first sample of [range]. [stopAudio]
+     * removes BatCNN and restores ordinary file-page analysis.
+     */
+    private suspend fun attachViewerSmartHeterodyne(
+        sampleRateHz: Int,
+        buffer: ShortArray,
+        range: HORange,
+    ) {
+        if (viewerSmartHet != ViewerSmartHet.Playing || range.length <= 0)
+            return
+        val app = getApplication<Application>()
+        MlCatalog.ensureInitialized(app)
+        if (!MlActiveModels.liveSystemAccepts(app.assets, sampleRateHz)) {
+            Timber.w(
+                "Viewer smart heterodyne: BatCNN will not ingest audio at $sampleRateHz Hz"
+            )
+            return
+        }
+        autoHeterodyne.beginPlayheadGatedPeaks(range.start, sampleRateHz)
+        if (abortViewerSmartHetIfStopped())
+            return
+        // mlLock is reentrant, so this check and the client swap cannot interleave
+        // with [stopAudio] deciding whether to restore the file page.
+        val loaded = synchronized(mlLock) {
+            if (viewerSmartHet != ViewerSmartHet.Playing) {
+                false
+            } else {
+                ensureMlClient(
+                    sampleRateHz,
+                    forceReset = true,
+                    overflowPolicy = MlOverflowPolicy.QueueAll,
+                    summaryMode = MlSummaryMode.Viewer,
+                    preferFileGuanoLocation = true,
+                    clearSummary = false,
+                )
+                val client = mlClient
+                if (client == null) {
+                    false
+                } else {
+                    viewerSmartHet = ViewerSmartHet.ModelLoaded
+                    client.submit(
+                        buffer,
+                        range.start,
+                        range.length,
+                        observedAtEpochSec = 0.0,
+                        isLast = true,
+                    )
+                    Timber.i(
+                        "Viewer smart heterodyne: BatCNN analysing ${range.length} samples " +
+                            "at $sampleRateHz Hz"
+                    )
+                    true
+                }
+            }
+        }
+        if (!loaded)
+            autoHeterodyne.clearPlayheadGate()
+    }
+
+    /** Clear the playhead gate when playback ended before BatCNN was added. */
+    private suspend fun abortViewerSmartHetIfStopped(): Boolean {
+        if (viewerSmartHet != ViewerSmartHet.Off)
+            return false
+        autoHeterodyne.clearPlayheadGate()
+        return true
+    }
+
     fun stopAudio() {
         viewModelScope.launch(Dispatchers.Default) {
-            autoHeterodyne.stopWorker()
-            mutex.withLock {
+            // Model mutex first, then mlLock. pause and settings updates hold
+            // the model mutex and then take mlLock; the other order deadlocks.
+            val restoreViewerMl = mutex.withLock {
+                val restore = synchronized(mlLock) {
+                    val restore = viewerSmartHet == ViewerSmartHet.ModelLoaded
+                    viewerSmartHet = ViewerSmartHet.Off
+                    restore
+                }
+                autoHeterodyne.stopWorker()
                 audioOutputActive = false
                 autoHeterodyne.resetTracker()
                 micCaptureService.liveAudioMonitorEnabled = false
                 usbService.stopAudio()
+                restore
             }
+            if (restoreViewerMl)
+                pipeline?.let { submitFilePageToMl(it) }
         }
     }
 
@@ -1748,9 +1878,15 @@ class UIModel(application: Application,
         viewModelScope.launch(Dispatchers.Default + CoroutineName("openLive coroutine")) {
             mutex.withLock {
                 activeLiveInputSource?.pause()
-                // End the current ML stream; resume will reset and accept again.
+                // End the current ML stream and drop liveSystem models until
+                // acquisition resumes.
                 liveMlAccepting = false
                 flushMlClientFinal()
+                (pipeline as? LiveUSBPipeline)?.let { live ->
+                    if (settings.isSmartHeterodyneSelected()) {
+                        ensureMlClient(live.sampleRateHz(), forceReset = true)
+                    }
+                }
             }
         }
     }
@@ -1852,11 +1988,9 @@ class UIModel(application: Application,
                         activeLiveInputSource?.resume()
                     }
 
-                    if (settings.isAutoIdEnabled()) {
-                        mlSummaryAccumulator.clear(MlSummaryMode.Live)
-                        ensureMlClient(p.sampleRateHz(), forceReset = true)
-                        liveMlAccepting = true
-                    }
+                    mlSummaryAccumulator.clear(MlSummaryMode.Live)
+                    liveMlAccepting = true
+                    ensureMlClient(p.sampleRateHz(), forceReset = true)
                 }
             }
 
@@ -1892,6 +2026,7 @@ class UIModel(application: Application,
         // Stop Auto Id and abandon any waiting work (do not flush — close should not
         // keep analysing after the user leaves the viewer/live session).
         liveMlAccepting = false
+        viewerSmartHet = ViewerSmartHet.Off
         discardQueuedMlWork(MlSummaryMode.Live)
 
         // Finish with the file writer:
@@ -1912,6 +2047,8 @@ class UIModel(application: Application,
 
         mutableDetailsTextFlow.value = null
         synchronized(mlLock) {
+            // Attach may have set ModelLoaded after the early Off above.
+            viewerSmartHet = ViewerSmartHet.Off
             clearMlClientLocked()
             // Drop results already delivered but not yet merged, then clear summary again
             // so an in-flight chunk cannot repopulate the panel after close.
@@ -1934,6 +2071,9 @@ class UIModel(application: Application,
         mlWillAcceptAudioCollectJob?.cancel()
         mlWillAcceptAudioCollectJob = null
         mutableMlWillAcceptAudioFlow.value = false
+        mlUserModelsActiveCollectJob?.cancel()
+        mlUserModelsActiveCollectJob = null
+        mutableMlUserModelsActiveFlow.value = false
         mlResultGeneration.incrementAndGet()
         mlClient?.shutdown()
         mlClient = null
@@ -1966,11 +2106,81 @@ class UIModel(application: Application,
                 }
             }
         }
+        mlUserModelsActiveCollectJob?.cancel()
+        mlUserModelsActiveCollectJob = viewModelScope.launch {
+            client.userModelsWillAcceptFlow.collect { active ->
+                mutableMlUserModelsActiveFlow.value = active
+            }
+        }
+    }
+
+    /**
+     * Smart heterodyne is selected and this session should run BatCNN:
+     * live acquisition is accepting audio, or viewer playback is running.
+     */
+    private fun shouldIncludeLiveSystemModels(): Boolean =
+        settings.isSmartHeterodyneSelected() &&
+            (liveMlAccepting || viewerSmartHet != ViewerSmartHet.Off)
+
+    /**
+     * BatCNN presence peaks tune smart heterodyne. The labels are bins,
+     * so they stay out of the species summary and recording metadata.
+     */
+    private fun forwardLiveSystemPeaks(result: MlResult) {
+        val peaks = result.detections.mapNotNull { detection ->
+            val hz = detection.fmaxeHz ?: return@mapNotNull null
+            val timeSec = detection.timeSec ?: return@mapNotNull null
+            AutoHeterodyneController.FmaxePeak(
+                result.observedAtEpochSec + timeSec,
+                hz,
+            )
+        }
+        if (peaks.isNotEmpty())
+            autoHeterodyne.onFmaxePeaks(peaks)
+    }
+
+    /**
+     * Auto Id hits: overlay, GUANO species notes, and classifier auto-trigger.
+     */
+    private fun recordSpeciesResult(
+        result: MlResult,
+        resultDesc: MlModelDescriptor?,
+        primary: MlModelDescriptor?,
+    ) {
+        mlSummaryAccumulator.submitResult(result)
+        if (result.detections.isEmpty())
+            return
+        fileWriter?.noteClassifierDetections(
+            result.observedAtEpochSec,
+            result.detections,
+        )
+        if (!settings.isClassifierAutoTrigger() || primary == null)
+            return
+        val top = result.detections.first()
+        val windowDesc = resultDesc ?: primary
+        val windowSec = Settings.classifierWindowDurationSec(
+            windowDesc.windowSamples,
+            windowDesc.sampleRateHz,
+        ) ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
+        val windowEnd = result.observedAtEpochSec + windowSec
+        Timber.i(
+            "CLF_REC_DBG classifier window %s → %s (%d detection(s))",
+            FileWriter.wallClock(result.observedAtEpochSec),
+            FileWriter.wallClock(windowEnd),
+            result.detections.size,
+        )
+        fileWriter?.triggerClassifier(
+            result.observedAtEpochSec,
+            top.labelKey,
+        )
     }
 
     /**
      * Ensure an [MlClient] exists and has been [MlClient.reset] for [sampleRateHz].
-     * Results are queued and merged into [mlSummaryFlow].
+     * The client is always fed audio. Classifiers and resampling run for the
+     * checked Auto Id families when Auto Id is enabled. `liveSystem` models
+     * are added when [shouldIncludeLiveSystemModels] is true. Results are queued
+     * and merged into [mlSummaryFlow].
      *
      * @param forceReset if true, always [MlClient.reset] even when the rate is unchanged
      *   (e.g. starting analysis of a new file page).
@@ -1978,6 +2188,9 @@ class UIModel(application: Application,
      * @param summaryMode Auto Id summary TTL policy applied when the client is reset
      * @param preferFileGuanoLocation when true (viewer), use GUANO `Loc Position` if
      *   present, otherwise [locationFlow]; when false (live), use [locationFlow] only
+     * @param clearSummary when false, keep the current Auto Id overlay across a
+     *   reset. Viewer smart-heterodyne playback uses this so species labels stay
+     *   up while BatCNN is added.
      */
     fun ensureMlClient(
         sampleRateHz: Int,
@@ -1985,29 +2198,37 @@ class UIModel(application: Application,
         overflowPolicy: MlOverflowPolicy = MlOverflowPolicy.DropIfFull,
         summaryMode: MlSummaryMode = MlSummaryMode.Live,
         preferFileGuanoLocation: Boolean = false,
+        clearSummary: Boolean = true,
     ) {
         require(sampleRateHz > 0) { "sampleRateHz must be > 0" }
-        require(settings.isAutoIdEnabled()) { "Auto Id must be enabled" }
         synchronized(mlLock) {
             MlCatalog.ensureInitialized(getApplication())
             val assets = getApplication<Application>().assets
-            val descriptors = MlActiveModels.resolve(assets, settings)
-            if (descriptors.isEmpty()) {
-                clearMlClientLocked()
-                mlClientSampleRateHz = null
-                return
+            val includeLiveSystem = shouldIncludeLiveSystemModels()
+            val descriptors = if (settings.isAutoIdEnabled() || includeLiveSystem) {
+                MlActiveModels.resolve(
+                    assets,
+                    settings,
+                    includeLiveSystemModels = includeLiveSystem,
+                )
+            } else {
+                emptyList()
             }
-            val primary = descriptors.first()
-            if (settings.autoIdModelId != primary.id) {
-                settings.autoIdModelId = primary.id
+            // Keep the stored Auto Id choice on a user-selected model. A
+            // liveSystem model must not become the persisted primary.
+            val settingsPrimary = descriptors.firstOrNull { !it.liveSystem }
+            if (settingsPrimary != null && settings.autoIdModelId != settingsPrimary.id) {
+                settings.autoIdModelId = settingsPrimary.id
                 settings.autoIdLanguage =
-                    settings.autoIdFamilyPrefs[primary.familyId]?.language
+                    settings.autoIdFamilyPrefs[settingsPrimary.familyId]?.language
                         ?: settings.autoIdLanguage
             }
+            val primary = descriptors.firstOrNull()
+            val primaryId = primary?.id ?: ""
             val activeIds = descriptors.map { it.id }
             val existing = mlClient
             if (existing != null &&
-                (existing.modelId != primary.id || existing.activeModelIds() != activeIds)
+                (existing.modelId != primaryId || existing.activeModelIds() != activeIds)
             ) {
                 clearMlClientLocked()
             }
@@ -2016,7 +2237,7 @@ class UIModel(application: Application,
                 val generation = mlResultGeneration.get()
                 MlClient(
                     getApplication(),
-                    primary.id,
+                    primaryId,
                     descriptors,
                 ) { result ->
                     // Drop late results from a previous client (model switch /
@@ -2024,34 +2245,11 @@ class UIModel(application: Application,
                     if (generation == mlResultGeneration.get() &&
                         mutableMlWillAcceptAudioFlow.value
                     ) {
-                        mlSummaryAccumulator.submitResult(result)
-                        if (result.detections.isNotEmpty()) {
-                            // Always record detections for GUANO Species Auto ID when
-                            // Auto Id is producing hits (any trigger mode).
-                            fileWriter?.noteClassifierDetections(
-                                result.observedAtEpochSec,
-                                result.detections,
-                            )
-                            if (settings.isClassifierAutoTrigger()) {
-                                val top = result.detections.first()
-                                val resultDesc = descriptorsById[result.modelId] ?: primary
-                                val windowSec = Settings.classifierWindowDurationSec(
-                                    resultDesc.windowSamples,
-                                    resultDesc.sampleRateHz,
-                                ) ?: Settings.CLASSIFIER_WINDOW_FALLBACK_SEC
-                                val windowEnd = result.observedAtEpochSec + windowSec
-                                Timber.i(
-                                    "CLF_REC_DBG classifier window %s → %s (%d detection(s))",
-                                    FileWriter.wallClock(result.observedAtEpochSec),
-                                    FileWriter.wallClock(windowEnd),
-                                    result.detections.size,
-                                )
-                                fileWriter?.triggerClassifier(
-                                    result.observedAtEpochSec,
-                                    top.labelKey,
-                                )
-                            }
-                        }
+                        val resultDesc = descriptorsById[result.modelId]
+                        if (resultDesc?.liveSystem == true)
+                            forwardLiveSystemPeaks(result)
+                        else
+                            recordSpeciesResult(result, resultDesc, primary)
                     }
                 }.also {
                     mlClient = it
@@ -2072,7 +2270,8 @@ class UIModel(application: Application,
             if (forceReset || mlClientSampleRateHz != sampleRateHz) {
                 client.reset(sampleRateHz)
                 mlClientSampleRateHz = sampleRateHz
-                mlSummaryAccumulator.clear(summaryMode)
+                if (clearSummary)
+                    mlSummaryAccumulator.clear(summaryMode)
             }
         }
     }
@@ -2155,9 +2354,8 @@ class UIModel(application: Application,
         }
     }
 
-    /** True when live Auto Id should accept the next raw buffer. */
-    fun shouldSubmitLiveAudioToMl(): Boolean =
-        settings.isAutoIdEnabled() && liveMlAccepting
+    /** True when live capture should feed the ML pipeline. */
+    fun shouldSubmitLiveAudioToMl(): Boolean = liveMlAccepting
 
     /**
      * Cheap path from [USBSourceStep]: submit samples to [MlClient] when Auto Id is
@@ -2194,15 +2392,17 @@ class UIModel(application: Application,
     }
 
     /**
-     * When Auto Id is enabled and [pipeline] is a file viewer with assigned raw PCM,
-     * reset the ML client and submit that page's samples.
+     * When [pipeline] is a file viewer with assigned raw PCM, reset the ML
+     * client and submit that page's samples. With no classifiers enabled the
+     * audio is still ingested and is not resampled.
      *
-     * Intended for file open, left/right paging, and turning Auto Id on — not for
+     * Intended for file open, left/right paging, and classifier changes — not for
      * zoom or other view-only reloads.
      */
     private fun submitFilePageToMl(pipeline: AbstractPipeline) {
-        if (!settings.isAutoIdEnabled()) return
         if (pipeline !is FileViewerPipeline) return
+        // Playback owns the client until [stopAudio] restores this page.
+        if (viewerSmartHet != ViewerSmartHet.Off) return
         val sampleRateHz = pipeline.sampleRateHz()
         if (sampleRateHz <= 0) return
         val (buffer, range) = pipeline.getAssignedRawDataBuffer() ?: return
@@ -2471,7 +2671,9 @@ class UIModel(application: Application,
             viewModelScope.launch(Dispatchers.Default + CoroutineName("onRescale coroutine")) {
                 mutex.withLock {
                     // Stop analysing the previous page immediately (reload can take a while).
-                    discardQueuedMlWork(MlSummaryMode.Viewer)
+                    // Leave a smart-heterodyne playback client alone; stop removes BatCNN.
+                    if (viewerSmartHet == ViewerSmartHet.Off)
+                        discardQueuedMlWork(MlSummaryMode.Viewer)
                     reload(
                         settings,
                         rawPageRange,

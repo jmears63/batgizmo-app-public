@@ -85,6 +85,11 @@ data class MlModelDescriptor(
      * columns; confidence currently comes from [BYOM_CONFIDENCE_COLUMN].
      */
     val outputColumns: List<String>? = null,
+    /**
+     * True for an internal family (`family.json` `liveSystem`). Omitted in JSON
+     * means false. Bring-your-own packs are never live-system families.
+     */
+    val liveSystem: Boolean = false,
 ) {
     /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
     val labelKeys: List<String> = labelCatalog.map { it.key }

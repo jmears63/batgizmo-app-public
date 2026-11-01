@@ -32,6 +32,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -55,6 +57,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -85,6 +88,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -154,8 +158,7 @@ class SettingsUI(private val model: UIModel) {
         var wavStorageVolume by rememberSaveable { mutableStateOf(model.settings.wavStorageVolume) }
         var autoTriggerMode by rememberSaveable { mutableStateOf(model.settings.autoTriggerMode) }
         var postTriggerTimeMs by rememberSaveable { mutableStateOf(model.settings.postTriggerTimeMs) }
-        val energyControlsEnabled =
-            autoTriggerMode == Settings.AutoTriggerModeOptions.ENERGY.value
+        var showEnergyTriggerDialog by rememberSaveable { mutableStateOf(false) }
         // Local so Language / Suppressions / enable react when Auto ID settings change
         // (model.settings is a plain var and does not trigger recomposition on its own):
         var autoIdEnabled by rememberSaveable { mutableStateOf(model.settings.autoIdEnabled) }
@@ -516,12 +519,65 @@ class SettingsUI(private val model: UIModel) {
 
             settingsSection(SettingsSection.RECORDING, expandedSections) {
                 item {
-                    MyCheckbox(
-                        "Include location in files", model.settings.includeLocationInFile
-                    ) { value: Boolean ->
-                        // Signal the updated settings values:
+                    fun selectTriggerMode(value: Int) {
+                        autoTriggerMode = value
+                        if (value == Settings.AutoTriggerModeOptions.CLASSIFIER.value) {
+                            autoIdEnabled = true
+                        }
                         scope.launch {
-                            model.updateStoredSettings(model.settings.copy(includeLocationInFile = value))
+                            model.updateStoredSettings(
+                                model.settings.copy(
+                                    autoTriggerMode = value,
+                                    autoIdEnabled = autoIdEnabled,
+                                )
+                            )
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text("Trigger method")
+                        Settings.AutoTriggerModeOptions.entries.forEach { option ->
+                            val selected = autoTriggerMode == option.value
+                            val opensEnergyDialog =
+                                option == Settings.AutoTriggerModeOptions.ENERGY
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = selected,
+                                    onClick = { selectTriggerMode(option.value) },
+                                )
+                                Text(
+                                    option.label,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable(
+                                            role = if (opensEnergyDialog) Role.Button
+                                            else Role.RadioButton,
+                                            onClickLabel = if (opensEnergyDialog)
+                                                "Energy threshold options" else null,
+                                            onClick = {
+                                                if (opensEnergyDialog)
+                                                    showEnergyTriggerDialog = true
+                                                else
+                                                    selectTriggerMode(option.value)
+                                            },
+                                        )
+                                        .padding(vertical = 8.dp),
+                                    color = if (opensEnergyDialog)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface,
+                                    textDecoration = if (opensEnergyDialog)
+                                        TextDecoration.Underline
+                                    else
+                                        TextDecoration.None,
+                                )
+                            }
                         }
                     }
                 }
@@ -632,90 +688,17 @@ class SettingsUI(private val model: UIModel) {
                 }
 
                 item {
-                    HorizontalDivider(thickness = 2.dp)
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MyListSelector<Settings.AutoTriggerModeOptions>(
-                            Settings.AutoTriggerModeOptions.entries,
-                            "Trigger type",
-                            autoTriggerMode
-                        ) { value: Int ->
-                            autoTriggerMode = value
-                            if (value == Settings.AutoTriggerModeOptions.CLASSIFIER.value) {
-                                autoIdEnabled = true
-                            }
-                            scope.launch {
-                                model.updateStoredSettings(
-                                    model.settings.copy(
-                                        autoTriggerMode = value,
-                                        autoIdEnabled = autoIdEnabled,
-                                    )
-                                )
-                            }
+                    MyCheckbox(
+                        "Include location in files", model.settings.includeLocationInFile
+                    ) { value: Boolean ->
+                        scope.launch {
+                            model.updateStoredSettings(
+                                model.settings.copy(includeLocationInFile = value)
+                            )
                         }
                     }
                 }
 
-                item {
-                    // State to hold the current color
-                    var color by remember { mutableStateOf(androidx.compose.ui.graphics.Color.DarkGray) }
-
-                    // Collect events from the channel in a LaunchedEffect
-                    LaunchedEffect(model.triggerMonitorChannel) {
-                        var redTimeoutJob: Job? = null
-
-                        for (event in model.triggerMonitorChannel) {
-                            // Set color to red immediately
-                            color = androidx.compose.ui.graphics.Color.Red
-
-                            // Cancel any existing timeout job
-                            redTimeoutJob?.cancel()
-
-                            // Start a new timeout coroutine to reset color after 500ms
-                            redTimeoutJob = launch {
-                                delay(500)
-                                color = androidx.compose.ui.graphics.Color.DarkGray
-                            }
-                        }
-                    }
-                    val lampLabelColor = if (energyControlsEnabled)
-                        MaterialTheme.colorScheme.onSurface
-                    else
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Trigger", color = lampLabelColor)
-                        MyLamp2(20.dp, color, enabled = energyControlsEnabled)
-                    }
-                }
-
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MyFloatSlider("Trigger threshold (dB)", "%.1f",
-                            model.settings.autoTriggerThresholdDb, -25f..70f,
-                            enabled = energyControlsEnabled) {
-                            value: Float ->
-                            scope.launch {
-                                model.updateStoredSettings(model.settings.copy(autoTriggerThresholdDb = value))
-                            }
-                        }
-                    }
-                }
-
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        MyFloatRangeSlider("Trigger range (kHz)", "%.1f",
-                            model.settings.autoTriggerRangeMinkHz,
-                            model.settings.autoTriggerRangeMaxkHz,
-                            10f..120f,
-                            enabled = energyControlsEnabled) {
-                                range: ClosedFloatingPointRange<Float> ->
-                            scope.launch {
-                                model.updateStoredSettings(model.settings.copy(
-                                    autoTriggerRangeMinkHz = range.start, autoTriggerRangeMaxkHz = range.endInclusive))
-                            }
-                        }
-                    }
-                }
             }
 
             settingsSection(SettingsSection.AUTO_ID, expandedSections) {
@@ -763,6 +746,9 @@ class SettingsUI(private val model: UIModel) {
                     }
                     val families = remember(descriptors) {
                         descriptors
+                            // Live-system families (family.json "liveSystem") are internal and
+                            // are not offered for selection.
+                            .filter { !it.liveSystem }
                             .groupBy { it.familyId }
                             .map { (familyId, variants) ->
                                 AutoIdFamily(
@@ -953,14 +939,12 @@ class SettingsUI(private val model: UIModel) {
                         families.forEach { family ->
                             key(family.id) {
                                 val checked = family.id in autoIdEnabledFamilyIds
-                                val nameClickable = autoIdEnabled && checked
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Checkbox(
                                         checked = checked,
-                                        enabled = autoIdEnabled,
                                         onCheckedChange = { setFamilyChecked(family, it) },
                                     )
                                     Text(
@@ -968,22 +952,13 @@ class SettingsUI(private val model: UIModel) {
                                         modifier = Modifier
                                             .weight(1f)
                                             .clickable(
-                                                enabled = nameClickable,
                                                 role = Role.Button,
                                                 onClickLabel = "Classifier options",
                                                 onClick = { optionsFamilyId = family.id },
                                             )
                                             .padding(vertical = 8.dp),
-                                        color = if (nameClickable) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        },
-                                        textDecoration = if (nameClickable) {
-                                            TextDecoration.Underline
-                                        } else {
-                                            TextDecoration.None
-                                        },
+                                        color = MaterialTheme.colorScheme.primary,
+                                        textDecoration = TextDecoration.Underline,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                     )
@@ -1062,8 +1037,6 @@ class SettingsUI(private val model: UIModel) {
                     val optionsFamily = optionsFamilyId
                         ?.let { id -> families.firstOrNull { it.id == id } }
                     if (optionsFamily != null) {
-                        val rowEnabled =
-                            autoIdEnabled && optionsFamily.id in autoIdEnabledFamilyIds
                         val selectedVariant = defaultVariantFor(optionsFamily)
                         val languages = selectedVariant.languages
                         val prefLanguage = autoIdFamilyPrefs[optionsFamily.id]?.language
@@ -1075,8 +1048,7 @@ class SettingsUI(private val model: UIModel) {
                             variantOptions =
                                 optionsFamily.variants.map { it.id to it.displayName },
                             selectedVariantId = selectedVariant.id,
-                            variantEnabled =
-                                rowEnabled && optionsFamily.variants.size > 1,
+                            variantEnabled = optionsFamily.variants.size > 1,
                             onVariantSelected = { variantId ->
                                 persistFamilyVariant(optionsFamily.id, variantId)
                             },
@@ -1084,7 +1056,7 @@ class SettingsUI(private val model: UIModel) {
                                 i.toString() to name
                             },
                             selectedLanguage = selectedLanguage.toString(),
-                            languageEnabled = rowEnabled && languages.size > 1,
+                            languageEnabled = languages.size > 1,
                             onLanguageSelected = { value ->
                                 val index = value.toIntOrNull()
                                     ?.takeIf { it in languages.indices }
@@ -1092,7 +1064,7 @@ class SettingsUI(private val model: UIModel) {
                                 persistFamilyLanguage(optionsFamily.id, index)
                             },
                             showSuppressions = selectedVariant.enableSuppressionsButton,
-                            suppressionsEnabled = rowEnabled,
+                            suppressionsEnabled = true,
                             onSuppressions = { suppressionsFamilyId = optionsFamily.id },
                             showRemove = optionsFamily.isByom,
                             removeEnabled = !importBusy,
@@ -1274,7 +1246,100 @@ class SettingsUI(private val model: UIModel) {
                 }
             }
         }
+
+        if (showEnergyTriggerDialog) {
+            EnergyTriggerDialog(
+                thresholdDb = model.settings.autoTriggerThresholdDb,
+                rangeMinKhz = model.settings.autoTriggerRangeMinkHz,
+                rangeMaxKhz = model.settings.autoTriggerRangeMaxkHz,
+                onThresholdDb = { value ->
+                    scope.launch {
+                        model.updateStoredSettings(
+                            model.settings.copy(autoTriggerThresholdDb = value)
+                        )
+                    }
+                },
+                onRangeKhz = { range ->
+                    scope.launch {
+                        model.updateStoredSettings(
+                            model.settings.copy(
+                                autoTriggerRangeMinkHz = range.start,
+                                autoTriggerRangeMaxkHz = range.endInclusive,
+                            )
+                        )
+                    }
+                },
+                triggerEvents = model.triggerMonitorChannel,
+                onDismiss = { showEnergyTriggerDialog = false },
+            )
+        }
     }
+}
+
+/**
+ * Energy-threshold indicator, level, and frequency range. Changes are stored
+ * as the sliders are released.
+ */
+@Composable
+private fun EnergyTriggerDialog(
+    thresholdDb: Float,
+    rangeMinKhz: Float,
+    rangeMaxKhz: Float,
+    onThresholdDb: (Float) -> Job,
+    onRangeKhz: (ClosedFloatingPointRange<Float>) -> Job,
+    triggerEvents: Channel<Unit>,
+    onDismiss: () -> Unit,
+) {
+    var color by remember { mutableStateOf(androidx.compose.ui.graphics.Color.DarkGray) }
+
+    LaunchedEffect(triggerEvents) {
+        var redTimeoutJob: Job? = null
+        for (event in triggerEvents) {
+            color = androidx.compose.ui.graphics.Color.Red
+            redTimeoutJob?.cancel()
+            redTimeoutJob = launch {
+                delay(500)
+                color = androidx.compose.ui.graphics.Color.DarkGray
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Energy threshold") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Trigger")
+                    MyLamp2(20.dp, color)
+                }
+                MyFloatSlider(
+                    "Trigger threshold (dB)",
+                    "%.1f",
+                    thresholdDb,
+                    -25f..70f,
+                    onChange = onThresholdDb,
+                )
+                MyFloatRangeSlider(
+                    "Trigger range (kHz)",
+                    "%.1f",
+                    rangeMinKhz,
+                    rangeMaxKhz,
+                    10f..120f,
+                    onChange = onRangeKhz,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
 }
 
 /**

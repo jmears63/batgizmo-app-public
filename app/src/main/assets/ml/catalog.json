@@ -1,7 +1,8 @@
 {
   "families": [
     "battybirdnet",
-    "birdnet"
+    "birdnet",
+    "batcnn"
   ],
   "defaultModelId": "battybirdnet/uk-256khz"
 }

@@ -487,12 +487,13 @@ class SpectrogramUI(
         }
 
         /**
-         * Auto-tuned heterodyne: keep the spectrogram cursor on the tracked LO.
+         * Tracked heterodyne: keep the spectrogram cursor on the LO.
+         * Auto uses the activity tracker; smart uses BatCNN FmaxE.
          */
         LaunchedEffect(Unit) {
             model.autoHeterodyneRefkHzFlow.collectLatest { refkHz ->
                 val sampleRateHz = uiState.samplingRateHz.value ?: return@collectLatest
-                if (!model.settings.isAutoTunedHeterodynePlayback(sampleRateHz))
+                if (!model.settings.isTrackedHeterodynePlayback(sampleRateHz))
                     return@collectLatest
                 if (uiState.audioMode.intValue != AudioMode.ON.value)
                     return@collectLatest
@@ -899,14 +900,17 @@ class SpectrogramUI(
                     verticalAlignment = Alignment.Top
                 ) {
                     if (localAutoId.current) {
-                        // Sparkle / results only while Auto Id has a session context and the
-                        // client will accept audio at the current sample rate.
-                        // Hidden after the viewer is closed (live with acquisition off),
-                        // or when the rate is below the model minimum.
+                        // Sparkle only while a user-selected classifier accepts this
+                        // sample rate. Results stay while any model does.
+                        // Hidden after the viewer is closed (live with acquisition off).
                         val mlWillAcceptAudio by
                             model.mlWillAcceptAudioFlow.collectAsStateWithLifecycle()
+                        val mlUserModelsActive by
+                            model.mlUserModelsActiveFlow.collectAsStateWithLifecycle()
+                        // The symbol tracks user-selected classifiers only.
+                        // Internal liveSystem models do not show it.
                         val showSparkle =
-                            mlWillAcceptAudio &&
+                            mlUserModelsActive &&
                                 (appMode.intValue == AppMode.VIEWER.value ||
                                     uiState.liveMode.intValue in setOf(
                                         LiveMode.STREAMING.value,
@@ -1028,9 +1032,9 @@ class SpectrogramUI(
 
             // Heterodyne cursors: same data-area bounds as the chrome above.
             val sampleRateHz = uiState.samplingRateHz.value
-            val autoHet = sampleRateHz != null &&
-                model.settings.isAutoTunedHeterodynePlayback(sampleRateHz)
-            if (!autoHet || localShowHeterodyneReferenceLine.current)
+            val trackedHet = sampleRateHz != null &&
+                model.settings.isTrackedHeterodynePlayback(sampleRateHz)
+            if (!trackedHet || localShowHeterodyneReferenceLine.current)
                 heterodyneCursors.Compose()
         }
     }
@@ -1141,7 +1145,7 @@ class SpectrogramUI(
                     else
                         null
             }
-            audioOn && model.settings.isAutoTunedHeterodynePlayback(sampleRateHz) -> {
+            audioOn && model.settings.isTrackedHeterodynePlayback(sampleRateHz) -> {
                 uiState.heterodyneRef1kHz.value =
                     model.autoHeterodyneRefkHzFlow.value ?: 50
                 uiState.heterodyneRef2kHz.value = null

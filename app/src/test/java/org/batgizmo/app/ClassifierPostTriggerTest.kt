@@ -87,7 +87,20 @@ class ClassifierPostTriggerTest {
         val s = Settings()
         assertEquals(Settings.AutoTriggerModeOptions.ENERGY.value, s.autoTriggerMode)
         assertEquals(true, s.isEnergyAutoTrigger())
+        assertEquals(false, s.isSmartAutoTrigger())
         assertEquals(false, s.isClassifierAutoTrigger())
+    }
+
+    @Test
+    fun triggerModesAreEnergyThenSmartThenClassifier() {
+        assertEquals(
+            listOf(
+                Settings.AutoTriggerModeOptions.ENERGY,
+                Settings.AutoTriggerModeOptions.SMART,
+                Settings.AutoTriggerModeOptions.CLASSIFIER,
+            ),
+            Settings.AutoTriggerModeOptions.entries,
+        )
     }
 
     @Test

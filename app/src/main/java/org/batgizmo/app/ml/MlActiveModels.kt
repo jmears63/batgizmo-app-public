@@ -27,10 +27,12 @@ import org.batgizmo.app.Settings
 import timber.log.Timber
 
 /**
- * Resolves the runtime Auto Id model set: checked Settings families (each with
- * its preferred variant) plus any internal companions (e.g. BatCNN).
+ * Resolves the runtime model set: checked Settings families (each with its
+ * preferred variant) when Auto Id is on, then any `liveSystem` families when
+ * the caller asks for them.
  *
- * Callers must [MlCatalog.ensureInitialized] first.
+ * Callers must [MlCatalog.ensureInitialized] first. The caller decides whether
+ * this session should run `liveSystem` models.
  */
 object MlActiveModels {
     /**
@@ -40,33 +42,53 @@ object MlActiveModels {
     fun companionModelIds(): List<String> = emptyList()
 
     /**
-     * Descriptors for [Settings.autoIdEnabledFamilyIds] (variant from
-     * [Settings.autoIdFamilyPrefs] or family default), then companions.
-     * Empty when no families are checked or none resolve.
+     * True when a `liveSystem` model can ingest [sampleRateHz].
+     * Callers must [MlCatalog.ensureInitialized] first.
      */
-    fun resolve(assets: AssetManager, settings: Settings): List<MlModelDescriptor> {
+    fun liveSystemAccepts(assets: AssetManager, sampleRateHz: Int): Boolean {
+        if (sampleRateHz <= 0) return false
+        return liveSystemVariants(MlCatalog.listDescriptors(assets))
+            .any { sampleRateHz >= it.minSampleRateHz }
+    }
+
+    /**
+     * User-selected descriptors when Auto Id is on, then `liveSystem` models
+     * when [includeLiveSystemModels] is true, then companions. Empty when
+     * neither source contributes a model.
+     *
+     * @param includeLiveSystemModels true when this session should run
+     * internal `liveSystem` models. The caller has already decided that.
+     */
+    fun resolve(
+        assets: AssetManager,
+        settings: Settings,
+        includeLiveSystemModels: Boolean = false,
+    ): List<MlModelDescriptor> {
         val all = MlCatalog.listDescriptors(assets)
         val byFamily = all.groupBy { it.familyId }
         val seen = linkedSetOf<String>()
         val selected = ArrayList<MlModelDescriptor>()
 
-        for (familyId in settings.autoIdEnabledFamilyIds) {
-            val variants = byFamily[familyId]
-            if (variants.isNullOrEmpty()) {
-                Timber.w("MlActiveModels: enabled family $familyId not in catalog")
-                continue
+        if (settings.isAutoIdEnabled()) {
+            for (familyId in settings.autoIdEnabledFamilyIds) {
+                val variants = byFamily[familyId]
+                if (variants.isNullOrEmpty()) {
+                    Timber.w("MlActiveModels: enabled family $familyId not in catalog")
+                    continue
+                }
+                val chosen = chooseVariant(variants, settings.autoIdFamilyPrefs[familyId]?.variantId)
+                if (chosen.id in seen) continue
+                seen.add(chosen.id)
+                selected.add(chosen)
             }
-            val sorted = variants.sortedWith(
-                compareBy<MlModelDescriptor> { it.id != it.familyDefaultVariantId }
-                    .thenBy { it.displayName }
-            )
-            val pref = settings.autoIdFamilyPrefs[familyId]
-            val chosen = pref?.variantId
-                ?.let { id -> sorted.firstOrNull { it.id == id } }
-                ?: sorted.first()
-            if (chosen.id in seen) continue
-            seen.add(chosen.id)
-            selected.add(chosen)
+        }
+
+        if (includeLiveSystemModels) {
+            for (desc in liveSystemVariants(all)) {
+                if (desc.id in seen) continue
+                seen.add(desc.id)
+                selected.add(desc)
+            }
         }
 
         for (id in companionModelIds()) {
@@ -81,4 +103,33 @@ object MlActiveModels {
         }
         return selected
     }
+
+    /** Every `liveSystem` variant, family default first within each family. */
+    private fun liveSystemVariants(all: List<MlModelDescriptor>): List<MlModelDescriptor> {
+        val selected = ArrayList<MlModelDescriptor>()
+        for ((_, variants) in all.groupBy { it.familyId }) {
+            if (variants.none { it.liveSystem }) continue
+            for (desc in sortVariants(variants)) {
+                if (desc.liveSystem) selected.add(desc)
+            }
+        }
+        return selected
+    }
+
+    private fun chooseVariant(
+        variants: List<MlModelDescriptor>,
+        preferredId: String?,
+    ): MlModelDescriptor {
+        val sorted = sortVariants(variants)
+        return preferredId
+            ?.let { id -> sorted.firstOrNull { it.id == id } }
+            ?: sorted.first()
+    }
+
+    /** Family default first, then display name. */
+    private fun sortVariants(variants: List<MlModelDescriptor>): List<MlModelDescriptor> =
+        variants.sortedWith(
+            compareBy<MlModelDescriptor> { it.id != it.familyDefaultVariantId }
+                .thenBy { it.displayName }
+        )
 }

@@ -34,15 +34,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.batgizmo.app.pipeline.AbstractPipeline
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.exp
 import kotlin.math.roundToInt
 
 /**
- * Orchestrates auto-tuned heterodyne: activity tracking, LO EWMA smoothing,
- * live/viewer work queue, and applying the resulting LO via [applyHeterodyneLo].
+ * Orchestrates auto-tuned and smart heterodyne. Both smooth an observed
+ * frequency and apply LO = observation − 500 Hz. Auto observes the activity
+ * tracker; smart observes BatCNN FmaxE at each presence peak. Either way the
+ * worker channel carries one request: the resulting reference in kHz.
  *
- * Algorithm details live in [AutoHeterodyneActivityTracker]; this class owns
- * session state and async updates while audio output is active.
+ * Live smart heterodyne applies each peak when inference returns. Viewer
+ * playback holds peaks and applies them when the playhead reaches their time,
+ * so a whole-buffer analysis does not run the LO ahead of the audio.
+ *
+ * This class owns session state and async updates while audio output is active.
  */
 class AutoHeterodyneController(
     private val scope: CoroutineScope,
@@ -66,19 +73,39 @@ class AutoHeterodyneController(
     private val activity = AutoHeterodyneActivityTracker()
     /** Last spectrogram time bucket processed by the activity tracker. */
     private var lastProcessedBucket: Int? = null
+    /** Epoch seconds of the last BatCNN FmaxE applied for smart heterodyne. */
+    private var lastFmaxeEpochSec: Double? = null
+    /**
+     * Bumped in [resetTracker] so an in-flight peak or playhead update from the
+     * previous audio session cannot move the LO.
+     */
+    @Volatile private var trackingGeneration = 0
+    /**
+     * Viewer smart heterodyne: FmaxE times are seconds from [playheadOriginSample].
+     * Peaks stay in [heldPeaks] until the playhead reaches them, including across
+     * a loop rewind. Written under [mutex]; the audio thread reads it to decide
+     * whether to enqueue.
+     */
+    @Volatile private var playheadGate = false
+    private var playheadOriginSample = 0
+    private var playheadRateHz = 0
+    private var lastPlayheadSec: Double? = null
+    private val playheadSample = AtomicInteger(0)
+    private val playheadApplyQueued = AtomicBoolean(false)
+    private val heldPeaks = ArrayList<FmaxePeak>()
     /** Viewer: skip enqueue until the playhead enters a new time bucket. */
     private var lastEnqueuedBucket: Int? = null
     private var viewerStride: Int? = null
     private var viewerTimeBucketCount: Int? = null
-    private val workChannel = Channel<Work>(Channel.BUFFERED)
+    /** Heterodyne reference to apply, in kHz. */
+    private data class ReferenceRequest(val refkHz: Int)
+    private val workChannel = Channel<ReferenceRequest>(Channel.BUFFERED)
     private var workerJob: Job? = null
     /** Serializes activity/reference updates. */
     private val mutex = Mutex()
 
-    private sealed interface Work {
-        data class TimeBuckets(val range: IntRange) : Work
-        data class ViewerSample(val sampleIndex: Int) : Work
-    }
+    /** One BatCNN presence-peak FmaxE, at an absolute epoch time. */
+    data class FmaxePeak(val epochSec: Double, val hz: Float)
 
     fun setDisplayedRefkHz(kHz: Int) {
         mutableRefkHz.value = kHz
@@ -86,11 +113,38 @@ class AutoHeterodyneController(
 
     suspend fun resetTracker() {
         mutex.withLock {
+            trackingGeneration++
+            clearPlayheadGateLocked()
             smoothedHz = null
             mutableRefkHz.value = null
             lastProcessedBucket = null
+            lastFmaxeEpochSec = null
             lastEnqueuedBucket = null
             activity.reset()
+        }
+    }
+
+    /**
+     * Viewer smart heterodyne. [originSample] is the page-buffer index of the
+     * first sample submitted to BatCNN. Peak epochs are seconds after that sample.
+     */
+    suspend fun beginPlayheadGatedPeaks(originSample: Int, sampleRateHz: Int) {
+        mutex.withLock {
+            playheadGate = true
+            playheadOriginSample = originSample
+            playheadRateHz = sampleRateHz
+            lastPlayheadSec = null
+            lastFmaxeEpochSec = null
+            heldPeaks.clear()
+            playheadSample.set(originSample)
+        }
+    }
+
+    /** Drop viewer peak holding without clearing the current LO. */
+    suspend fun clearPlayheadGate() {
+        mutex.withLock {
+            trackingGeneration++
+            clearPlayheadGateLocked()
         }
     }
 
@@ -121,25 +175,8 @@ class AutoHeterodyneController(
         workerJob = scope.launch(
             Dispatchers.Default + CoroutineName("autoHetWorker")
         ) {
-            for (work in workChannel) {
-                when (work) {
-                    is Work.TimeBuckets ->
-                        processTimeBuckets(work.range)
-                    is Work.ViewerSample -> {
-                        val pl = pipeline() ?: continue
-                        val bucket =
-                            pl.timeBucketForRawSampleIndex(work.sampleIndex) ?: continue
-                        val buckets = mutex.withLock {
-                            val last = lastProcessedBucket
-                            when {
-                                last != null && bucket < last -> bucket..bucket
-                                last != null && bucket > last -> (last + 1)..bucket
-                                else -> bucket..bucket
-                            }
-                        }
-                        processTimeBuckets(buckets)
-                    }
-                }
+            for (request in workChannel) {
+                applyHeterodyneLo(request.refkHz)
             }
         }
     }
@@ -165,7 +202,7 @@ class AutoHeterodyneController(
         if (buckets.isEmpty())
             return
 
-        workChannel.trySend(Work.TimeBuckets(buckets))
+        enqueueReference { referenceFromBuckets(buckets) }
     }
 
     /**
@@ -184,7 +221,77 @@ class AutoHeterodyneController(
                 return
             lastEnqueuedBucket = bucket
         }
-        workChannel.trySend(Work.ViewerSample(sampleIndex))
+        enqueueReference {
+            val pl = pipeline() ?: return@enqueueReference null
+            val column = pl.timeBucketForRawSampleIndex(sampleIndex) ?: return@enqueueReference null
+            val last = lastProcessedBucket
+            val range = when {
+                last != null && column < last -> column..column
+                last != null && column > last -> (last + 1)..column
+                else -> column..column
+            }
+            referenceFromBuckets(range)
+        }
+    }
+
+    /**
+     * Smart heterodyne: set the reference from BatCNN presence-peak FmaxE
+     * values, using the same smoothing and 500 Hz offset as auto heterodyne.
+     * During viewer playback the peaks are held until [onViewerPlayhead].
+     */
+    fun onFmaxePeaks(peaks: List<FmaxePeak>) {
+        if (!isAudioOutputActive() || peaks.isEmpty())
+            return
+        val sampleRateHz = pipeline()?.sampleRateHz() ?: return
+        if (!settings().isSmartHeterodynePlayback(sampleRateHz))
+            return
+        val generation = trackingGeneration
+        enqueueReference {
+            if (generation != trackingGeneration)
+                return@enqueueReference null
+            if (playheadGate) {
+                heldPeaks.addAll(peaks)
+                heldPeaks.sortBy { it.epochSec }
+                referenceUpToPlayhead()
+            } else {
+                referenceFromFmaxe(peaks)
+            }
+        }
+    }
+
+    /**
+     * Viewer playback position, as an index into the page buffer (the same
+     * coordinate as audio progress). No-op unless [beginPlayheadGatedPeaks]
+     * is active.
+     */
+    fun onViewerPlayhead(sampleIndex: Int) {
+        if (sampleIndex < 0)
+            return
+        playheadSample.set(sampleIndex)
+        if (!playheadGate)
+            return
+        if (!playheadApplyQueued.compareAndSet(false, true))
+            return
+        val generation = trackingGeneration
+        enqueueReference {
+            playheadApplyQueued.set(false)
+            if (!playheadGate || generation != trackingGeneration)
+                return@enqueueReference null
+            referenceUpToPlayhead()
+        }
+    }
+
+    /**
+     * Derive a reference on a background coroutine, then queue that one request.
+     * [derive] runs while [mutex] is held.
+     */
+    private fun enqueueReference(derive: suspend () -> Int?) {
+        scope.launch(Dispatchers.Default) {
+            mutex.withLock {
+                val refkHz = derive() ?: return@withLock
+                workChannel.trySend(ReferenceRequest(refkHz))
+            }
+        }
     }
 
     private fun viewerBucketForSample(sampleIndex: Int): Int? {
@@ -203,52 +310,113 @@ class AutoHeterodyneController(
         return minKhz * 1000f to maxKhz * 1000f
     }
 
-    private suspend fun processTimeBuckets(buckets: IntRange) {
-        val refkHz = mutex.withLock {
-            val pl = pipeline() ?: return
-            val dt = pl.transformedTimeIntervalSeconds() ?: return
-            if (dt <= 0f)
-                return
-            val (minHz, maxHz) = activitySearchBandHz()
-            val (filterMinHz, filterMaxHz) = spanFilterBandHz()
-            val bucketList = buckets.toList()
-            if (bucketList.isEmpty())
-                return
+    private suspend fun referenceFromBuckets(buckets: IntRange): Int? {
+        val pl = pipeline() ?: return null
+        val dt = pl.transformedTimeIntervalSeconds() ?: return null
+        if (dt <= 0f)
+            return null
+        val (minHz, maxHz) = activitySearchBandHz()
+        val (filterMinHz, filterMaxHz) = spanFilterBandHz()
+        val bucketList = buckets.toList()
+        if (bucketList.isEmpty())
+            return null
 
-            val geo = pl.frequencyBandGeometry(minHz, maxHz) ?: return
-            activity.ensureGeometry(
-                geo.bandBins, geo.minFreqBucket, geo.dfHz, dt
-            )
-            val band = activity.bandScratch(geo.bandBins)
+        val geo = pl.frequencyBandGeometry(minHz, maxHz) ?: return null
+        activity.ensureGeometry(
+            geo.bandBins, geo.minFreqBucket, geo.dfHz, dt
+        )
+        val band = activity.bandScratch(geo.bandBins)
 
-            var lastRef: Int? = null
-            for (bucket in bucketList) {
-                val lastBucket = lastProcessedBucket
-                if (lastBucket != null && bucket < lastBucket) {
-                    // Looped viewer (or other rewind): tracker state must match column data.
-                    activity.reset()
-                    lastProcessedBucket = null
-                    lastEnqueuedBucket = null
-                } else if (lastBucket != null && bucket <= lastBucket) {
-                    continue
-                }
-
-                pl.fillFrequencyBand(bucket, minHz, maxHz, band) ?: continue
-                val obs = activity.processColumn(
-                    band, dt, settings().autoHeterodyneMode, filterMinHz, filterMaxHz
-                )
-                lastProcessedBucket = bucket
-                if (obs != null)
-                    lastRef = applyObservation(obs.hz, dt)
+        var lastRef: Int? = null
+        for (bucket in bucketList) {
+            val lastBucket = lastProcessedBucket
+            if (lastBucket != null && bucket < lastBucket) {
+                // Looped viewer (or other rewind): tracker state must match column data.
+                activity.reset()
+                lastProcessedBucket = null
+                lastEnqueuedBucket = null
+            } else if (lastBucket != null && bucket <= lastBucket) {
+                continue
             }
-            lastRef
-        } ?: return
 
-        applyHeterodyneLo(refkHz)
+            pl.fillFrequencyBand(bucket, minHz, maxHz, band) ?: continue
+            val obs = activity.processColumn(
+                band, dt, settings().autoHeterodyneMode, filterMinHz, filterMaxHz
+            )
+            lastProcessedBucket = bucket
+            if (obs != null)
+                lastRef = applyObservation(obs.hz, dt)
+        }
+        return lastRef
+    }
+
+    private fun clearPlayheadGateLocked() {
+        playheadGate = false
+        playheadOriginSample = 0
+        playheadRateHz = 0
+        lastPlayheadSec = null
+        heldPeaks.clear()
+        playheadSample.set(0)
+        playheadApplyQueued.set(false)
     }
 
     /**
-     * EWMA reference from activity-span observation (τ = [REF_TAU_S]).
+     * Apply held viewer peaks whose time is at or before the playhead.
+     * A backward playhead (loop) starts smoothing again from the peaks
+     * up to the new position. Caller holds [mutex].
+     */
+    private fun referenceUpToPlayhead(): Int? {
+        val rate = playheadRateHz
+        if (!playheadGate || rate <= 0)
+            return null
+        val playheadSec =
+            (playheadSample.get() - playheadOriginSample).toDouble() / rate
+        val previousPlayhead = lastPlayheadSec
+        if (previousPlayhead != null &&
+            playheadSec < previousPlayhead &&
+            settings().loopedAudioPlayback
+        ) {
+            smoothedHz = null
+            lastFmaxeEpochSec = null
+        }
+        lastPlayheadSec = playheadSec
+        val appliedThrough = lastFmaxeEpochSec
+        val due = heldPeaks.filter { peak ->
+            peak.epochSec <= playheadSec &&
+                (appliedThrough == null || peak.epochSec > appliedThrough)
+        }
+        if (due.isEmpty())
+            return null
+        return referenceFromFmaxe(due)
+    }
+
+    /**
+     * Presence-peak FmaxE values in time order. A peak older than the last
+     * one applied is ignored. Caller holds [mutex].
+     */
+    private fun referenceFromFmaxe(peaks: List<FmaxePeak>): Int? {
+        val sampleRateHz = pipeline()?.sampleRateHz() ?: return null
+        if (!settings().isSmartHeterodynePlayback(sampleRateHz))
+            return null
+        val nyquistHz = sampleRateHz / 2f
+        var lastRef: Int? = null
+        for (peak in peaks.sortedBy { it.epochSec }) {
+            if (!peak.hz.isFinite() || peak.hz <= 0f || peak.hz >= nyquistHz)
+                continue
+            val previous = lastFmaxeEpochSec
+            if (previous != null && peak.epochSec < previous)
+                continue
+            val dt = if (previous == null) 0f else (peak.epochSec - previous).toFloat()
+            lastFmaxeEpochSec = peak.epochSec
+            val ref = applyObservation(peak.hz, dt)
+            if (ref != null)
+                lastRef = ref
+        }
+        return lastRef
+    }
+
+    /**
+     * EWMA reference from an observation (τ = [REF_TAU_S]).
      * LO = reference − 500 Hz. Caller must hold [mutex]. Returns LO kHz.
      */
     private fun applyObservation(observationHz: Float, dtSeconds: Float): Int? {

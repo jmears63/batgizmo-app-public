@@ -176,12 +176,12 @@ class HeterodyneCursors(
                 }
 
                 val sampleRateHz = model.pipelineSampleRateHz()
-                val autoTuned = sampleRateHz?.let {
-                    model.settings.isAutoTunedHeterodynePlayback(it)
+                val tracked = sampleRateHz?.let {
+                    model.settings.isTrackedHeterodynePlayback(it)
                 } == true
 
-                // Auto-tuned mode: tracked LO line only (not draggable).
-                if (!autoTuned) {
+                // Tracked modes: reference line only (not draggable).
+                if (!tracked) {
                     drawDraggable(offsetY1, heterodyneRef1kHz) { kHz: Int ->
                         model.settings.copy(heterodyneRef1kHz = kHz)
                     }

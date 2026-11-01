@@ -98,6 +98,12 @@ class MlPipelineSpecTest {
     }
 
     @Test
+    fun build_withNoModelsHasNoRateBranches() {
+        val spec = MlPipelineSpec.build(emptyList(), captureSampleRateHz = 256_000)
+        assertEquals(0, spec.rateBranches.size)
+    }
+
+    @Test
     fun build_omitsModelsBelowMinCaptureRate() {
         val highMin = descriptor(
             "bat/a",

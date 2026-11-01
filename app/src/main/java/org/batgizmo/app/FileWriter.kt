@@ -181,9 +181,11 @@ class FileWriter(
             return names.joinToString(", ")
         }
 
-        fun autoTriggerType(settings: Settings): TriggerType =
-            if (settings.isClassifierAutoTrigger()) TriggerType.AUTO_CLASSIFIER
-            else TriggerType.AUTO_ENERGY
+        fun autoTriggerType(settings: Settings): TriggerType = when {
+            settings.isClassifierAutoTrigger() -> TriggerType.AUTO_CLASSIFIER
+            settings.isSmartAutoTrigger() -> TriggerType.AUTO_SMART
+            else -> TriggerType.AUTO_ENERGY
+        }
     }
 
     enum class TriggerType(val value: Int, val str: String) {
@@ -191,9 +193,11 @@ class FileWriter(
         AUTO_ENERGY(1, "AutoEnergy"),
         MANUAL(2, "Manual"),
         AUTO_CLASSIFIER(3, "AutoClassifier"),
+        AUTO_SMART(4, "AutoSmart"),
         CONTINUATION(100, "Continuation");
 
-        fun isAutoLike(): Boolean = this == AUTO_ENERGY || this == AUTO_CLASSIFIER
+        fun isAutoLike(): Boolean =
+            this == AUTO_ENERGY || this == AUTO_CLASSIFIER || this == AUTO_SMART
     }
 
     data class TriggerConfig(

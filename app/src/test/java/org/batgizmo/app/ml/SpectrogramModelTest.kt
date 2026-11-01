@@ -114,4 +114,162 @@ class SpectrogramModelTest {
     fun fmaxeIsShownInKhz() {
         assertEquals("45.2 kHz", formatFmaxeKhz(45230f))
     }
+
+    @Test
+    fun pulseLengthOutputIsTheNamedTensor() {
+        val names = listOf("presence_prob", "fmaxe_hz", "pulse_length_s", "type_prob")
+        val shapes = listOf(
+            intArrayOf(1, 248),
+            intArrayOf(1, 248),
+            intArrayOf(1, 248),
+            intArrayOf(1, 4, 248),
+        )
+        assertEquals(
+            2,
+            pulseLengthOutputIndex(
+                names, shapes, labelCount = 248, presenceIndex = 0, fmaxeIndex = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun pulseLengthOutputIsTheRemainingPerBinVectorWhenUnnamed() {
+        val names = listOf("", "", "", "")
+        val shapes = listOf(
+            intArrayOf(1, 248),
+            intArrayOf(1, 248),
+            intArrayOf(1, 248),
+            intArrayOf(1, 4, 248),
+        )
+        assertEquals(
+            2,
+            pulseLengthOutputIndex(
+                names, shapes, labelCount = 248, presenceIndex = 0, fmaxeIndex = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun binCentreIsMidwayThroughItsShareOfTheClip() {
+        assertEquals(0.5 / 248.0 * 0.25, binCentreSec(0, 248, 0.25), 0.0)
+        assertEquals(123.5 / 248.0 * 0.25, binCentreSec(123, 248, 0.25), 0.0)
+    }
+
+    @Test
+    fun chirpLabelShowsTimeAndFmaxe() {
+        assertEquals("0.124 s  45.2 kHz", formatChirpLabel(0.124496, 45230f))
+    }
+
+    @Test
+    fun strictPeaksIgnoreEndsTiesPlateausAndTheThreshold() {
+        val fmaxe = FloatArray(5) { it * 1000f }
+        val silent = FloatArray(5)
+        assertEquals(
+            listOf(2),
+            spectrogramChirps(
+                floatArrayOf(0.9f, 0.1f, 0.4f, 0.1f, 0.9f),
+                fmaxe, silent, durationSec = 1.0, threshold = 0.05f,
+            ).map { it.binIndex },
+        )
+        assertEquals(
+            emptyList<Int>(),
+            spectrogramChirps(
+                floatArrayOf(0f, 0.4f, 0.4f, 0f, 0f),
+                fmaxe, silent, durationSec = 1.0, threshold = 0.05f,
+            ).map { it.binIndex },
+        )
+        assertEquals(
+            listOf(1),
+            spectrogramChirps(
+                floatArrayOf(0f, 0.05f, 0f, 0f, 0f),
+                fmaxe, silent, durationSec = 1.0, threshold = 0.05f,
+            ).map { it.binIndex },
+        )
+        assertEquals(
+            emptyList<Int>(),
+            spectrogramChirps(
+                floatArrayOf(0f, 0.049f, 0f, 0f, 0f),
+                fmaxe, silent, durationSec = 1.0, threshold = 0.05f,
+            ).map { it.binIndex },
+        )
+    }
+
+    @Test
+    fun touchingPulsesStaySeparateAndAChainKeepsTheLoudest() {
+        val nBins = 9
+        val presence = FloatArray(nBins)
+        presence[1] = 0.2f
+        presence[3] = 0.9f
+        presence[5] = 0.4f
+        val fmaxe = FloatArray(nBins) { 10_000f * (it + 1) }
+        val touching = FloatArray(nBins) { 2f / 9f }
+        val separate = spectrogramChirps(presence, fmaxe, touching, 1.0, 0.05f)
+        assertEquals(listOf(1, 3, 5), separate.map { it.binIndex })
+
+        val overlapping = FloatArray(nBins) { 0.30f }
+        val chirps = spectrogramChirps(presence, fmaxe, overlapping, 1.0, 0.05f)
+        assertEquals(1, chirps.size)
+        assertEquals(3, chirps[0].binIndex)
+        assertEquals(3.5 / 9.0, chirps[0].timeSec, 0.0)
+        assertEquals(40_000f, chirps[0].fmaxeHz, 0f)
+        assertEquals(0.9f, chirps[0].presence, 0f)
+    }
+
+    @Test
+    fun equalPresenceKeepsTheEarlierBinAndANegativeLengthDoesNotOverlap() {
+        val nBins = 11
+        val presence = FloatArray(nBins)
+        presence[4] = 0.5f
+        presence[6] = 0.5f
+        val fmaxe = FloatArray(nBins) { 10_000f * (it + 1) }
+        val pulses = FloatArray(nBins)
+        pulses[4] = 0.24f
+        pulses[6] = 0.24f
+        val overlapped = spectrogramChirps(presence, fmaxe, pulses, 1.0, 0.05f)
+        assertEquals(listOf(4), overlapped.map { it.binIndex })
+        assertEquals(50_000f, overlapped[0].fmaxeHz, 0f)
+
+        pulses[4] = -1f
+        pulses[6] = -0.2f
+        val negative = spectrogramChirps(presence, fmaxe, pulses, 1.0, 0.05f)
+        assertEquals(listOf(4, 6), negative.map { it.binIndex })
+        assertEquals(70_000f, negative[1].fmaxeHz, 0f)
+    }
+
+    @Test
+    fun peaksWithinTenMsOrHalfAPulseOfEitherEndAreIgnored() {
+        val nBins = 250
+        val duration = 1.0
+        val fmaxe = FloatArray(nBins)
+
+        fun chirpBins(peak: Int, pulseLength: Float): List<Int> {
+            val presence = FloatArray(nBins)
+            presence[peak] = 0.8f
+            val pulses = FloatArray(nBins)
+            pulses[peak] = pulseLength
+            return spectrogramChirps(presence, fmaxe, pulses, duration, 0.05f)
+                .map { it.binIndex }
+        }
+
+        // Centres are (i + 0.5) / 250 seconds. Bin 2 is 10 ms from the start.
+        assertEquals(emptyList<Int>(), chirpBins(2, 0f))
+        assertEquals(listOf(3), chirpBins(3, 0f))
+        assertEquals(emptyList<Int>(), chirpBins(247, 0f))
+        assertEquals(listOf(246), chirpBins(246, 0f))
+
+        // Half of 0.125 s is 62.5 ms. Bin 15 is centred at 62 ms; bin 16 at 66 ms.
+        assertEquals(emptyList<Int>(), chirpBins(15, 0.125f))
+        assertEquals(listOf(16), chirpBins(16, 0.125f))
+
+        val presence = FloatArray(nBins)
+        presence[8] = 0.9f
+        presence[20] = 0.4f
+        val pulses = FloatArray(nBins)
+        pulses[8] = 0.10f
+        pulses[20] = 0.10f
+        assertEquals(
+            listOf(20),
+            spectrogramChirps(presence, fmaxe, pulses, duration, 0.05f).map { it.binIndex },
+        )
+    }
 }

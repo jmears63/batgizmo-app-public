@@ -1,0 +1,19 @@
+{
+  "id": "batcnn",
+  "displayName": "BatCNN",
+  "kind": "spectrogram_tflite",
+  "sampleRateHz": 256000,
+  "windowSamples": 64000,
+  "overlapFraction": 0.25,
+  "minSampleRateHz": 256000,
+  "detectionThreshold": 0.08,
+  "enableSuppressionsButton": false,
+  "liveSystem": true,
+  "defaultVariantId": "batcnn/heatmap",
+  "stft": {
+    "fftSize": 512,
+    "hopSamples": 128,
+    "window": "hann",
+    "firstFrequencyBin": 30
+  }
+}

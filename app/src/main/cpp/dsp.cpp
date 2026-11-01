@@ -98,6 +98,7 @@ int dsp_configure(int sample_rate,
             break;
         }
         case DSP_PLAYBACK_SINGLE_HETERODYNE:
+        case DSP_PLAYBACK_SMART_HETERODYNE:
         case DSP_PLAYBACK_AUTO_TUNED_HETERODYNE:
         case DSP_PLAYBACK_DUAL_HETERODYNE:
         default:

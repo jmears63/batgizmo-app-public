@@ -214,7 +214,8 @@ class AudioConfig {
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.PITCH_SHIFTING.value
         val isTimeExpansion =
             audioPlaybackMode.intValue == Settings.AudioPlaybackModeOptions.TIME_EXPANSION.value
-        // Auto tuned: same DSP as classic, but no manual reference controls.
+        // Auto and smart: same DSP as classic, but no manual reference controls.
+        // Smart's reference comes from BatCNN FmaxE.
 
         val isLandscape =
             LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE

@@ -40,6 +40,7 @@ typedef enum {
     DSP_PLAYBACK_PITCH_SHIFTING = 3,
     DSP_PLAYBACK_TIME_EXPANSION = 4,
     DSP_PLAYBACK_AUTO_TUNED_HETERODYNE = 5,
+    DSP_PLAYBACK_SMART_HETERODYNE = 6,
 } dsp_playback_mode_t;
 
 /* Must match DOWNSAMPLING_AA_STAGES in dsp_utils.h. */

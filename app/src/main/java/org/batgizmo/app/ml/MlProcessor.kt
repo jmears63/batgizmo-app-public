@@ -62,7 +62,6 @@ class MlProcessor(
     private val descriptors: List<MlModelDescriptor>,
 ) {
     init {
-        require(descriptors.isNotEmpty()) { "descriptors must not be empty" }
         require(descriptors.map { it.id }.toSet().size == descriptors.size) {
             "duplicate model ids in descriptors"
         }
@@ -672,7 +671,7 @@ class MlProcessor(
 
     /** Smallest windowSamples among descriptors; used for buffering UI. */
     private val minWindowSamples: Int =
-        descriptors.minOf { it.windowSamples }
+        descriptors.minOfOrNull { it.windowSamples } ?: Int.MAX_VALUE
 
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
         overflowPolicy = policy
@@ -928,15 +927,10 @@ class MlProcessor(
                         for (r in rates) r.clear()
                     }
                     is RawItem.Audio -> {
-                        if (graphCaptureHz != item.sampleRateHz || rates.isEmpty()) {
+                        if (graphCaptureHz != item.sampleRateHz) {
                             for (r in rates) r.clear()
                             rates = buildRateStreams(item.sampleRateHz)
                             graphCaptureHz = item.sampleRateHz
-                            Timber.i(
-                                "MlProcessor: preprocess graph for ${item.sampleRateHz} Hz → " +
-                                    "${rates.size} rate branch(es), " +
-                                    "${rates.sumOf { it.windowBranches.size }} window branch(es)"
-                            )
                         }
                         processAudio(rates, item)
                     }
@@ -954,6 +948,21 @@ class MlProcessor(
 
     private fun buildRateStreams(captureSampleRateHz: Int): List<RateStream> {
         val spec = MlPipelineSpec.build(descriptors, captureSampleRateHz)
+        val branches = if (spec.rateBranches.isEmpty()) {
+            "(none)"
+        } else {
+            spec.rateBranches.joinToString("; ") { rate ->
+                val models = rate.windowBranches.flatMap { w ->
+                    w.pcmModels + w.stftGroups.flatMap { it.models }
+                }
+                val modelList = models.joinToString { "${it.id} (${it.displayName})" }
+                "$captureSampleRateHz → ${rate.sampleRateHz} Hz: $modelList"
+            }
+        }
+        Timber.i(
+            "MlProcessor: pipeline rebuilt for $captureSampleRateHz Hz capture; " +
+                "rate branches: $branches"
+        )
         return spec.rateBranches.map { rate ->
             RateStream(
                 modelRateHz = rate.sampleRateHz,
@@ -977,10 +986,12 @@ class MlProcessor(
         try {
             if (item.epoch != epoch.get()) return
             if (rates.isEmpty()) {
-                Timber.i(
-                    "MlProcessor: buffer #${item.bufferId} dropped " +
-                        "(no models accept ${item.sampleRateHz} Hz)"
-                )
+                if (descriptors.isNotEmpty()) {
+                    Timber.i(
+                        "MlProcessor: buffer #${item.bufferId} dropped " +
+                            "(no models accept ${item.sampleRateHz} Hz)"
+                    )
+                }
                 return
             }
 
@@ -1097,25 +1108,48 @@ class MlProcessor(
             val labelDiscard = autoId.labelDiscard
             val labelKeys = autoId.labelKeys
             var displayLabels: List<String>? = null
+            val languageIndex = labelLanguageByModel[worker.descriptor.id] ?: 0
             val detections = ArrayList<MlDetection>()
-            for (i in scores.indices) {
-                val score = scores[i]
-                if (score <= detectionThreshold ||
-                    labelDiscard[i] ||
-                    labelKeys[i] in suppressed
+            fun addDetection(
+                index: Int,
+                score: Float,
+                fmaxeHz: Float? = null,
+                timeSec: Double? = null,
+            ) {
+                if (index !in labelDiscard.indices ||
+                    labelDiscard[index] ||
+                    labelKeys[index] in suppressed
                 ) {
-                    continue
+                    return
                 }
-                val languageIndex = labelLanguageByModel[worker.descriptor.id] ?: 0
                 val labels = displayLabels
                     ?: autoId.labelsFor(languageIndex).also { displayLabels = it }
                 detections.add(
                     MlDetection(
-                        label = autoId.detectionLabel(i, labels[i]),
+                        label = autoId.detectionLabel(index, labels[index]),
                         confidence = score,
-                        labelKey = labelKeys[i],
+                        labelKey = labelKeys[index],
+                        fmaxeHz = fmaxeHz,
+                        timeSec = timeSec,
                     )
                 )
+            }
+            val spectrogram = autoId as? SpectrogramModel
+            if (spectrogram != null) {
+                for (chirp in spectrogram.chirps(detectionThreshold)) {
+                    addDetection(
+                        chirp.binIndex,
+                        chirp.presence,
+                        fmaxeHz = chirp.fmaxeHz,
+                        timeSec = chirp.timeSec,
+                    )
+                }
+            } else {
+                for (i in scores.indices) {
+                    val score = scores[i]
+                    if (score <= detectionThreshold) continue
+                    addDetection(i, score)
+                }
             }
             detections.sortByDescending { it.confidence }
             val inferMs = SystemClock.elapsedRealtime() - inferStartedAtMs

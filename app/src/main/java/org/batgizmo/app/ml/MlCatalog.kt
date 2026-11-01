@@ -1112,6 +1112,8 @@ object MlCatalog {
         val defaultVariantId: String?,
         /** Optional log-power STFT; null when omitted from family.json. */
         val stft: MlStftParams?,
+        /** True when family.json `liveSystem` is true. Omitted means false. */
+        val liveSystem: Boolean,
     )
 
     private fun readFamilyJson(
@@ -1162,6 +1164,7 @@ object MlCatalog {
             enableSuppressionsButton = json.optBoolean("enableSuppressionsButton", true),
             defaultVariantId = defaultVariantId,
             stft = stft,
+            liveSystem = json.optBoolean("liveSystem", false),
         )
     }
 
@@ -1218,6 +1221,7 @@ object MlCatalog {
             familyDefaultVariantId = family.defaultVariantId,
             isByom = isByom,
             stft = family.stft,
+            liveSystem = family.liveSystem,
         )
     }
 

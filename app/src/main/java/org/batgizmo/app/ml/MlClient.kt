@@ -48,6 +48,13 @@ data class MlDetection(
     val confidence: Float,
     /** Stable catalog key (scientific / first label column). */
     val labelKey: String = label,
+    /**
+     * Spectrogram presence-peak FmaxE in Hz, when this detection is a chirp.
+     * Null for classifiers that do not report it.
+     */
+    val fmaxeHz: Float? = null,
+    /** Seconds from the analysed window start to this chirp's centre. */
+    val timeSec: Double? = null,
 )
 
 /**
@@ -96,7 +103,8 @@ data class MlWindowing(
  * Thin client for ML analysis of raw audio via [MlProcessor].
  *
  * [modelId] is the user-selected primary model; [descriptors] is the full
- * active set (primary + internal companions). Call [reset] with the sample rate
+ * active set (primary + internal companions). An empty set still ingests PCM
+ * and does not resample or run a classifier. Call [reset] with the sample rate
  * before any [submit].
  *
  * @param onResult invoked when analysis of a window completes (any active model)
@@ -107,10 +115,7 @@ class MlClient(
     descriptors: List<MlModelDescriptor>,
     onResult: (MlResult) -> Unit,
 ) {
-    private val activeDescriptors: List<MlModelDescriptor> =
-        descriptors.ifEmpty {
-            error("MlClient requires at least one descriptor")
-        }
+    private val activeDescriptors: List<MlModelDescriptor> = descriptors
 
     /** Stable ids of models this client runs (primary + companions). */
     fun activeModelIds(): List<String> = activeDescriptors.map { it.id }
@@ -152,12 +157,28 @@ class MlClient(
      */
     val willAcceptAudioFlow: StateFlow<Boolean> = mutableWillAcceptAudioFlow.asStateFlow()
 
+    private val mutableUserModelsWillAcceptFlow = MutableStateFlow(false)
+    /**
+     * True when the current sample rate is high enough for at least one
+     * user-selected model. Internal `liveSystem` models do not count.
+     */
+    val userModelsWillAcceptFlow: StateFlow<Boolean> =
+        mutableUserModelsWillAcceptFlow.asStateFlow()
+
     /**
      * Whether the current [sampleRateHz] is high enough for any active model.
      */
     fun willAcceptAudio(): Boolean =
         sampleRateHz > 0 &&
             activeDescriptors.any { sampleRateHz >= it.minSampleRateHz }
+
+    /**
+     * Whether the current [sampleRateHz] is high enough for a classifier the
+     * user selected. Internal `liveSystem` models do not count.
+     */
+    fun userModelsWillAcceptAudio(): Boolean =
+        sampleRateHz > 0 &&
+            activeDescriptors.any { !it.liveSystem && sampleRateHz >= it.minSampleRateHz }
 
     /** Live vs viewer enqueue policy; forwarded to [MlProcessor]. */
     fun setOverflowPolicy(policy: MlOverflowPolicy) {
@@ -234,7 +255,7 @@ class MlClient(
             "offset + count exceeds buffer size"
         }
 
-        if (!willAcceptAudio()) {
+        if (activeDescriptors.isNotEmpty() && !willAcceptAudio()) {
             discardBatch()
             if (isLast) {
                 // Still flush any prior stream state held in the processor.
@@ -325,6 +346,7 @@ class MlClient(
 
     private fun publishWillAcceptAudio() {
         mutableWillAcceptAudioFlow.value = willAcceptAudio()
+        mutableUserModelsWillAcceptFlow.value = userModelsWillAcceptAudio()
     }
 
     private data class PendingBatch(
