@@ -73,6 +73,11 @@ data class Settings(
     var colourMap: Int = ColourMapOptions.KINDLMANN.value,
     var leftHandButtons: Boolean = false,
     var enableLogging: Boolean = false,
+    /**
+     * When false, smart heterodyne and smart trigger are hidden in the UI
+     * and any stored selection of those modes is replaced by the default.
+     */
+    var enableExperimentalFeatures: Boolean = false,
     var heterodyneDual: Boolean = false,
     var heterodyneRef1kHz: Int = 50,
     var heterodyneRef2kHz: Int = 23,
@@ -357,12 +362,30 @@ data class Settings(
 
     /** Clamp a stored playback mode to what [sampleRateHz] can support. */
     fun coerceAudioPlaybackModeForSampleRate(mode: Int, sampleRateHz: Int): Int {
-        if (mode == AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value &&
+        var coerced = mode
+        if (!enableExperimentalFeatures &&
+            coerced == AudioPlaybackModeOptions.SMART_HETERODYNE.value
+        ) {
+            coerced = defaultAudioPlaybackModeForSampleRate(sampleRateHz)
+        }
+        if (coerced == AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value &&
             !isAutoHeterodyneSampleRateApplicable(sampleRateHz)
         ) {
             return AudioPlaybackModeOptions.SINGLE_HETERODYNE.value
         }
-        return mode
+        return coerced
+    }
+
+    /**
+     * When experimental features are off, replace smart heterodyne / smart
+     * trigger with their defaults so the UI and runtime stay aligned.
+     */
+    fun applyExperimentalFeatureAvailability() {
+        if (enableExperimentalFeatures) return
+        if (autoTriggerMode == AutoTriggerModeOptions.SMART.value)
+            autoTriggerMode = AutoTriggerModeOptions.DEFAULT.value
+        if (audioPlaybackMode == AudioPlaybackModeOptions.SMART_HETERODYNE.value)
+            audioPlaybackMode = AudioPlaybackModeOptions.AUTO_TUNED_HETERODYNE.value
     }
 
     /**
@@ -751,12 +774,14 @@ data class Settings(
 
     /** True when triggered recording uses the smart detector. */
     fun isSmartAutoTrigger(): Boolean =
-        AutoTriggerModeOptions.coerce(autoTriggerMode) ==
+        enableExperimentalFeatures &&
+            AutoTriggerModeOptions.coerce(autoTriggerMode) ==
             AutoTriggerModeOptions.SMART.value
 
     /** True when smart heterodyne is the selected playback mode. */
     fun isSmartHeterodyneSelected(): Boolean =
-        audioPlaybackModePersisted &&
+        enableExperimentalFeatures &&
+            audioPlaybackModePersisted &&
             audioPlaybackMode == AudioPlaybackModeOptions.SMART_HETERODYNE.value
 
     /** True when triggered recording uses Auto Id classifier matches. */
@@ -887,6 +912,8 @@ data class Settings(
     private val keyPageOverlapPercent = intPreferencesKey("keyPageOverlapPercent")
     private val keyLeftHandedMode = booleanPreferencesKey("keyLeftHandedMode")
     private val keyEnableLogging = booleanPreferencesKey("enableLogging")
+    private val keyEnableExperimentalFeatures =
+        booleanPreferencesKey("enableExperimentalFeatures")
     private val keyAudioRef1kHz = intPreferencesKey("audioRef1kHz")
     private val keyAudioRef2kHz = intPreferencesKey("audioRef2kHz")
     private val keyAudioDualHeterodyne = booleanPreferencesKey("audioDualHeterodyne")
@@ -945,6 +972,8 @@ data class Settings(
         prefs[keyPageOverlapPercent] = pageOverlapPercent
         prefs[keyLeftHandedMode] = leftHandButtons
         prefs[keyEnableLogging] = enableLogging
+        applyExperimentalFeatureAvailability()
+        prefs[keyEnableExperimentalFeatures] = enableExperimentalFeatures
         heterodyneDual = audioPlaybackMode == AudioPlaybackModeOptions.DUAL_HETERODYNE.value
         prefs[keyAudioDualHeterodyne] = heterodyneDual
         if (audioPlaybackModePersisted)
@@ -1031,6 +1060,9 @@ data class Settings(
             leftHandButtons = requireNotNull(prefs[keyLeftHandedMode])
         if (prefs[keyEnableLogging] != null)
             enableLogging = requireNotNull(prefs[keyEnableLogging])
+        if (prefs[keyEnableExperimentalFeatures] != null)
+            enableExperimentalFeatures =
+                requireNotNull(prefs[keyEnableExperimentalFeatures])
         if (prefs[keyAudioPlaybackMode] != null) {
             audioPlaybackModePersisted = true
             audioPlaybackMode = requireNotNull(prefs[keyAudioPlaybackMode])
@@ -1101,6 +1133,7 @@ data class Settings(
         val (loMinKhz, loMaxKhz) = normalizedAutoHeterodyneLoRange()
         autoHeterodyneLoMinKhz = loMinKhz
         autoHeterodyneLoMaxKhz = loMaxKhz
+        applyExperimentalFeatureAvailability()
         return autoIdNeedsRewrite
     }
 

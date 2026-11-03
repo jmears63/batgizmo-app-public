@@ -1,6 +1,6 @@
 {
   "id": "batcnn/heatmap",
   "displayName": "Heatmap",
-  "model": "BatCNN.tflite",
+  "model": "BatFilterCNN.tflite",
   "labels": "labels.json"
 }

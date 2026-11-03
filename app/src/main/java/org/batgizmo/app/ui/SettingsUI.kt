@@ -149,6 +149,9 @@ class SettingsUI(private val model: UIModel) {
 
         var diagnosticsExist = rememberSaveable { mutableStateOf(diagnosticLogger.logFileExists(context)) }
         var loggingEnabled = rememberSaveable { mutableStateOf(model.settings.enableLogging) }
+        var experimentalFeaturesEnabled by rememberSaveable {
+            mutableStateOf(model.settings.enableExperimentalFeatures)
+        }
 
         // Track the live input source locally so the microphone selector can show/hide reactively
         // (model.settings is a plain var and does not trigger recomposition on its own):
@@ -539,7 +542,14 @@ class SettingsUI(private val model: UIModel) {
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Text("Trigger method")
-                        Settings.AutoTriggerModeOptions.entries.forEach { option ->
+                        val triggerOptions =
+                            if (experimentalFeaturesEnabled)
+                                Settings.AutoTriggerModeOptions.entries
+                            else
+                                Settings.AutoTriggerModeOptions.entries.filter {
+                                    it != Settings.AutoTriggerModeOptions.SMART
+                                }
+                        triggerOptions.forEach { option ->
                             val selected = autoTriggerMode == option.value
                             val opensEnergyDialog =
                                 option == Settings.AutoTriggerModeOptions.ENERGY
@@ -1203,6 +1213,25 @@ class SettingsUI(private val model: UIModel) {
             }
 
             settingsSection(SettingsSection.DIAGNOSTICS, expandedSections) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        MyCheckbox(
+                            "Enable experimental features",
+                            experimentalFeaturesEnabled
+                        ) { checked: Boolean ->
+                            experimentalFeaturesEnabled = checked
+                            scope.launch {
+                                val updated = model.settings.copy(
+                                    enableExperimentalFeatures = checked
+                                )
+                                updated.applyExperimentalFeatureAvailability()
+                                autoTriggerMode = updated.autoTriggerMode
+                                model.updateStoredSettings(updated)
+                            }
+                        }
+                    }
+                }
+
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
 

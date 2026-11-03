@@ -1632,7 +1632,16 @@ class UIModel(application: Application,
                 liveAudioStartChannel.send(it)
             }
 
-            pipeline?.sampleRateHz()?.let { startTrackedHeterodyneWorker(it) }
+            pipeline?.sampleRateHz()?.let { sampleRateHz ->
+                startTrackedHeterodyneWorker(sampleRateHz)
+                // BatCNN only while the live monitor is actually playing
+                // smart heterodyne; add it here once output is active.
+                if (audioOutputActive &&
+                    settings.isSmartHeterodynePlayback(sampleRateHz)
+                ) {
+                    ensureMlClient(sampleRateHz, forceReset = true)
+                }
+            }
 
             Timber.i("startAudio end: runtime.{maxMemory, totalMemory, freeMemory) = " +
                     "${runtime.maxMemory() / 1024}, ${runtime.totalMemory() / 1024}, ${runtime.freeMemory() / 1024} KB")
@@ -1825,21 +1834,33 @@ class UIModel(application: Application,
         viewModelScope.launch(Dispatchers.Default) {
             // Model mutex first, then mlLock. pause and settings updates hold
             // the model mutex and then take mlLock; the other order deadlocks.
-            val restoreViewerMl = mutex.withLock {
-                val restore = synchronized(mlLock) {
+            var restoreViewerMl = false
+            var liveSmartHetSampleRateHz: Int? = null
+            mutex.withLock {
+                restoreViewerMl = synchronized(mlLock) {
                     val restore = viewerSmartHet == ViewerSmartHet.ModelLoaded
                     viewerSmartHet = ViewerSmartHet.Off
                     restore
+                }
+                val liveRate = (pipeline as? LiveUSBPipeline)?.sampleRateHz()
+                if (audioOutputActive &&
+                    liveRate != null &&
+                    settings.isSmartHeterodynePlayback(liveRate)
+                ) {
+                    liveSmartHetSampleRateHz = liveRate
                 }
                 autoHeterodyne.stopWorker()
                 audioOutputActive = false
                 autoHeterodyne.resetTracker()
                 micCaptureService.liveAudioMonitorEnabled = false
                 usbService.stopAudio()
-                restore
             }
             if (restoreViewerMl)
                 pipeline?.let { submitFilePageToMl(it) }
+            else liveSmartHetSampleRateHz?.let { sampleRateHz ->
+                // Drop BatCNN now that live smart-heterodyne output has stopped.
+                ensureMlClient(sampleRateHz, forceReset = true)
+            }
         }
     }
 
@@ -2115,12 +2136,13 @@ class UIModel(application: Application,
     }
 
     /**
-     * Smart heterodyne is selected and this session should run BatCNN:
-     * live acquisition is accepting audio, or viewer playback is running.
+     * Smart heterodyne is selected and playback that needs BatCNN is running:
+     * the live monitor is outputting, or viewer smart-het playback has started.
      */
     private fun shouldIncludeLiveSystemModels(): Boolean =
         settings.isSmartHeterodyneSelected() &&
-            (liveMlAccepting || viewerSmartHet != ViewerSmartHet.Off)
+            (viewerSmartHet != ViewerSmartHet.Off ||
+                (audioOutputActive && liveMlAccepting))
 
     /**
      * BatCNN presence peaks tune smart heterodyne. The labels are bins,

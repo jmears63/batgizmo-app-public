@@ -138,8 +138,8 @@ class MlStftParamsTest {
     @Test
     fun liveBatcnnClipIs310FramesAnd155PresenceBins() {
         val root = listOf(
-            File("src/main/assets/ml/batcnn"),
-            File("app/src/main/assets/ml/batcnn"),
+            File("src/main/assets/ml/batfiltercnn"),
+            File("app/src/main/assets/ml/batfiltercnn"),
         ).first { File(it, "family.json").isFile }
         val family = JSONObject(File(root, "family.json").readText())
         val stft = MlStftParams.fromJsonOrNull(family)!!
@@ -150,7 +150,7 @@ class MlStftParamsTest {
         assertEquals(310, stft.nFrames(windowSamples))
         assertEquals(227, stft.keptFreqBins())
         val labels = JSONObject(
-            File(root, "variants/heatmap/labels.json").readText()
+            File(root, "variants/filter/labels.json").readText()
         ).getJSONArray("labels")
         assertEquals(155, labels.length())
     }

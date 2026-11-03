@@ -23,6 +23,7 @@
 package org.batgizmo.app.ml
 
 import android.content.res.AssetManager
+import android.os.SystemClock
 import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.TensorBuffer
@@ -98,6 +99,52 @@ fun loadMappedModelBuffer(
 }
 
 /**
+ * Sums TFLite wall time per model path and, about every ten seconds, logs the
+ * average milliseconds per call in that window for every model that ran.
+ */
+private object TfliteRunTiming {
+    private const val WINDOW_MS = 10_000L
+
+    private class Bucket {
+        var sumMs: Long = 0
+        var count: Int = 0
+        var device: String = ""
+    }
+
+    private val buckets = LinkedHashMap<String, Bucket>()
+    private var windowStartMs = 0L
+
+    fun record(modelPath: String, device: String, wallMs: Long) {
+        val now = SystemClock.elapsedRealtime()
+        synchronized(this) {
+            if (windowStartMs == 0L) {
+                windowStartMs = now
+            } else if (now - windowStartMs >= WINDOW_MS) {
+                flushLocked()
+                windowStartMs = now
+            }
+            val bucket = buckets.getOrPut(modelPath) { Bucket() }
+            bucket.sumMs += wallMs
+            bucket.count += 1
+            bucket.device = device
+        }
+    }
+
+    private fun flushLocked() {
+        if (buckets.isEmpty()) return
+        for ((path, bucket) in buckets) {
+            if (bucket.count == 0) continue
+            val avgMs = bucket.sumMs.toDouble() / bucket.count
+            Timber.i(
+                "CompiledModel[$path]: tflite ${bucket.device} " +
+                    "avg ${"%.1f".format(avgMs)} ms/call (${bucket.count} calls)"
+            )
+        }
+        buckets.clear()
+    }
+}
+
+/**
  * A compiled model plus the buffers used for every run.
  *
  * Live and viewer inference both open models through [openCompiledSession],
@@ -114,11 +161,16 @@ class CompiledModelSession(
     val inputDataType: DataType,
     val outputDataTypes: List<DataType>,
     val onGpu: Boolean,
+    private val modelPath: String,
 ) : AutoCloseable {
     /** Run one input tensor and return each output as a flat float array. */
     fun run(input: FloatArray): List<FloatArray> {
         inputs[0].writeFloat(input)
+        val startedMs = SystemClock.elapsedRealtime()
         compiled.run(inputs, outputs)
+        val wallMs = SystemClock.elapsedRealtime() - startedMs
+        val device = if (onGpu) "GPU+CPU" else "CPU"
+        TfliteRunTiming.record(modelPath, device, wallMs)
         return outputs.map { it.readFloat() }
     }
 
@@ -171,6 +223,7 @@ fun openCompiledSession(
             inputDataType = meta.inputDataType,
             outputDataTypes = meta.outputDataTypes,
             onGpu = onGpu,
+            modelPath = resolvedPath,
         )
     } catch (t: Throwable) {
         compiled.close()
