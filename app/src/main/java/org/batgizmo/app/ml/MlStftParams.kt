@@ -25,16 +25,30 @@ package org.batgizmo.app.ml
 import org.json.JSONObject
 
 /**
- * Optional log-power STFT feature stage for an Auto Id model.
+ * How the native STFT packs each bin before model preprocess.
+ *
+ * [LogPower] is `10·log10((|X|/windowSum)² + eps)`.
+ * [UnnormalizedMagnitude] is `|X|` (no window-sum divide), for PCEN.
+ */
+enum class MlStftScale {
+    LogPower,
+    UnnormalizedMagnitude,
+}
+
+/**
+ * Optional STFT feature stage for an Auto Id model.
  *
  * When present on [MlModelDescriptor], each PCM analysis window is converted to a
- * packed log-power spectrogram before inference: periodic Hann, complex bins
- * divided by the window sum, then `10·log10` of power. Absent / null ⇒ raw PCM input.
+ * packed spectrogram before inference: periodic Hann, then [scale]. Absent /
+ * null ⇒ raw PCM input.
  *
  * Output layout: row-major `[nFrames * nFreqBins]`, frames along the analysis
  * window with [hopSamples], each frame has [nFreqBins] = fftSize/2+1 bins.
  * [firstFrequencyBin], when greater than 0, drops bins below that index
  * before the values are passed to the model.
+ *
+ * [scale] is not read from family.json; [MlPipelineSpec] sets
+ * [MlStftScale.UnnormalizedMagnitude] when the consumer enables PCEN.
  */
 data class MlStftParams(
     val fftSize: Int,
@@ -46,6 +60,7 @@ data class MlStftParams(
      * `0` keeps every bin. Bins below this index are discarded.
      */
     val firstFrequencyBin: Int = 0,
+    val scale: MlStftScale = MlStftScale.LogPower,
 ) {
     init {
         require(fftSize >= 2 && fftSize.countOneBits() == 1) {

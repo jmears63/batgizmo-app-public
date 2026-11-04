@@ -47,8 +47,13 @@ struct MlStft {
     int windowSamples = 0;
     int nFreqBins = 0;
     int nFrames = 0;
-    /** Sum of the periodic Hann window. Complex STFT bins are divided by this. */
+    /** Sum of the periodic Hann window. Used for the log-power path. */
     float windowSum = 0.f;
+    /**
+     * When true, each bin is unnormalized |X| (for PCEN). When false,
+     * each bin is 10*log10((|X|/windowSum)^2 + eps).
+     */
+    bool unnormalizedMagnitude = false;
     kiss_fftr_cfg cfg = nullptr;
     std::vector<float> hann;
     std::vector<float> frame;
@@ -81,7 +86,8 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeStftCreate(
         jclass /* clazz */,
         jint fftSize,
         jint hopSamples,
-        jint windowSamples) {
+        jint windowSamples,
+        jboolean unnormalizedMagnitude) {
     if (!isPowerOfTwo(fftSize) || hopSamples <= 0 || hopSamples > fftSize ||
         windowSamples < fftSize) {
         LOGE("nativeStftCreate: invalid params fft=%d hop=%d window=%d",
@@ -93,6 +99,7 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeStftCreate(
     stft->fftSize = fftSize;
     stft->hopSamples = hopSamples;
     stft->windowSamples = windowSamples;
+    stft->unnormalizedMagnitude = unnormalizedMagnitude == JNI_TRUE;
     stft->nFreqBins = fftSize / 2 + 1;
     stft->nFrames = 1 + (windowSamples - fftSize) / hopSamples;
     if (stft->nFrames <= 0) {
@@ -156,12 +163,21 @@ Java_org_batgizmo_app_ml_MlProcessor_nativeStftProcess(
         }
         kiss_fftr(stft->cfg, stft->frame.data(), stft->spectrum.data());
         const int outBase = frame * stft->nFreqBins;
-        const float norm = stft->windowSum;
-        for (int b = 0; b < stft->nFreqBins; ++b) {
-            const float re = stft->spectrum[static_cast<size_t>(b)].r / norm;
-            const float im = stft->spectrum[static_cast<size_t>(b)].i / norm;
-            const float power = re * re + im * im;
-            out[static_cast<size_t>(outBase + b)] = 10.f * std::log10(power + kLogEps);
+        if (stft->unnormalizedMagnitude) {
+            for (int b = 0; b < stft->nFreqBins; ++b) {
+                const float re = stft->spectrum[static_cast<size_t>(b)].r;
+                const float im = stft->spectrum[static_cast<size_t>(b)].i;
+                out[static_cast<size_t>(outBase + b)] = std::sqrt(re * re + im * im);
+            }
+        } else {
+            const float norm = stft->windowSum;
+            for (int b = 0; b < stft->nFreqBins; ++b) {
+                const float re = stft->spectrum[static_cast<size_t>(b)].r / norm;
+                const float im = stft->spectrum[static_cast<size_t>(b)].i / norm;
+                const float power = re * re + im * im;
+                out[static_cast<size_t>(outBase + b)] =
+                        10.f * std::log10(power + kLogEps);
+            }
         }
     }
 

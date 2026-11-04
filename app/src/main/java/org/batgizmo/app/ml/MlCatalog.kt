@@ -197,7 +197,15 @@ object MlCatalog {
                     SimpleModel(assets, descriptor, numThreads)
                 }
             MlModelKind.SPECTROGRAM_TFLITE ->
-                SpectrogramModel(assets, descriptor, numThreads)
+                when (descriptor.familyId) {
+                    "batcnn", "batfiltercnn" ->
+                        BatFilterCNNModel(assets, descriptor, numThreads)
+                    else ->
+                        error(
+                            "No SpectrogramModel subclass for family " +
+                                "\"${descriptor.familyId}\""
+                        )
+                }
         }
     }
 
@@ -1114,6 +1122,13 @@ object MlCatalog {
         val stft: MlStftParams?,
         /** True when family.json `liveSystem` is true. Omitted means false. */
         val liveSystem: Boolean,
+        /** True when family.json `preprocess.pcen` is true. Omitted means false. */
+        val pcen: Boolean,
+        /**
+         * True when family.json `preprocess.subtractNoiseBaseline` is true.
+         * Omitted means false.
+         */
+        val subtractNoiseBaseline: Boolean,
     )
 
     private fun readFamilyJson(
@@ -1140,6 +1155,7 @@ object MlCatalog {
                 "windowSamples ($windowSamples) must be >= stft.fftSize (${stft.fftSize})"
             }
         }
+        val preprocess = readPreprocessFlags(json)
         return FamilyInfo(
             id = json.getString("id"),
             displayName = json.getString("displayName"),
@@ -1165,6 +1181,25 @@ object MlCatalog {
             defaultVariantId = defaultVariantId,
             stft = stft,
             liveSystem = json.optBoolean("liveSystem", false),
+            pcen = preprocess.pcen,
+            subtractNoiseBaseline = preprocess.subtractNoiseBaseline,
+        )
+    }
+
+    private data class PreprocessFlags(
+        val pcen: Boolean,
+        val subtractNoiseBaseline: Boolean,
+    )
+
+    /** Optional `preprocess` object; omitted keys default to false. */
+    private fun readPreprocessFlags(json: JSONObject): PreprocessFlags {
+        if (!json.has("preprocess") || json.isNull("preprocess")) {
+            return PreprocessFlags(pcen = false, subtractNoiseBaseline = false)
+        }
+        val block = json.getJSONObject("preprocess")
+        return PreprocessFlags(
+            pcen = block.optBoolean("pcen", false),
+            subtractNoiseBaseline = block.optBoolean("subtractNoiseBaseline", false),
         )
     }
 
@@ -1222,6 +1257,8 @@ object MlCatalog {
             isByom = isByom,
             stft = family.stft,
             liveSystem = family.liveSystem,
+            pcen = family.pcen,
+            subtractNoiseBaseline = family.subtractNoiseBaseline,
         )
     }
 

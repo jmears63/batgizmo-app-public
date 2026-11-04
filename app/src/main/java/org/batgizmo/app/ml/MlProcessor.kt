@@ -51,7 +51,7 @@ enum class MlOverflowPolicy {
  * Multi-model ML processing backend.
  *
  * Raw PCM is ingested once, then a metadata-driven graph shares resample /
- * window / optional log-power STFT stages across active models. Each model
+ * window / optional STFT stages across active models. Each model
  * has its own infer thread and LiteRT instance.
  *
  * Under [MlOverflowPolicy.DropIfFull], [tryEnqueue] drops when [pendingRawCount]
@@ -201,7 +201,8 @@ class MlProcessor(
             val stftMs = (System.nanoTime() - startedNs) / 1_000_000
             Timber.i(
                 "MlProcessor: stft $stftMs ms " +
-                    "(fft=${params.fftSize} hop=${params.hopSamples})"
+                    "(fft=${params.fftSize} hop=${params.hopSamples} " +
+                    "scale=${params.scale})"
             )
             return out
         }
@@ -469,6 +470,7 @@ class MlProcessor(
                 params.fftSize,
                 params.hopSamples,
                 windowing.windowSamples,
+                params.scale == MlStftScale.UnnormalizedMagnitude,
             )
             if (handle == 0L) {
                 Timber.e("MlProcessor: failed to create STFT $params")
@@ -623,6 +625,7 @@ class MlProcessor(
             fftSize: Int,
             hopSamples: Int,
             windowSamples: Int,
+            unnormalizedMagnitude: Boolean,
         ): Long
 
         @JvmStatic

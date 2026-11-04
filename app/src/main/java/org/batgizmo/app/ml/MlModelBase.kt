@@ -90,6 +90,18 @@ data class MlModelDescriptor(
      * means false. Bring-your-own packs are never live-system families.
      */
     val liveSystem: Boolean = false,
+    /**
+     * When true, the STFT stage emits unnormalized |X| and BatFilterCNN
+     * applies own PCEN. From family.json `preprocess.pcen`; omitted means
+     * false.
+     */
+    val pcen: Boolean = false,
+    /**
+     * When true, each frequency band loses its mean over time and is
+     * clipped at zero (BatDetect2 `denoise_spec_avg`). From family.json
+     * `preprocess.subtractNoiseBaseline`; omitted means false.
+     */
+    val subtractNoiseBaseline: Boolean = false,
 ) {
     /** Stable label keys; computed once (BirdNET has ~6.5k classes). */
     val labelKeys: List<String> = labelCatalog.map { it.key }

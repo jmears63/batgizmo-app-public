@@ -27,7 +27,7 @@ package org.batgizmo.app.ml
  *
  * Which variant is produced depends on [MlModelDescriptor.stft]:
  * - null → [PcmWindow]
- * - present → [Spectrogram] (log-power, packed)
+ * - present → [Spectrogram] (packed STFT; scale from [MlStftParams])
  */
 sealed class MlModelInput {
     /** Raw float PCM at the model's sample rate, length = windowSamples. */
@@ -42,7 +42,7 @@ sealed class MlModelInput {
     }
 
     /**
-     * Packed log-power spectrogram from the ML STFT stage.
+     * Packed spectrogram from the ML STFT stage.
      * Layout matches [MlStftParams.outputSize].
      */
     data class Spectrogram(

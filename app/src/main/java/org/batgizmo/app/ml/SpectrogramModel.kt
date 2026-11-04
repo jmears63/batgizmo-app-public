@@ -24,12 +24,10 @@ package org.batgizmo.app.ml
 
 import android.content.res.AssetManager
 import org.tensorflow.lite.DataType
-import timber.log.Timber
 import java.util.Locale
-import kotlin.math.abs
 
 /**
- * TFLite model whose input is a log-power spectrogram.
+ * TFLite model whose input is a packed STFT spectrogram.
  *
  * The graph input is `[1, 1, freq, time]`: one channel, frequency increasing
  * along the third axis, time along the fourth. [MlModelInput.Spectrogram]
@@ -42,9 +40,10 @@ import kotlin.math.abs
  * pulse: the surviving bin's centre time and its FmaxE. The type-score
  * tensor is not used.
  *
+ * Abstract base for spectrogram TFLite models such as [BatFilterCNNModel].
  * Not thread-safe.
  */
-class SpectrogramModel(
+abstract class SpectrogramModel(
     assets: AssetManager,
     override val descriptor: MlModelDescriptor,
     numThreads: Int = DEFAULT_TFLITE_NUM_THREADS,
@@ -122,6 +121,18 @@ class SpectrogramModel(
     }
 
     /**
+     * Optional transform of the packed STFT spectrogram before the
+     * graph input is built. [values] is frame-major
+     * (`frame * nFreqBins + bin`). The base implementation returns
+     * [values] unchanged.
+     */
+    protected open fun preprocessSpectrogram(
+        values: FloatArray,
+        nFrames: Int,
+        nFreqBins: Int,
+    ): FloatArray = values
+
+    /**
      * Run the graph on one spectrogram. Each entry is one output tensor,
      * in graph order, with [SpectrogramOutput.values] in row-major order.
      */
@@ -135,7 +146,14 @@ class SpectrogramModel(
             "spectrogram is ${spectrogram.nFreqBins}×${spectrogram.nFrames}, " +
                 "model expects $nFreqBins×$nFrames"
         }
-        val flat = flattenFloats(spectrogramToNchw(spectrogram.values, nFrames, nFreqBins))
+        val prepared = preprocessSpectrogram(
+            spectrogram.values, nFrames, nFreqBins,
+        )
+        require(prepared.size == nFrames * nFreqBins) {
+            "preprocessed spectrogram size ${prepared.size} != $nFrames * $nFreqBins " +
+                "(model ${descriptor.id})"
+        }
+        val flat = flattenFloats(spectrogramToNchw(prepared, nFrames, nFreqBins))
         val outputs = session.run(flat)
         return List(outputs.size) { index ->
             SpectrogramOutput(session.outputShapes[index].copyOf(), outputs[index])
@@ -167,19 +185,22 @@ class SpectrogramModel(
 
     /**
      * Chirps in the series from the last [predict], in time order.
-     *
-     * A bin is a candidate when its presence is at least [threshold] and
-     * strictly greater than both neighbours. The first and last bins are
-     * never candidates, and a tie with either neighbour is not a peak.
-     * A peak is ignored when its centre is within 10 ms of either end of
-     * the clip, or within half its pulse length of either end.
-     * Candidates whose pulse intervals overlap, including through a chain
-     * of overlaps, are one chirp. The chirp keeps the highest presence,
-     * and the earlier bin when those are equal. Its time is that bin's
-     * centre and its FmaxE is that bin's FmaxE.
+     * Subclasses implement [spectrogramChirps].
      */
     internal fun chirps(threshold: Float): List<SpectrogramChirp> =
         spectrogramChirps(presence, fmaxeHz, pulseLengthS, clipDurationSec, threshold)
+
+    /**
+     * Turn presence / FmaxE / pulse-length series into chirps. Subclasses
+     * supply the peak and overlap rules for their model family.
+     */
+    internal abstract fun spectrogramChirps(
+        presence: FloatArray,
+        fmaxeHz: FloatArray,
+        pulseLengthS: FloatArray,
+        durationSec: Double,
+        threshold: Float,
+    ): List<SpectrogramChirp>
 
     override fun detectionLabel(index: Int, catalogLabel: String): String {
         val hz = fmaxeHz.getOrNull(index) ?: return catalogLabel
@@ -288,31 +309,6 @@ internal fun binCentreSec(binIndex: Int, nBins: Int, durationSec: Double): Doubl
     (binIndex + 0.5) / nBins * durationSec
 
 /**
- * Peaks this close to either end of the clip are dropped. A longer pulse
- * widens the margin to half its length.
- */
-private const val WINDOW_EDGE_MARGIN_SEC = 0.010
-
-/** Half of a pulse length in seconds. A negative length counts as zero. */
-private fun pulseHalfSec(pulseLengthS: Float): Double {
-    val length = pulseLengthS.toDouble()
-    return 0.5 * if (length > 0.0) length else 0.0
-}
-
-/**
- * True when [centreSec] is within [WINDOW_EDGE_MARGIN_SEC], or within
- * [halfSec], of either end of a clip of [durationSec] seconds.
- */
-private fun centreNearWindowEdge(
-    centreSec: Double,
-    halfSec: Double,
-    durationSec: Double,
-): Boolean {
-    val margin = maxOf(WINDOW_EDGE_MARGIN_SEC, halfSec)
-    return centreSec <= margin || centreSec >= durationSec - margin
-}
-
-/**
  * One chirp kept from a presence series.
  *
  * [timeSec] is the centre of [binIndex]. [fmaxeHz] is that bin's FmaxE.
@@ -323,92 +319,6 @@ internal data class SpectrogramChirp(
     val presence: Float,
     val fmaxeHz: Float,
 )
-
-/**
- * One chirp per overlapping pulse in an unsmoothed presence series.
- *
- * Bin i is centred at `(i + 0.5) / nBins * durationSec`. A candidate is an
- * interior bin whose presence is at least [threshold] and strictly greater
- * than both neighbours. A peak is ignored when its centre is within 10 ms
- * of either end of the clip, or within half its pulse length of either end.
- * Each remaining candidate covers `[t − L/2, t + L/2]`; a negative pulse
- * length counts as zero. Two candidates overlap when the distance between
- * their centres is less than the sum of their half-lengths. Intervals that
- * only touch do not overlap. Overlap is transitive.
- */
-internal fun spectrogramChirps(
-    presence: FloatArray,
-    fmaxeHz: FloatArray,
-    pulseLengthS: FloatArray,
-    durationSec: Double,
-    threshold: Float,
-): List<SpectrogramChirp> {
-    val nBins = presence.size
-    require(fmaxeHz.size == nBins && pulseLengthS.size == nBins) {
-        "presence $nBins, fmaxe ${fmaxeHz.size}, pulse ${pulseLengthS.size}"
-    }
-    require(durationSec > 0.0) { "clip duration must be > 0" }
-    if (nBins < 3) return emptyList()
-
-    val peaks = ArrayList<Int>()
-    for (i in 1 until nBins - 1) {
-        val p = presence[i]
-        if (p < threshold || presence[i - 1] >= p || presence[i + 1] >= p) continue
-        val centre = binCentreSec(i, nBins, durationSec)
-        if (centreNearWindowEdge(centre, pulseHalfSec(pulseLengthS[i]), durationSec)) continue
-        peaks.add(i)
-    }
-    if (peaks.isEmpty()) return emptyList()
-
-    val centres = DoubleArray(peaks.size) { binCentreSec(peaks[it], nBins, durationSec) }
-    val halves = DoubleArray(peaks.size) { pulseHalfSec(pulseLengthS[peaks[it]]) }
-    val parent = IntArray(peaks.size) { it }
-
-    fun find(index: Int): Int {
-        var i = index
-        while (parent[i] != i) {
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        }
-        return i
-    }
-
-    for (i in peaks.indices) {
-        for (j in i + 1 until peaks.size) {
-            if (abs(centres[i] - centres[j]) < halves[i] + halves[j]) {
-                val rootI = find(i)
-                val rootJ = find(j)
-                if (rootI != rootJ) parent[rootJ] = rootI
-            }
-        }
-    }
-
-    val groups = LinkedHashMap<Int, MutableList<Int>>()
-    for (index in peaks.indices) {
-        groups.getOrPut(find(index)) { ArrayList() }.add(index)
-    }
-    val chosen = ArrayList<Int>(groups.size)
-    for (members in groups.values) {
-        var best = members[0]
-        for (member in members) {
-            val memberBin = peaks[member]
-            val bestBin = peaks[best]
-            val memberPresence = presence[memberBin]
-            val bestPresence = presence[bestBin]
-            if (memberPresence > bestPresence ||
-                (memberPresence == bestPresence && memberBin < bestBin)
-            ) {
-                best = member
-            }
-        }
-        chosen.add(best)
-    }
-    chosen.sortBy { peaks[it] }
-    return chosen.map { index ->
-        val bin = peaks[index]
-        SpectrogramChirp(bin, centres[index], presence[bin], fmaxeHz[bin])
-    }
-}
 
 /** One float output tensor from [SpectrogramModel.infer]. */
 class SpectrogramOutput(

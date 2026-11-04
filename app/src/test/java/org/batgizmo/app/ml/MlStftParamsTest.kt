@@ -149,6 +149,9 @@ class MlStftParamsTest {
         assertEquals(30, stft.firstFrequencyBin)
         assertEquals(310, stft.nFrames(windowSamples))
         assertEquals(227, stft.keptFreqBins())
+        val preprocess = family.getJSONObject("preprocess")
+        assertEquals(true, preprocess.optBoolean("pcen", false))
+        assertEquals(true, preprocess.optBoolean("subtractNoiseBaseline", false))
         val labels = JSONObject(
             File(root, "variants/filter/labels.json").readText()
         ).getJSONArray("labels")

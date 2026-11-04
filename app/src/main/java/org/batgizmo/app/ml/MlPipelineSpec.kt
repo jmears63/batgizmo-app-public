@@ -86,7 +86,16 @@ data class MlPipelineSpec(
                         val windowing = MlWindowing.from(first)
                         val pcm = atWindow.filter { it.stft == null }
                         val stftGroups = atWindow
-                            .mapNotNull { d -> d.stft?.let { stft -> stft to d } }
+                            .mapNotNull { d ->
+                                d.stft?.let { stft ->
+                                    // PCEN needs unnormalized |STFT|; sharing a
+                                    // log-power STFT would force a reverse step.
+                                    val scale =
+                                        if (d.pcen) MlStftScale.UnnormalizedMagnitude
+                                        else MlStftScale.LogPower
+                                    stft.copy(scale = scale) to d
+                                }
+                            }
                             .groupBy({ it.first }, { it.second })
                             .entries
                             .map { (stft, models) -> StftGroup(stft, models) }

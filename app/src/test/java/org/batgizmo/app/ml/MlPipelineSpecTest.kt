@@ -35,6 +35,7 @@ class MlPipelineSpecTest {
         overlapFraction: Float = 0.25f,
         minSampleRateHz: Int = sampleRateHz / 2,
         stft: MlStftParams? = null,
+        pcen: Boolean = false,
     ) = MlModelDescriptor(
         id = id,
         displayName = id,
@@ -61,6 +62,7 @@ class MlPipelineSpecTest {
             labels = "labels.json",
         ),
         stft = stft,
+        pcen = pcen,
     )
 
     @Test
@@ -101,6 +103,31 @@ class MlPipelineSpecTest {
     fun build_withNoModelsHasNoRateBranches() {
         val spec = MlPipelineSpec.build(emptyList(), captureSampleRateHz = 256_000)
         assertEquals(0, spec.rateBranches.size)
+    }
+
+    @Test
+    fun build_pcenUsesUnnormalizedMagnitudeStft() {
+        val base = MlStftParams(fftSize = 512, hopSamples = 128)
+        val logModel = descriptor(
+            "log/a",
+            sampleRateHz = 256_000,
+            stft = base,
+        )
+        val pcenModel = descriptor(
+            "pcen/a",
+            sampleRateHz = 256_000,
+            stft = base,
+            pcen = true,
+        )
+        val spec = MlPipelineSpec.build(
+            listOf(logModel, pcenModel),
+            captureSampleRateHz = 256_000,
+        )
+        val groups = spec.rateBranches.single().windowBranches.single().stftGroups
+        assertEquals(2, groups.size)
+        val byId = groups.associate { g -> g.models.single().id to g.stft.scale }
+        assertEquals(MlStftScale.LogPower, byId["log/a"])
+        assertEquals(MlStftScale.UnnormalizedMagnitude, byId["pcen/a"])
     }
 
     @Test

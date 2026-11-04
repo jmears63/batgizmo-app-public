@@ -6,10 +6,14 @@
   "windowSamples": 64000,
   "overlapFraction": 0.25,
   "minSampleRateHz": 256000,
-  "detectionThreshold": 0.05,
+  "detectionThreshold": 0.1,
   "enableSuppressionsButton": false,
   "liveSystem": true,
   "defaultVariantId": "batcnn/heatmap",
+  "preprocess": {
+    "pcen": true,
+    "subtractNoiseBaseline": true
+  },
   "stft": {
     "fftSize": 512,
     "hopSamples": 205,
